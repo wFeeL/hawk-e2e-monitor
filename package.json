@@ -1,0 +1,40 @@
+{
+  "name": "hawk-e2e-monitor",
+  "version": "0.1.0",
+  "description": "Synthetic end-to-end monitoring for the Hawk error tracker",
+  "license": "MIT",
+  "author": "wfeel",
+  "homepage": "https://github.com/wFeeL/hawk-e2e-monitor#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wFeeL/hawk-e2e-monitor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/wFeeL/hawk-e2e-monitor/issues"
+  },
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "start": "node dist/main.js",
+    "start:dev": "node --env-file-if-exists=.env dist/main.js"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "eslint": "9.39.5",
+    "eslint-config-codex": "2.0.3",
+    "typescript": "6.0.3",
+    "vite": "8.3.8",
+    "vitest": "5.1.0"
+  }
+}
