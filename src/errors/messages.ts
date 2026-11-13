@@ -1,0 +1,136 @@
+import type { ErrorClass, MessageFacts } from './taxonomy.js';
+
+/**
+ * Names a failure by its code or, failing that, its HTTP status.
+ * @param facts Facts of the message.
+ * @returns Code, `HTTP <status>`, or undefined.
+ */
+function codeOrStatus(facts: MessageFacts): string | undefined {
+  if (facts.code !== undefined) {
+    return facts.code;
+  }
+
+  return facts.status === undefined ? undefined : `HTTP ${String(facts.status)}`;
+}
+
+/**
+ * Joins a base text with phrases; absent phrases are skipped whole.
+ * @param base Always-present start.
+ * @param parts Optional `[separator, text]` pairs.
+ * @returns Joined text.
+ */
+function join(base: string, ...parts: readonly (readonly [string, string | undefined])[]): string {
+  let text = base;
+
+  for (const [separator, value] of parts) {
+    if (value !== undefined) {
+      text += separator + value;
+    }
+  }
+
+  return text;
+}
+
+/**
+ * Formats an optional value with a template.
+ * @param value Fact or undefined.
+ * @param format Builds the phrase.
+ * @returns Phrase or undefined.
+ */
+function ifSet<T>(value: T | undefined, format: (present: T) => string): string | undefined {
+  return value === undefined ? undefined : format(value);
+}
+
+/**
+ * Appends a `: detail` tail when the detail is known.
+ * @param base Text start.
+ * @param detail Optional detail.
+ * @returns Text.
+ */
+function withDetail(base: string, detail: string | undefined): string {
+  return join(base, [': ', detail]);
+}
+
+/**
+ * Builds the human-readable text of a failure class.
+ * @param errorClass Taxonomy class.
+ * @param facts Facts to mention; absent ones are skipped.
+ * @returns English text without secrets.
+ */
+export function describeError(errorClass: ErrorClass, facts: MessageFacts): string {
+  const where = facts.url === undefined ? 'Collector' : `Collector ${facts.url}`;
+  const what = codeOrStatus(facts);
+  const waited = ifSet(facts.waitedMs, ms => `waited ${String(ms)} ms`);
+
+  switch (errorClass) {
+    case 'collector_unavailable':
+      return join(`${where} did not respond`, [': ', what], [', ', waited], ['; cause: ', facts.cause]);
+    case 'dns_error':
+      return join(`Host ${facts.host ?? facts.url ?? 'of the request'} does not resolve`, [': ', facts.code]);
+    case 'network_error':
+      return join('Monitor network failure', [': ', what], [' for ', facts.url]);
+    case 'tls_error':
+      return join(`TLS failure for ${facts.host ?? facts.url ?? 'the host'}`, [': ', facts.code]);
+    case 'collector_dependency_error':
+      return withDetail('Collector reports a broken dependency (Redis or Mongo)', facts.detail);
+    case 'collector_unexpected_response':
+      return join(`${where} gave an unexpected response`, [': ', what], [' (', ifSet(facts.detail, text => `${text})`)],
+        ['; check HAWK_COLLECTOR_URL', '']);
+    case 'ws_handshake_failed':
+      return join(`WebSocket ${facts.url ?? 'of the collector'} did not open`, [': ', facts.detail]);
+    case 'auth_invalid_token':
+      return withDetail('Collector rejected the integration token', facts.detail);
+    case 'bad_request':
+      return withDetail('Collector rejected the event', facts.detail);
+    case 'quota_exhausted':
+      return withDetail('Event limit is exhausted or the workspace is not paid', facts.detail);
+    case 'rate_limited':
+      return withDetail('Collector rate limit exceeded', facts.detail);
+    case 'unknown_402':
+      return withDetail('Collector answered 402', facts.detail);
+    case 'payload_too_large':
+      return withDetail('Event is larger than the collector limit', facts.detail);
+    case 'ip_blacklisted':
+      return 'Monitor IP is in the collector blacklist (429 Too Many Requests)';
+    case 'accept_uncertain':
+      return join(`${where} did not confirm the event`, [': ', what], ['; the run keeps looking for it', '']);
+    case 'api_unavailable':
+      return join(`API ${facts.url ?? 'endpoint'} did not respond`, [': ', what], [', ', waited]);
+    case 'api_query_rejected':
+      return withDetail('Monitor query was rejected by the API schema; did the API version change?', facts.detail);
+    case 'api_auth_failed':
+      return join('Hawk API rejected the monitor account', [': ', facts.detail], ['. Check HAWK_EMAIL and HAWK_PASSWORD', '']);
+    case 'api_forbidden':
+      return join('No access to the project', [' ', facts.projectId], [': ', facts.detail]);
+    case 'token_mismatch':
+      return 'The integration token belongs to another project than HAWK_PROJECT_ID';
+    case 'workspace_blocked':
+      return withDetail('Workspace is blocked: limit or payment', facts.detail);
+    case 'api_error':
+      return withDetail('API returned an error', facts.detail);
+    case 'event_not_found': {
+      const start = ifSet(facts.waitedMs, ms => `Event did not appear within ${String(ms)} ms`) ?? 'Event did not appear';
+      const lastAnswer = facts.successes === 0 ? undefined : ifSet(facts.lastSuccessAgoMs, ms => `last answer ${String(ms)} ms ago`);
+
+      return join(start,
+        [': ', ifSet(facts.successes, count => `API answered ${String(count)} times`)],
+        [', ', ifSet(facts.errors, count => `failed ${String(count)} times`)],
+        [', ', lastAnswer]);
+    }
+    case 'event_mismatch':
+      return join(`Event field ${facts.field ?? 'value'} differs`,
+        [': expected ', facts.expected], [', got ', facts.actual]);
+    case 'duplicate_event':
+      return join('Event was counted more than once', [': ', ifSet(facts.count, count => `${String(count)} times`)]);
+    case 'repeat_not_counted':
+      return join('The repeated event was not counted', [': totalCount is ', ifSet(facts.count, String)], [' after ', ifSet(facts.waitedMs, ms => `${String(ms)} ms`)]);
+    case 'cleanup_failed':
+      return withDetail('The test event was not removed', facts.detail);
+    case 'cleanup_refused':
+      return withDetail('Found an event that is not ours, removal cancelled', facts.detail);
+    case 'monitor_internal':
+      return join('Internal monitor error', [': ', facts.detail], [' (', ifSet(facts.cause, text => `${text})`)]);
+    case 'run_timeout':
+      return join('The run did not finish', [' within ', ifSet(facts.waitedMs, ms => `${String(ms)} ms`)]);
+  }
+}
