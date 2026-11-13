@@ -39,8 +39,8 @@ export interface RequestRetryOptions {
   delaysMs: readonly number[];
   /** Clock used for waiting. */
   clock: Clock;
-  /** Tells whether a status deserves another attempt. */
-  retryStatus: (status: number) => boolean;
+  /** Tells whether a status, judged with the body text, deserves another attempt. */
+  retryStatus: (status: number, text: string) => boolean;
   /** Tells whether a network failure deserves another attempt. */
   retryNetwork: (failure: NetworkFailure) => boolean;
 }
@@ -56,6 +56,8 @@ export interface RetriedResponse {
 /** A request that failed on the network. */
 export class NetworkError extends Error {
   public readonly failure: NetworkFailure;
+  /** Attempts made when `requestWithRetry` gave up; 1 for a bare `httpRequest`. */
+  public attempts = 1;
 
   /**
    * Creates the error.
@@ -167,7 +169,7 @@ export async function requestWithRetry(
 
       const response = await httpRequest(request, target);
 
-      if (options.retryStatus(response.status)) {
+      if (options.retryStatus(response.status, response.text)) {
         throw new HttpStatusError(response);
       }
 
@@ -185,6 +187,10 @@ export async function requestWithRetry(
     if (error instanceof HttpStatusError) {
       return { response: error.response,
         attempts: made };
+    }
+
+    if (error instanceof NetworkError) {
+      error.attempts = made;
     }
 
     throw error;
