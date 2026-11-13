@@ -1,0 +1,101 @@
+# Subset of the Hawk API schema, taken from codex-team/hawk.api.nodejs at
+# commit 86bfc0a (src/typeDefs). Only what the monitor's queries touch.
+# Directives are removed and `extend type` is written as plain `type`.
+# Source files and the fields they define:
+#   user.ts       Tokens, Mutation.login, Mutation.refreshTokens
+#   project.ts    Query.project, Project (id, token, event, dailyEventsPortion),
+#                 DailyEventsPortion, DailyEvent, EventsSortOrder,
+#                 EventsFiltersInput, DailyEventsCursorInput
+#   event.ts      Event, EventPayload (title, context), Mutation.removeEvent
+#   workspace.ts  Query.workspaces, Workspace
+#   plans.ts      Plan.eventsLimit
+#   resolvers/encodedJSON.ts, typeDefs/index.ts  scalar EncodedJSON
+# The Hawk default `sort: EventsSortOrder = lastRepetitionTime` is not an
+# EventsSortOrder value in Hawk itself, so it is left out here.
+
+scalar EncodedJSON
+
+enum EventsSortOrder {
+  BY_DATE
+  BY_COUNT
+  BY_AFFECTED_USERS
+}
+
+input EventsFiltersInput {
+  resolved: Boolean
+  starred: Boolean
+  ignored: Boolean
+}
+
+input DailyEventsCursorInput {
+  groupingTimestampBoundary: Int!
+  sortValueBoundary: Int!
+  idBoundary: ID!
+}
+
+type Tokens {
+  accessToken: String!
+  refreshToken: String!
+}
+
+type Plan {
+  eventsLimit: Int!
+}
+
+type EventPayload {
+  title: String!
+  context: EncodedJSON
+}
+
+type Event {
+  id: ID!
+  catcherType: String!
+  groupHash: String!
+  totalCount: Int!
+  payload: EventPayload!
+  originalEventId: ID!
+}
+
+type DailyEvent {
+  id: ID!
+  count: Int!
+  event: Event!
+}
+
+type DailyEventsPortion {
+  dailyEvents: [DailyEvent]
+}
+
+type Project {
+  id: ID!
+  token: String!
+  event(eventId: ID!, originalEventId: ID!): Event
+  dailyEventsPortion(
+    limit: Int! = 50
+    nextCursor: DailyEventsCursorInput
+    sort: EventsSortOrder
+    filters: EventsFiltersInput
+    search: String
+    release: String
+    assignee: ID
+  ): DailyEventsPortion
+}
+
+type Workspace {
+  id: ID!
+  billingPeriodEventsCount: Int
+  plan: Plan
+  isBlocked: Boolean
+  projects(ids: [ID!] = []): [Project!]
+}
+
+type Query {
+  project(projectId: ID!): Project
+  workspaces(ids: [ID] = []): [Workspace]
+}
+
+type Mutation {
+  login(email: String!, password: String!): Tokens!
+  refreshTokens(refreshToken: String!): Tokens!
+  removeEvent(projectId: ID!, eventId: ID!): Boolean!
+}
