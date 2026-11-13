@@ -5,3 +5,13 @@ node_modules
 dist
 data
 .git
+.npmrc
+*.pem
+*.key
+*.p12
+.github
+.vscode
+.idea
+docs
+*.md
+coverage

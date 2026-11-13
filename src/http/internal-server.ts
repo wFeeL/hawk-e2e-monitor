@@ -35,27 +35,49 @@ export interface InternalServerOptions {
   routes?: ReadonlyMap<string, RouteHandler>;
 }
 
+/** Why a check failed. */
+export interface CheckFailure {
+  /** Name of the failed check. */
+  name: string;
+  /** `false` for a negative result, `threw` for an exception, `timeout` for a missed deadline. */
+  reason: 'false' | 'threw' | 'timeout';
+  /** The thrown value; present only when `reason` is `threw`. */
+  error?: unknown;
+}
+
 /**
  * Runs one check; a throw, `false` or a timeout counts as a failure.
  * @param check Probe to execute.
  * @param timeoutMs Time limit before the probe is aborted.
- * @returns True when the check passed in time.
+ * @returns The failure, or undefined when the check passed in time.
  */
-async function runCheck(check: Check, timeoutMs: number): Promise<boolean> {
+async function runCheck(check: Check, timeoutMs: number): Promise<CheckFailure | undefined> {
   const controller = new AbortController();
   let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<false>((resolve) => {
+  const timeout = new Promise<CheckFailure>((resolve) => {
     timer = setTimeout(() => {
       controller.abort();
-      resolve(false);
+      resolve({ name: check.name,
+        reason: 'timeout' });
     }, timeoutMs);
   });
+  const outcome = (async (): Promise<CheckFailure | undefined> => {
+    try {
+      if (await check.run(controller.signal)) {
+        return undefined;
+      }
+
+      return { name: check.name,
+        reason: 'false' };
+    } catch (error: unknown) {
+      return { name: check.name,
+        reason: 'threw',
+        error };
+    }
+  })();
 
   try {
-    return await Promise.race([
-      (async (): Promise<boolean> => check.run(controller.signal))().catch(() => false),
-      timeout,
-    ]);
+    return await Promise.race([outcome, timeout]);
   } finally {
     clearTimeout(timer);
   }
@@ -65,12 +87,12 @@ async function runCheck(check: Check, timeoutMs: number): Promise<boolean> {
  * Runs all checks in parallel.
  * @param checks Checks to run.
  * @param timeoutMs Time limit for each check.
- * @returns Names of failed checks in the order of `checks`.
+ * @returns Failed checks with reasons, in the order of `checks`.
  */
-export async function evaluateChecks(checks: readonly Check[], timeoutMs: number): Promise<string[]> {
+export async function evaluateChecks(checks: readonly Check[], timeoutMs: number): Promise<CheckFailure[]> {
   const results = await Promise.all(checks.map(async check => runCheck(check, timeoutMs)));
 
-  return checks.filter((_check, index) => results[index] !== true).map(check => check.name);
+  return results.filter(result => result !== undefined);
 }
 
 /**
@@ -91,6 +113,19 @@ function sendJson(res: ServerResponse, status: number, body: unknown, headers: R
 }
 
 /**
+ * Extracts the path of a request target, dropping the query string.
+ * @param target Raw `req.url`.
+ * @returns Pathname, or undefined when the target cannot be parsed.
+ */
+function parsePathname(target: string | undefined): string | undefined {
+  try {
+    return new URL(target ?? '/', 'http://internal').pathname;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Creates the internal HTTP server; the caller starts and stops it.
  * @param options Checks, routes, logger and the check time limit.
  * @returns Server that is not listening yet.
@@ -102,18 +137,31 @@ export function createInternalServer(options: InternalServerOptions): Server {
   ]);
 
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    const { pathname } = new URL(req.url ?? '/', 'http://internal');
+    const pathname = parsePathname(req.url);
+
+    if (pathname === undefined) {
+      throw new Error('Request target cannot be parsed');
+    }
+
     const method = req.method ?? '';
     const checks = probes.get(pathname);
 
     if (checks && method === 'GET') {
-      const failed = await evaluateChecks(checks, options.checkTimeoutMs);
+      const failures = await evaluateChecks(checks, options.checkTimeoutMs);
 
-      if (failed.length === 0) {
+      for (const failure of failures) {
+        options.logger.warn('check failed', {
+          probe: pathname.slice(1),
+          check: failure.name,
+          reason: failure.reason,
+          ...failure.reason === 'threw' ? { error: failure.error } : {},
+        });
+      }
+      if (failures.length === 0) {
         sendJson(res, HTTP_OK, { status: 'ok' });
       } else {
         sendJson(res, HTTP_UNAVAILABLE, { status: 'fail',
-          failed });
+          failed: failures.map(failure => failure.name) });
       }
 
       return;
@@ -136,7 +184,7 @@ export function createInternalServer(options: InternalServerOptions): Server {
       options.logger.error('internal request failed', {
         error,
         method: req.method,
-        path: req.url,
+        path: parsePathname(req.url) ?? '(unparsable)',
       });
       if (res.headersSent) {
         res.destroy();

@@ -1,5 +1,6 @@
 import process from 'node:process';
 import { startApp, StartupError } from './app.js';
+import type { AppHandle } from './app.js';
 import { parseCommand } from './cli.js';
 import type { Config } from './config/load.js';
 import { formatConfigErrors, loadConfig } from './config/load.js';
@@ -38,7 +39,36 @@ async function serve(config: Config, env: ParsedEnv): Promise<void> {
     logger.warn(warning);
   }
 
-  let app;
+  let app: AppHandle | undefined;
+  let stopRequested = false;
+  let pendingSignal = '';
+
+  const shutdown = (): void => {
+    app?.stop().then(() => {
+      logger.info('stopped');
+      // eslint-disable-next-line n/no-process-exit -- fatal error policy, see docs/architecture.md
+      process.exit(0);
+    }, (error: unknown) => {
+      logger.error('stop failed', { error });
+      // eslint-disable-next-line n/no-process-exit -- fatal error policy, see docs/architecture.md
+      process.exit(1);
+    });
+  };
+
+  // Handlers go in before startApp so a signal during startup is not lost.
+  for (const name of STOP_SIGNALS) {
+    process.once(name, (signal: string) => {
+      if (app === undefined) {
+        logger.info('stopping', { signal,
+          during: 'startup' });
+        stopRequested = true;
+        pendingSignal = signal;
+      } else {
+        logger.info('stopping', { signal });
+        shutdown();
+      }
+    });
+  }
 
   try {
     app = await startApp(config, { logger });
@@ -56,19 +86,10 @@ async function serve(config: Config, env: ParsedEnv): Promise<void> {
   logger.info('listening', { host: config.internal.host,
     port: app.port });
 
-  for (const name of STOP_SIGNALS) {
-    process.once(name, (signal: string) => {
-      logger.info('stopping', { signal });
-      app.stop().then(() => {
-        logger.info('stopped');
-        // eslint-disable-next-line n/no-process-exit -- fatal error policy, see docs/architecture.md
-        process.exit(0);
-      }, (error: unknown) => {
-        logger.error('stop failed', { error });
-        // eslint-disable-next-line n/no-process-exit -- fatal error policy, see docs/architecture.md
-        process.exit(1);
-      });
-    });
+  if (stopRequested) {
+    logger.info('stopping', { signal: pendingSignal,
+      after: 'startup' });
+    shutdown();
   }
 }
 
