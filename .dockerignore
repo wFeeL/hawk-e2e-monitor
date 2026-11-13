@@ -1,0 +1,7 @@
+.env*
+!.env.example
+*.session
+node_modules
+dist
+data
+.git
