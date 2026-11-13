@@ -113,6 +113,19 @@ function sendJson(res: ServerResponse, status: number, body: unknown, headers: R
 }
 
 /**
+ * Extracts the path of a request target, dropping the query string.
+ * @param target Raw `req.url`.
+ * @returns Pathname, or undefined when the target cannot be parsed.
+ */
+function parsePathname(target: string | undefined): string | undefined {
+  try {
+    return new URL(target ?? '/', 'http://internal').pathname;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Creates the internal HTTP server; the caller starts and stops it.
  * @param options Checks, routes, logger and the check time limit.
  * @returns Server that is not listening yet.
@@ -124,7 +137,12 @@ export function createInternalServer(options: InternalServerOptions): Server {
   ]);
 
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    const { pathname } = new URL(req.url ?? '/', 'http://internal');
+    const pathname = parsePathname(req.url);
+
+    if (pathname === undefined) {
+      throw new Error('Request target cannot be parsed');
+    }
+
     const method = req.method ?? '';
     const checks = probes.get(pathname);
 
@@ -166,7 +184,7 @@ export function createInternalServer(options: InternalServerOptions): Server {
       options.logger.error('internal request failed', {
         error,
         method: req.method,
-        path: req.url,
+        path: parsePathname(req.url) ?? '(unparsable)',
       });
       if (res.headersSent) {
         res.destroy();

@@ -29,6 +29,10 @@ production.
 | `metrics` | Prometheus metrics | Labels have a bounded set of values; run ids and error texts never become labels | observability |
 | `heartbeat` | External ping after each run | Lets an outside service notice that the monitor itself stopped | observability |
 
+The public webhook is served by a separate `receiver` server on its own port.
+The internal server never takes routes from it, and its error log records the
+request path without the query string.
+
 ## Health and readiness
 
 `/healthz` answers whether the monitor process is alive. `/readyz` answers

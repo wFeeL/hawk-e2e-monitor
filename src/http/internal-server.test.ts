@@ -238,8 +238,25 @@ describe('internal server', () => {
     } finally {
       socket.destroy();
     }
-    expect(logger.lines).toContainEqual(expect.objectContaining({ msg: 'internal request failed' }));
+    expect(logger.lines).toContainEqual(expect.objectContaining({ msg: 'internal request failed',
+      path: '(unparsable)' }));
     expect((await call('/healthz')).status).toBe(200);
+  });
+
+  it('keeps the query string out of the error log', async () => {
+    const logger = memoryLogger();
+    const { call } = await start({
+      logger,
+      routes: new Map([['GET /boom', () => {
+        throw new Error('handler broke');
+      }]]),
+    });
+    const res = await call('/boom?token=s3cr3t-probe');
+
+    expect(res.status).toBe(500);
+    expect(logger.lines).toContainEqual(expect.objectContaining({ msg: 'internal request failed',
+      path: '/boom' }));
+    expect(JSON.stringify(logger.lines)).not.toContain('s3cr3t-probe');
   });
 
   it('query string is ignored', async () => {
