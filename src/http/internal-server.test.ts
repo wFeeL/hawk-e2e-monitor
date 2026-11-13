@@ -145,6 +145,34 @@ describe('internal server', () => {
     expect(performance.now() - started).toBeLessThan(PARALLEL_BUDGET_MS);
   });
 
+  it('logs reason of a failed check', async () => {
+    const logger = memoryLogger();
+    const { call } = await start({
+      logger,
+      checkTimeoutMs: HUNG_TIMEOUT_MS,
+      readiness: [
+        { name: 'falsy',
+          run: () => Promise.resolve(false) },
+        { name: 'broken',
+          run: () => Promise.reject(new Error('disk')) },
+        { name: 'hung',
+          run: () => new Promise<boolean>(() => undefined) },
+      ],
+    });
+    const res = await call('/readyz');
+    const entries = logger.lines.filter(line => line.msg === 'check failed');
+
+    expect(await res.json()).toEqual({ status: 'fail',
+      failed: ['falsy', 'broken', 'hung'] });
+    expect(entries.map(line => [line.check, line.reason, line.probe])).toEqual([
+      ['falsy', 'false', 'readyz'],
+      ['broken', 'threw', 'readyz'],
+      ['hung', 'timeout', 'readyz'],
+    ]);
+    expect((entries[1]?.error as Error).message).toContain('disk');
+    expect(entries[0]).not.toHaveProperty('error');
+  });
+
   it('unknown path is 404', async () => {
     const { call } = await start();
     const res = await call('/nope');
