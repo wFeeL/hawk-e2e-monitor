@@ -1,11 +1,49 @@
 import { CheckError, isCheckError } from '../errors/taxonomy.js';
+import type { ErrorClass } from '../errors/taxonomy.js';
 import type { Clock } from '../time/clock.js';
 import { GraphqlFailure } from './graphql.js';
 import type { GraphqlOperation, GraphqlTransport } from './graphql.js';
-import { LOGIN, PROJECT_TOKEN, REFRESH_TOKENS } from './operations.js';
+import { EVENT_CARD, FIND_EVENTS, LOGIN, PROJECT_TOKEN, REFRESH_TOKENS, REMOVE_EVENT, WORKSPACE_QUOTA } from './operations.js';
 
 const ACCESS_EXPIRED = 'ACCESS_TOKEN_EXPIRED_ERROR';
 const UNAUTHENTICATED = 'UNAUTHENTICATED';
+const REMOVE_ATTEMPTS = 3;
+const FIRST_RETRY_DELAY_MS = 200;
+const SECOND_RETRY_DELAY_MS = 500;
+const DEFAULT_RETRY_DELAYS_MS = [FIRST_RETRY_DELAY_MS, SECOND_RETRY_DELAY_MS] as const;
+const NOT_FOUND_PREFIX = 'Event not found for eventId';
+const RETRYABLE_CLASSES: ReadonlySet<ErrorClass> = new Set<ErrorClass>(['api_unavailable', 'dns_error', 'network_error', 'tls_error']);
+
+/** Workspace of the project with its event limit. */
+export interface WorkspaceQuota {
+  /** Workspace id. */
+  workspaceId: string;
+  /** True when Hawk blocked the workspace. */
+  isBlocked: boolean;
+  /** Events the plan allows per billing period. */
+  eventsLimit: number;
+  /** Events counted in the current billing period. */
+  eventsCount: number;
+}
+
+/** An event as the API shows it. */
+export interface FoundEvent {
+  /** Id of the first event of the group, not of the last repetition. */
+  originalEventId: string;
+  /** Hash that groups repetitions. */
+  groupHash: string;
+  /** How many times the event happened. */
+  totalCount: number;
+  /** Catcher type the event was sent with. */
+  catcherType: string;
+  /** Title of the event. */
+  title: string;
+  /** Context object as Hawk returns it, null when absent. */
+  context: unknown;
+}
+
+/** Event card; the same shape as a search row. */
+export type EventCard = FoundEvent;
 
 /** Accounts and waits the client needs. */
 export interface HawkApiOptions {
@@ -37,6 +75,38 @@ export interface HawkApi {
    * @returns Integration token as Hawk stores it.
    */
   projectToken(projectId: string, signal: AbortSignal): Promise<string>;
+  /**
+   * Finds the workspace that holds the project.
+   * @param projectId 24-character hex id of the project.
+   * @param signal Deadline of the caller.
+   * @returns Block flag, limit and counter of the workspace.
+   * @throws CheckError `api_forbidden` when no workspace holds the project, `api_error` when it has no plan.
+   */
+  workspaceQuota(projectId: string, signal: AbortSignal): Promise<WorkspaceQuota>;
+  /**
+   * Searches events of the project by a text.
+   * @param projectId 24-character hex id of the project.
+   * @param search Text looked for in titles and contexts.
+   * @param signal Deadline of the caller.
+   * @returns Events, one per group, in order of first appearance.
+   */
+  findEvents(projectId: string, search: string, signal: AbortSignal): Promise<FoundEvent[]>;
+  /**
+   * Reads one event card.
+   * @param projectId 24-character hex id of the project.
+   * @param eventId Id of the original event.
+   * @param signal Deadline of the caller.
+   * @returns The event, or null when it does not exist.
+   */
+  eventCard(projectId: string, eventId: string, signal: AbortSignal): Promise<EventCard | null>;
+  /**
+   * Removes an event; an attempt that removed it but timed out counts as done.
+   * @param projectId 24-character hex id of the project.
+   * @param eventId Id of the original event.
+   * @param signal Deadline of the caller.
+   * @returns False when Hawk answered that nothing was removed.
+   */
+  removeEvent(projectId: string, eventId: string, signal: AbortSignal): Promise<boolean>;
 }
 
 /** Access and refresh tokens of the session. */
@@ -65,10 +135,116 @@ interface ProjectTokenData {
   project: ProjectTokenValue | null;
 }
 
+/** Answer of the RemoveEvent mutation. */
+interface RemoveData {
+  /** False when Hawk removed nothing. */
+  removeEvent: boolean;
+}
+
 /** Token of a project. */
 interface ProjectTokenValue {
   /** Integration token. */
   token: string;
+}
+
+/** An event in a raw answer. */
+interface RawEvent {
+  /** Id of the repetition or of the original. */
+  id: string;
+  /** Id of the original event. */
+  originalEventId?: string | null;
+  /** Group hash. */
+  groupHash: string;
+  /** Occurrence count. */
+  totalCount: number;
+  /** Catcher type. */
+  catcherType: string;
+  /** Title and context. */
+  payload: RawPayload;
+}
+
+/** Payload of a raw event. */
+interface RawPayload {
+  /** Title. */
+  title: string;
+  /** Context, any JSON. */
+  context?: unknown;
+}
+
+/** Answer of the FindEvents query. */
+interface FindEventsData {
+  /** Null when the project is unknown. */
+  project: FindEventsProject | null;
+}
+
+/** Project part of the FindEvents answer. */
+interface FindEventsProject {
+  /** Null when the portion is empty. */
+  dailyEventsPortion: DailyPortion | null;
+}
+
+/** Portion of daily events. */
+interface DailyPortion {
+  /** Rows, possibly with nulls. */
+  dailyEvents: (DailyRow | null)[] | null;
+}
+
+/** One daily row. */
+interface DailyRow {
+  /** The last repetition of the day. */
+  event: RawEvent;
+}
+
+/** Answer of the EventCard query. */
+interface EventCardData {
+  /** Null when the project is unknown. */
+  project: EventCardProject | null;
+}
+
+/** Project part of the EventCard answer. */
+interface EventCardProject {
+  /** Null when the event does not exist. */
+  event: RawEvent | null;
+}
+
+/** Answer of the WorkspaceQuota query. */
+interface WorkspaceQuotaData {
+  /** Workspaces of the account, possibly with nulls. */
+  workspaces: (RawWorkspace | null)[] | null;
+}
+
+/** Workspace in a raw answer. */
+interface RawWorkspace {
+  /** Workspace id. */
+  id: string;
+  /** Block flag. */
+  isBlocked: boolean | null;
+  /** Counter of the billing period. */
+  billingPeriodEventsCount: number | null;
+  /** Plan, null when absent. */
+  plan: RawPlan | null;
+  /** Requested projects of the workspace. */
+  projects: unknown[] | null;
+}
+
+/** Plan in a raw answer. */
+interface RawPlan {
+  /** Events per period. */
+  eventsLimit: number;
+}
+
+/**
+ * Converts a raw event.
+ * @param event Event of an answer.
+ * @returns Event with the original id resolved.
+ */
+function toFoundEvent(event: RawEvent): FoundEvent {
+  return { originalEventId: event.originalEventId ?? event.id,
+    groupHash: event.groupHash,
+    totalCount: event.totalCount,
+    catcherType: event.catcherType,
+    title: event.payload.title,
+    context: event.payload.context ?? null };
 }
 
 /**
@@ -77,7 +253,8 @@ interface ProjectTokenValue {
  * @returns The client.
  */
 export function createHawkApi(options: HawkApiOptions): HawkApi {
-  const { transport, email, password } = options;
+  const { transport, email, password, clock } = options;
+  const delaysMs = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
   let session: Session | undefined;
 
   const authFailed = (detail: string): CheckError => new CheckError('api_auth_failed', { detail });
@@ -155,8 +332,27 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
     }
   };
 
+  const removeOnce = async (projectId: string, eventId: string, signal: AbortSignal): Promise<boolean> => {
+    const data = await authorized<RemoveData>(REMOVE_EVENT, { projectId,
+      eventId }, signal);
+
+    return data.removeEvent;
+  };
+
+  const eventCard = async (projectId: string, eventId: string, signal: AbortSignal): Promise<EventCard | null> => {
+    const data = await authorized<EventCardData>(EVENT_CARD, { projectId,
+      eventId }, signal);
+
+    if (!data.project) {
+      throw new CheckError('api_error', { detail: 'project not found' });
+    }
+
+    return data.project.event ? toFoundEvent(data.project.event) : null;
+  };
+
   return {
     ensureSession,
+    eventCard,
     async projectToken(projectId, signal) {
       const data = await authorized<ProjectTokenData>(PROJECT_TOKEN, { projectId }, signal);
 
@@ -165,6 +361,79 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
       }
 
       return data.project.token;
+    },
+    async workspaceQuota(projectId, signal) {
+      const data = await authorized<WorkspaceQuotaData>(WORKSPACE_QUOTA, { projectId }, signal);
+      const workspace = (data.workspaces ?? []).find(item => item !== null && (item.projects ?? []).length > 0);
+
+      if (!workspace) {
+        throw new CheckError('api_forbidden', { projectId,
+          detail: 'no workspace of the account holds the project' });
+      }
+
+      if (!workspace.plan) {
+        throw new CheckError('api_error', { detail: 'workspace has no plan' });
+      }
+
+      return { workspaceId: workspace.id,
+        isBlocked: workspace.isBlocked ?? false,
+        eventsLimit: workspace.plan.eventsLimit,
+        eventsCount: workspace.billingPeriodEventsCount ?? 0 };
+    },
+    async findEvents(projectId, search, signal) {
+      const data = await authorized<FindEventsData>(FIND_EVENTS, { projectId,
+        search }, signal);
+
+      if (!data.project) {
+        throw new CheckError('api_error', { detail: 'project not found' });
+      }
+
+      const byGroup = new Map<string, FoundEvent>();
+
+      for (const row of data.project.dailyEventsPortion?.dailyEvents ?? []) {
+        if (row) {
+          const event = toFoundEvent(row.event);
+          const known = byGroup.get(event.groupHash);
+
+          if (!known || event.totalCount > known.totalCount) {
+            byGroup.set(event.groupHash, event);
+          }
+        }
+      }
+
+      return [...byGroup.values()];
+    },
+    async removeEvent(projectId, eventId, signal) {
+      let failedBefore = false;
+
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          return await removeOnce(projectId, eventId, signal);
+        } catch (error) {
+          if (!isCheckError(error)) {
+            throw error;
+          }
+
+          const vanished = error.errorClass === 'api_error' && failedBefore
+            && (error.facts.detail ?? '').startsWith(NOT_FOUND_PREFIX);
+
+          if (vanished && await eventCard(projectId, eventId, signal) === null) {
+            return true;
+          }
+
+          if (!RETRYABLE_CLASSES.has(error.errorClass) || attempt >= REMOVE_ATTEMPTS || signal.aborted) {
+            throw error;
+          }
+
+          failedBefore = true;
+
+          try {
+            await clock.sleep(delaysMs[Math.min(attempt - 1, delaysMs.length - 1)] ?? 0, signal);
+          } catch {
+            throw error;
+          }
+        }
+      }
     },
   };
 }

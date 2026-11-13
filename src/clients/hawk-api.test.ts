@@ -14,11 +14,12 @@ let signal: AbortSignal;
 /**
  * Builds a client for the running fake.
  * @param password Account password, the right one by default.
+ * @param httpTimeoutMs Deadline of one request.
  * @returns Client with 1 ms retry delays.
  */
-function apiFor(password = hawk.password): HawkApi {
+function apiFor(password = hawk.password, httpTimeoutMs = 1000): HawkApi {
   return createHawkApi({ transport: createGraphqlTransport({ url: hawk.api.url,
-    httpTimeoutMs: 1000,
+    httpTimeoutMs,
     clock: systemClock,
     retryDelaysMs: [1, 1] }),
   email: hawk.email,
@@ -138,7 +139,7 @@ describe('hawk api session', () => {
     expect(hawk.api.operations).toEqual(['Login', 'ProjectToken', 'RefreshTokens', 'Login', 'ProjectToken']);
   });
 
-  it('unavailable API during refresh is not turned into a login', async () => {
+  it('a refresh answered with an API error does not fall back to login', async () => {
     const api = apiFor();
 
     await api.ensureSession(signal);
@@ -190,5 +191,154 @@ describe('hawk api session', () => {
     const error = await checkErrorOf(apiFor().projectToken('c'.repeat(24), signal));
 
     expect(error.errorClass).toBe('api_forbidden');
+  });
+});
+
+describe('hawk api queries', () => {
+  const eventPayload = (title: string): Record<string, unknown> => ({ title,
+    context: { runId: 'run1' } });
+
+  it('workspaceQuota reads the workspace of the project', async () => {
+    hawk.api.knobs.workspace = { isBlocked: false,
+      eventsLimit: 500,
+      billingPeriodEventsCount: 42 };
+
+    expect(await apiFor().workspaceQuota(hawk.projectId, signal)).toEqual({ workspaceId: 'fake-workspace',
+      isBlocked: false,
+      eventsLimit: 500,
+      eventsCount: 42 });
+  });
+
+  it('workspaceQuota treats a null counter as 0 and passes isBlocked', async () => {
+    hawk.api.knobs.workspace = { isBlocked: true,
+      eventsLimit: 10,
+      billingPeriodEventsCount: null };
+
+    const quota = await apiFor().workspaceQuota(hawk.projectId, signal);
+
+    expect(quota.eventsCount).toBe(0);
+    expect(quota.isBlocked).toBe(true);
+  });
+
+  it('workspace with plan null is api_error', async () => {
+    hawk.api.knobs.workspace = { isBlocked: false,
+      eventsLimit: 1,
+      billingPeriodEventsCount: 0,
+      plan: null };
+
+    const error = await checkErrorOf(apiFor().workspaceQuota(hawk.projectId, signal));
+
+    expect(error.errorClass).toBe('api_error');
+    expect(error.facts.detail).toBe('workspace has no plan');
+  });
+
+  it('project outside workspaces is api_forbidden', async () => {
+    const error = await checkErrorOf(apiFor().workspaceQuota('c'.repeat(24), signal));
+
+    expect(error.errorClass).toBe('api_forbidden');
+    expect(error.facts.projectId).toBe('c'.repeat(24));
+  });
+
+  it('findEvents finds a stored event', async () => {
+    const stored = hawk.store.ingest(hawk.projectId, 'errors/nodejs', eventPayload('[e2e:fake] runabc find'));
+    const found = await apiFor().findEvents(hawk.projectId, 'runabc', signal);
+
+    expect(found).toEqual([{ originalEventId: stored.id,
+      groupHash: stored.groupHash,
+      totalCount: 1,
+      catcherType: 'errors/nodejs',
+      title: '[e2e:fake] runabc find',
+      context: { runId: 'run1' } }]);
+  });
+
+  it('findEvents returns an empty list when nothing matches', async () => {
+    expect(await apiFor().findEvents(hawk.projectId, 'nothing', signal)).toEqual([]);
+  });
+
+  it('findEvents returns original id after a repeat', async () => {
+    const stored = hawk.store.ingest(hawk.projectId, 'errors/nodejs', eventPayload('repeat me'));
+
+    hawk.store.ingest(hawk.projectId, 'errors/nodejs', eventPayload('repeat me'));
+
+    const [found] = await apiFor().findEvents(hawk.projectId, 'repeat me', signal);
+
+    expect(stored.lastRepetitionId).toBeDefined();
+    expect(found?.originalEventId).toBe(stored.id);
+    expect(found?.totalCount).toBe(2);
+  });
+
+  it('findEvents includes the foreign event', async () => {
+    hawk.api.knobs.foreignEvent = true;
+
+    const found = await apiFor().findEvents(hawk.projectId, 'runxyz', signal);
+
+    expect(found.map(event => event.title)).toEqual(['foreign runxyz']);
+  });
+
+  it('eventCard returns the event, or null when it is gone', async () => {
+    const stored = hawk.store.ingest(hawk.projectId, 'errors/javascript', eventPayload('card'));
+    const api = apiFor();
+    const card = await api.eventCard(hawk.projectId, stored.id, signal);
+
+    expect(card).toMatchObject({ originalEventId: stored.id,
+      catcherType: 'errors/javascript',
+      title: 'card',
+      totalCount: 1 });
+    expect(await api.eventCard(hawk.projectId, 'f'.repeat(24), signal)).toBeNull();
+  });
+
+  it('removeEvent removes the event', async () => {
+    const stored = hawk.store.ingest(hawk.projectId, 'errors/nodejs', eventPayload('to remove'));
+
+    expect(await apiFor().removeEvent(hawk.projectId, stored.id, signal)).toBe(true);
+    expect(hawk.store.all(hawk.projectId)).toEqual([]);
+  });
+
+  it('remove false is returned as false', async () => {
+    const stored = hawk.store.ingest(hawk.projectId, 'errors/nodejs', eventPayload('stays'));
+
+    hawk.api.knobs.rejectRemove = 'false';
+
+    expect(await apiFor().removeEvent(hawk.projectId, stored.id, signal)).toBe(false);
+    expect(hawk.api.removeCalls).toBe(1);
+  });
+
+  it('remove error is api_error and is not repeated', async () => {
+    const stored = hawk.store.ingest(hawk.projectId, 'errors/nodejs', eventPayload('stays'));
+
+    hawk.api.knobs.rejectRemove = 'error';
+
+    const error = await checkErrorOf(apiFor().removeEvent(hawk.projectId, stored.id, signal));
+
+    expect(error.errorClass).toBe('api_error');
+    expect(hawk.api.removeCalls).toBe(1);
+  });
+
+  it('remove of an unknown event on the first attempt is api_error', async () => {
+    const error = await checkErrorOf(apiFor().removeEvent(hawk.projectId, 'f'.repeat(24), signal));
+
+    expect(error.errorClass).toBe('api_error');
+    expect(error.facts.detail).toContain('Event not found for eventId');
+  });
+
+  it('remove succeeds when the first attempt removed but timed out', async () => {
+    const stored = hawk.store.ingest(hawk.projectId, 'errors/nodejs', eventPayload('half removed'));
+
+    hawk.api.knobs.rejectRemove = 'remove_then_timeout';
+
+    expect(await apiFor(hawk.password, 100).removeEvent(hawk.projectId, stored.id, signal)).toBe(true);
+    expect(hawk.api.removeCalls).toBe(2);
+    expect(hawk.store.all(hawk.projectId)).toEqual([]);
+  });
+
+  it('remove gives up after three unavailable attempts', async () => {
+    const stored = hawk.store.ingest(hawk.projectId, 'errors/nodejs', eventPayload('down'));
+    const api = apiFor();
+
+    await api.ensureSession(signal);
+    hawk.api.knobs.down = true;
+
+    expect((await checkErrorOf(api.removeEvent(hawk.projectId, stored.id, signal))).errorClass).toBe('api_unavailable');
+    expect(hawk.api.operations.filter(name => name === 'RemoveEvent')).toHaveLength(3);
   });
 });
