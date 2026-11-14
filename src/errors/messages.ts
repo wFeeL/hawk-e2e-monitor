@@ -52,6 +52,19 @@ function withDetail(base: string, detail: string | undefined): string {
 }
 
 /**
+ * Builds the text of `notification_timeout`, which names the conclusion from `detail`.
+ * @param facts Facts of the message; `detail` is `webhook_only` when the loop channel is off.
+ * @returns English text.
+ */
+function notificationTimeoutText(facts: MessageFacts): string {
+  const within = ifSet(facts.waitedMs, ms => ` within ${String(ms)} ms`) ?? '';
+
+  return facts.detail === 'webhook_only'
+    ? `The webhook did not arrive${within}; with the loop channel off the notifier and the sender cannot be told apart`
+    : `Neither channel arrived${within}: the notifier or its queue did not hand the notification to a sender`;
+}
+
+/**
  * Builds the human-readable text of a failure class.
  * @param errorClass Taxonomy class.
  * @param facts Facts to mention; absent ones are skipped.
@@ -132,5 +145,23 @@ export function describeError(errorClass: ErrorClass, facts: MessageFacts): stri
       return join('Internal monitor error', [': ', facts.detail], [' (', ifSet(facts.cause, text => `${text})`)]);
     case 'run_timeout':
       return join('The run did not finish', [' within ', ifSet(facts.waitedMs, ms => `${String(ms)} ms`)]);
+    case 'tunnel_unavailable':
+      return withDetail('Tunnel gave no working public address', facts.detail);
+    case 'receiver_unreachable':
+      return withDetail('Receiver is not reachable at the public address', facts.detail);
+    case 'notification_endpoint_rejected':
+      return withDetail(`Hawk rejected the address of ${ifSet(facts.channel, name => `the ${name}`) ?? 'a notification'} channel`, facts.detail);
+    case 'provisioning_conflict':
+      return withDetail('The notification rule is being changed in parallel', facts.detail);
+    case 'provisioning_unstable':
+      return withDetail('The notification rule is changed again on every run', facts.detail);
+    case 'notification_timeout':
+      return notificationTimeoutText(facts);
+    case 'notification_mismatch':
+      return join(`Notification differs from the event: ${facts.field ?? 'a field'}`,
+        [' expected ', facts.expected], [', got ', facts.actual]);
+    case 'duplicate_notification':
+      return join(ifSet(facts.channel, name => `The ${name} notification arrived`) ?? 'The notification arrived',
+        [' ', ifSet(facts.count, count => `${String(count)} times`) ?? 'more than once']);
   }
 }

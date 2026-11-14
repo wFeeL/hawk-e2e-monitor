@@ -9,7 +9,9 @@ export const ERROR_CLASSES = [
   'api_query_rejected', 'api_auth_failed', 'api_forbidden', 'token_mismatch',
   'workspace_blocked', 'api_error', 'event_not_found', 'event_mismatch',
   'duplicate_event', 'repeat_not_counted', 'cleanup_failed', 'cleanup_refused',
-  'monitor_internal', 'run_timeout',
+  'monitor_internal', 'run_timeout', 'tunnel_unavailable', 'receiver_unreachable',
+  'notification_endpoint_rejected', 'provisioning_conflict', 'provisioning_unstable',
+  'notification_timeout', 'notification_mismatch', 'duplicate_notification',
 ] as const;
 
 /** One of `ERROR_CLASSES`. */
@@ -50,6 +52,14 @@ export const CULPRIT_OF: Readonly<Record<ErrorClass, Culprit>> = Object.fromEntr
   ['cleanup_refused', 'monitor'],
   ['monitor_internal', 'monitor'],
   ['run_timeout', 'monitor'],
+  ['tunnel_unavailable', 'monitor'],
+  ['receiver_unreachable', 'monitor'],
+  ['notification_endpoint_rejected', 'config'],
+  ['provisioning_conflict', 'monitor'],
+  ['provisioning_unstable', 'monitor'],
+  ['notification_timeout', 'hawk'],
+  ['notification_mismatch', 'hawk'],
+  ['duplicate_notification', 'hawk'],
 ] satisfies readonly (readonly [ErrorClass, Culprit])[]) as Record<ErrorClass, Culprit>;
 
 /** Facts a message may mention; absent facts are skipped. */
@@ -86,6 +96,8 @@ export interface MessageFacts {
   detail?: string;
   /** Project id. */
   projectId?: string;
+  /** Notification channel, `webhook` or `loop`. */
+  channel?: string;
 }
 
 /** Cause and optional text override for a `CheckError`. */
