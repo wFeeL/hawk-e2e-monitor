@@ -10,11 +10,12 @@ const DEFAULT_HTTP_TIMEOUT_MS = 5000;
 const DEFAULT_AVAILABILITY_TIMEOUT_MS = 15_000;
 const DEFAULT_ACCEPT_TIMEOUT_MS = 10_000;
 const DEFAULT_VISIBLE_TIMEOUT_MS = 120_000;
-const DEFAULT_CLEANUP_TIMEOUT_MS = 15_000;
+const DEFAULT_CLEANUP_TIMEOUT_MS = 30_000;
 const DEFAULT_LATE_DUPLICATE_WAIT_MS = 5000;
 const DEFAULT_RUN_TIMEOUT_MS = 480_000;
 const DEFAULT_REPEAT_EVERY_N_RUNS = 6;
 const MAX_INSTANCE_DIGITS = 12;
+const CLEANUP_REQUESTS = 4;
 const PROJECT_ID_PATTERN = /^[0-9a-f]{24}$/;
 const PORT_MESSAGE = 'must be a port number from 1 to 65535';
 const REPEAT_MESSAGE = 'must be a whole number, 0 or more';
@@ -133,10 +134,13 @@ function checkCombinations(env: z.output<typeof baseSchema>, ctx: z.RefinementCt
     return;
   }
 
-  if (env.LATE_DUPLICATE_WAIT_MS >= env.CLEANUP_TIMEOUT_MS) {
+  // After the wait cleanup reads the card once and removes the event in up to three attempts.
+  const cleanupNeeds = env.LATE_DUPLICATE_WAIT_MS + CLEANUP_REQUESTS * env.HTTP_TIMEOUT_MS;
+
+  if (cleanupNeeds > env.CLEANUP_TIMEOUT_MS) {
     ctx.addIssue({ code: 'custom',
       path: ['LATE_DUPLICATE_WAIT_MS'],
-      message: 'must be less than CLEANUP_TIMEOUT_MS' });
+      message: `must leave room for the recheck and removal: LATE_DUPLICATE_WAIT_MS + 4 * HTTP_TIMEOUT_MS must not exceed CLEANUP_TIMEOUT_MS (${String(cleanupNeeds)} ms)` });
   }
 
   let stagesTotal = 0;

@@ -24,7 +24,7 @@ describe('loadConfig', () => {
       collectorAccept: 10_000,
       eventVisible: 120_000,
       eventRepeated: 120_000,
-      cleanup: 15_000,
+      cleanup: 30_000,
       run: 480_000,
     });
   });
@@ -189,7 +189,7 @@ describe('loadConfig', () => {
 
   it('HTTP_TIMEOUT_MS must be less than every stage budget', () => {
     const errors = expectErrors(loadConfig(validEnv({ HTTP_TIMEOUT_MS: '10000',
-      CLEANUP_TIMEOUT_MS: '10000' })));
+      CLEANUP_TIMEOUT_MS: '10000' }))).filter(error => error.variable === 'HTTP_TIMEOUT_MS');
 
     expect(errors).toEqual([
       { variable: 'HTTP_TIMEOUT_MS',
@@ -207,11 +207,15 @@ describe('loadConfig', () => {
     expect(expectErrors(loadConfig(validEnv({ LATE_DUPLICATE_WAIT_MS: value }))).map(error => error.variable)).toEqual(['LATE_DUPLICATE_WAIT_MS']);
   });
 
-  it('LATE_DUPLICATE_WAIT_MS must be less than CLEANUP_TIMEOUT_MS', () => {
-    expectOk(loadConfig(validEnv({ LATE_DUPLICATE_WAIT_MS: '14999' })));
+  it('LATE_DUPLICATE_WAIT_MS must leave room for the recheck and removal', () => {
+    expectOk(loadConfig(validEnv({ LATE_DUPLICATE_WAIT_MS: '10000' })));
 
-    expect(expectErrors(loadConfig(validEnv({ LATE_DUPLICATE_WAIT_MS: '15000' })))).toEqual([{ variable: 'LATE_DUPLICATE_WAIT_MS',
-      message: 'must be less than CLEANUP_TIMEOUT_MS' }]);
+    expect(expectErrors(loadConfig(validEnv({ LATE_DUPLICATE_WAIT_MS: '10001' })))).toEqual([{ variable: 'LATE_DUPLICATE_WAIT_MS',
+      message: 'must leave room for the recheck and removal: LATE_DUPLICATE_WAIT_MS + 4 * HTTP_TIMEOUT_MS must not exceed CLEANUP_TIMEOUT_MS (30001 ms)' }]);
+  });
+
+  it('the default timeouts are valid together', () => {
+    expectOk(loadConfig(validEnv()));
   });
 
   it('RUN_TIMEOUT_MS must cover stages 1-5, cleanup not counted', () => {

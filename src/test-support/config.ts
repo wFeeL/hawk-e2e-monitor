@@ -16,7 +16,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     COLLECTOR_ACCEPT_TIMEOUT_MS: '300',
     EVENT_VISIBLE_TIMEOUT_MS: '300',
     EVENT_REPEATED_TIMEOUT_MS: '300',
-    CLEANUP_TIMEOUT_MS: '300',
+    CLEANUP_TIMEOUT_MS: '600',
     LATE_DUPLICATE_WAIT_MS: '10',
     RUN_TIMEOUT_MS: '3000',
   })));
