@@ -3,6 +3,8 @@ import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import type { FakeRules } from './rules.js';
+import { createFakeRules, defaultRule } from './rules.js';
 import type { FakeStore, StoredEvent } from './store.js';
 import { objectIdLike } from './store.js';
 
@@ -10,8 +12,9 @@ const JSON_TYPE = 'application/json; charset=utf-8';
 const PLAIN_TYPE = 'text/plain; charset=utf-8';
 const DEFAULT_EVENTS_LIMIT = 10_000;
 const UNAUTHENTICATED_MESSAGE = 'You must be signed in to view this resource.';
-const PROJECT_OPERATIONS = new Set(['ProjectToken', 'FindEvents', 'EventCard', 'RemoveEvent']);
-const OPERATIONS = new Set(['Login', 'RefreshTokens', 'ProjectToken', 'WorkspaceQuota', 'FindEvents', 'EventCard', 'RemoveEvent']);
+const RULE_MUTATIONS = new Set(['CreateNotificationRule', 'UpdateNotificationRule', 'DeleteNotificationRule']);
+const PROJECT_OPERATIONS = new Set(['ProjectToken', 'FindEvents', 'EventCard', 'RemoveEvent', 'NotificationRules', ...RULE_MUTATIONS]);
+const OPERATIONS = new Set(['Login', 'RefreshTokens', 'ProjectToken', 'WorkspaceQuota', 'FindEvents', 'EventCard', 'RemoveEvent', 'NotificationRules', ...RULE_MUTATIONS]);
 const ANONYMOUS_OPERATIONS = new Set(['Login', 'RefreshTokens']);
 
 /** A GraphQL error the fake can be told to return. */
@@ -54,6 +57,12 @@ export interface FakeApiKnobs {
   workspace?: FakeWorkspace;
   /** Search also returns an event of someone else with the same runId in its title. */
   foreignEvent?: boolean;
+  /** Webhooks may point to private addresses and other ports, loop may use http; true when unset, as tests run on 127.0.0.1. */
+  allowPrivateWebhook?: boolean;
+  /** Hosts the fake DNS does not resolve. */
+  unresolvableHosts?: string[];
+  /** The next `CreateNotificationRule` creates the rule and never answers; the client has to give up. */
+  createThenHang?: boolean;
 }
 
 /** Running fake GraphQL API. */
@@ -66,6 +75,8 @@ export interface FakeApi {
   readonly operations: string[];
   /** Number of `RemoveEvent` requests that reached the handler. */
   readonly removeCalls: number;
+  /** Notification rules of the project, with the default rule already in. */
+  readonly rules: FakeRules;
   /**
    * Stops the server and drops connections, including hanging ones.
    * @returns Resolves when the port is released.
@@ -85,6 +96,8 @@ export interface FakeApiOptions {
   password: string;
   /** Integration token returned as `project.token`. */
   token: string;
+  /** Rule store to use, shared with a notifier; the API makes its own when absent. The default rule of the account is put into it at start. */
+  rules?: FakeRules;
 }
 
 /** Result of an operation: data or an error. */
@@ -160,12 +173,17 @@ function eventView(event: StoredEvent, eventId: string): Record<string, unknown>
 export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
   const { store, projectId } = options;
   const knobs: FakeApiKnobs = {};
+  const rules = options.rules ?? createFakeRules({ allowPrivateWebhook: () => knobs.allowPrivateWebhook ?? true,
+    resolves: host => knobs.unresolvableHosts?.includes(host) !== true });
+
+  rules.seed(projectId, defaultRule(options.email));
   const operations: string[] = [];
   const accessTokens = new Set<string>();
   const refreshTokens = new Set<string>();
   const errorUses = new WeakMap<FakeApiError, number>();
   let removeCalls = 0;
   let removeTimeoutUsed = false;
+  let createHangUsed = false;
   let seenDownForMs: number | undefined;
   let downUntil = 0;
 
@@ -281,6 +299,45 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
       : failure(`Event not found for eventId: ${eventId}`, 'INTERNAL_SERVER_ERROR');
   };
 
+  const notificationRules = (): Outcome => success({
+    project: { id: projectId,
+      notifications: rules.list(projectId).map(rule => ({ ...rule,
+        threshold: rule.threshold ?? null,
+        thresholdPeriod: rule.thresholdPeriod ?? null })) },
+  });
+
+  const inputOf = (variables: Record<string, unknown>): Record<string, unknown> => {
+    const { input } = variables;
+
+    return typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
+  };
+
+  const createRule = (variables: Record<string, unknown>): Outcome | 'hang' => {
+    const created = rules.create(projectId, inputOf(variables));
+
+    if ('code' in created) {
+      return failure(created.message, created.code);
+    }
+
+    if (knobs.createThenHang === true && !createHangUsed) {
+      createHangUsed = true;
+
+      return 'hang';
+    }
+
+    return success({ createProjectNotificationsRule: { id: created.id } });
+  };
+
+  const updateRule = (variables: Record<string, unknown>): Outcome => {
+    const updated = rules.update(projectId, inputOf(variables));
+
+    if (updated !== null && 'code' in updated) {
+      return failure(updated.message, updated.code);
+    }
+
+    return success({ updateProjectNotificationsRule: updated === null ? null : { id: updated.id } });
+  };
+
   const run = (name: string, variables: Record<string, unknown>): Outcome | 'hang' => {
     switch (name) {
       case 'Login':
@@ -307,6 +364,16 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
 
         return success({ project: { event: event ? eventView(event, event.id) : null } });
       }
+      case 'NotificationRules':
+        return notificationRules();
+      case 'CreateNotificationRule':
+        return createRule(variables);
+      case 'UpdateNotificationRule':
+        return updateRule(variables);
+      case 'DeleteNotificationRule':
+        rules.remove(projectId, typeof inputOf(variables).ruleId === 'string' ? inputOf(variables).ruleId as string : '');
+
+        return success({ deleteProjectNotificationsRule: null });
       default:
         return removeEvent(variable(variables, 'eventId'));
     }
@@ -334,7 +401,10 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
       }
     }
 
-    if (PROJECT_OPERATIONS.has(name) && variable(variables, 'projectId') !== projectId) {
+    // The rule mutations carry the project in `input`, the other operations at the top.
+    const requested = RULE_MUTATIONS.has(name) ? variable(inputOf(variables), 'projectId') : variable(variables, 'projectId');
+
+    if (PROJECT_OPERATIONS.has(name) && requested !== projectId) {
       return failure('You have no access to this workspace', 'FORBIDDEN');
     }
 
@@ -417,6 +487,7 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
     get removeCalls() {
       return removeCalls;
     },
+    rules,
     async close() {
       server.closeAllConnections();
       await new Promise<void>((resolve) => {

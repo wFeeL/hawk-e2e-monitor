@@ -3,12 +3,15 @@ import { startFakeApi } from './api.js';
 import type { FakeApi } from './api.js';
 import { startFakeCollector } from './collector.js';
 import type { FakeCollector } from './collector.js';
+import { createFakeRules } from './rules.js';
+import type { FakeRules } from './rules.js';
 import { createFakeStore, objectIdLike } from './store.js';
 import type { FakeStore } from './store.js';
 import { decodeTokenKey, encodeToken } from './token.js';
 
 export * from './api.js';
 export * from './collector.js';
+export * from './rules.js';
 export * from './store.js';
 export * from './token.js';
 
@@ -20,6 +23,8 @@ export interface FakeHawk {
   api: FakeApi;
   /** Shared event store. */
   store: FakeStore;
+  /** Notification rules shared by the API and, later, the notifier. */
+  rules: FakeRules;
   /** 24 hex project id. */
   projectId: string;
   /** Account email. */
@@ -49,16 +54,24 @@ export async function startFakeHawk(): Promise<FakeHawk> {
     projectId,
     validTokenKey: decodeTokenKey(token) ?? '',
     blocked: () => false });
+  // The switches live in the API's knobs, which exist only after it starts, so they are read lazily.
+  let fakeApi: FakeApi | undefined;
+  const rules = createFakeRules({ allowPrivateWebhook: () => fakeApi?.knobs.allowPrivateWebhook ?? true,
+    resolves: host => fakeApi?.knobs.unresolvableHosts?.includes(host) !== true });
   const api = await startFakeApi({ store,
     projectId,
     email,
     password,
-    token });
+    token,
+    rules });
+
+  fakeApi = api;
 
   return {
     collector,
     api,
     store,
+    rules,
     projectId,
     email,
     password,
