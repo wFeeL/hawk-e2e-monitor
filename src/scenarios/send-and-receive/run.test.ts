@@ -5,7 +5,7 @@ import { CheckError } from '../../errors/taxonomy.js';
 import { encodeToken, startFakeHawk } from '../../test-support/fake-hawk/index.js';
 import type { CollectorReplyOverride, FakeHawk } from '../../test-support/fake-hawk/index.js';
 import type { EventCard, HawkApi } from '../../clients/hawk-api.js';
-import { createTestDeps } from '../../test-support/scenario.js';
+import { TIMEOUT_LIMITS, createTestDeps } from '../../test-support/scenario.js';
 import type { TestDepsOptions } from '../../test-support/scenario.js';
 import { systemClock } from '../../time/clock.js';
 import { runSendAndReceive } from './run.js';
@@ -208,7 +208,8 @@ describe('failures', () => {
   it('an accepted event that shows up only after stage 4 is found and removed by cleanup', async () => {
     hawk.collector.knobs.processingDelayMs = 600;
 
-    const { deps } = createTestDeps(hawk, { env: { EVENT_VISIBLE_TIMEOUT_MS: '150',
+    const { deps } = createTestDeps(hawk, { env: { ...TIMEOUT_LIMITS,
+      EVENT_VISIBLE_TIMEOUT_MS: '150',
       CLEANUP_TIMEOUT_MS: '1500' } });
     let stageSignal: AbortSignal | undefined;
     const waitingFind: ScenarioDeps['api'] = { ...deps.api,
@@ -294,7 +295,7 @@ describe('failures', () => {
   it('reply timeout with the event delivered: collector_accept uncertain, run ok, exactly one POST', async () => {
     hawk.collector.knobs.replyDelayMs = 300;
 
-    const result = await run();
+    const result = await run({ sequence: 1 }, { env: TIMEOUT_LIMITS });
 
     expect(result.status).toBe('ok');
     expect(stageOf(result, 'collector_accept')).toMatchObject({ status: 'uncertain',
@@ -324,7 +325,8 @@ describe('failures', () => {
       body: 'Service Unavailable' };
     hawk.collector.knobs.processingDelayMs = 600;
 
-    const { deps } = createTestDeps(hawk, { env: { EVENT_VISIBLE_TIMEOUT_MS: '150',
+    const { deps } = createTestDeps(hawk, { env: { ...TIMEOUT_LIMITS,
+      EVENT_VISIBLE_TIMEOUT_MS: '150',
       CLEANUP_TIMEOUT_MS: '1500' } });
     let stageSignal: AbortSignal | undefined;
     const waitingFind: ScenarioDeps['api'] = { ...deps.api,

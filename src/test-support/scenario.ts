@@ -23,8 +23,21 @@ const RETRY_DELAYS_MS = [5, 10];
 const FAKE_LETTER = 'a';
 const POLL_SCHEDULE_MS = [20, 40];
 
-/** Short limits so tests never wait long; `HTTP_TIMEOUT_MS` stays below every budget. */
+/** Limits for healthy-path tests: far above what a loaded CI machine needs, so a slow start never fails a run. `HTTP_TIMEOUT_MS` stays below every budget. */
 const SHORT_LIMITS: Record<string, string> = {
+  HTTP_TIMEOUT_MS: '1000',
+  COLLECTOR_AVAILABILITY_TIMEOUT_MS: '2000',
+  API_AVAILABILITY_TIMEOUT_MS: '2000',
+  COLLECTOR_ACCEPT_TIMEOUT_MS: '2000',
+  EVENT_VISIBLE_TIMEOUT_MS: '2000',
+  EVENT_REPEATED_TIMEOUT_MS: '2000',
+  CLEANUP_TIMEOUT_MS: '5000',
+  LATE_DUPLICATE_WAIT_MS: '10',
+  RUN_TIMEOUT_MS: '20000',
+};
+
+/** Tight limits for tests that make a timeout happen on purpose (delays of 300 ms and more). */
+export const TIMEOUT_LIMITS: Record<string, string> = {
   HTTP_TIMEOUT_MS: '100',
   COLLECTOR_AVAILABILITY_TIMEOUT_MS: '400',
   API_AVAILABILITY_TIMEOUT_MS: '400',
