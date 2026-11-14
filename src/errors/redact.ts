@@ -28,6 +28,30 @@ export function createRedactor(secrets: readonly string[]): Redactor {
   };
 }
 
+/** A redactor that learns secrets while the process runs. */
+export interface MutableRedactor {
+  /** Masks every secret known at the moment of the call. */
+  redact: Redactor;
+  /** Adds a secret, such as a public address known only after startup; one shorter than 4 characters is ignored. */
+  add: (secret: string) => void;
+}
+
+/**
+ * Builds a redactor whose secret list grows after creation.
+ * @param secrets Secrets known at the start.
+ * @returns The redactor and the function that adds a secret.
+ */
+export function createMutableRedactor(secrets: readonly string[]): MutableRedactor {
+  const known = [...secrets];
+
+  return {
+    redact: text => createRedactor(known)(text),
+    add: (secret) => {
+      known.push(secret);
+    },
+  };
+}
+
 /**
  * Tells whether a value is a plain object or an array.
  * @param value Anything.

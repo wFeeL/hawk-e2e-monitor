@@ -20,6 +20,14 @@ export interface CheckCommand {
   repeat: boolean;
 }
 
+/** Bring the notification rule of the instance to the wanted state. */
+export interface ProvisionCommand {
+  /** Discriminant. */
+  kind: 'provision';
+  /** False with `--no-wait`: do not wait for Hawk to reload the rules. */
+  wait: boolean;
+}
+
 /** Show usage and fail. */
 export interface UsageCommand {
   /** Discriminant. */
@@ -29,10 +37,10 @@ export interface UsageCommand {
 }
 
 /** Parsed command line. */
-export type Command = CheckCommand | ServeCommand | UsageCommand;
+export type Command = CheckCommand | ProvisionCommand | ServeCommand | UsageCommand;
 
 /** Usage text printed for an unknown command. */
-export const USAGE = 'Usage: hawk-e2e-monitor [serve]\n       hawk-e2e-monitor check send-and-receive-event [--sequence <n>] [--transport http|ws] [--repeat]\n';
+export const USAGE = 'Usage: hawk-e2e-monitor [serve]\n       hawk-e2e-monitor check send-and-receive-event [--sequence <n>] [--transport http|ws] [--repeat]\n       hawk-e2e-monitor provision [--no-wait]\n';
 
 const SCENARIO = 'send-and-receive-event';
 const SEQUENCE_PATTERN = /^[1-9]\d*$/u;
@@ -107,9 +115,36 @@ function parseCheck(args: readonly string[]): CheckCommand | UsageCommand {
 }
 
 /**
+ * Parses the arguments after `provision`.
+ * @param flags Flags of the command.
+ * @returns Provision command, or usage naming the problem.
+ */
+function parseProvision(flags: readonly string[]): ProvisionCommand | UsageCommand {
+  const seen = new Set<string>();
+  let wait = true;
+
+  for (const flag of flags) {
+    if (seen.has(flag)) {
+      return invalid(`${flag} given twice`);
+    }
+
+    seen.add(flag);
+
+    if (flag === '--no-wait') {
+      wait = false;
+    } else {
+      return invalid(`unknown option "${flag}"`);
+    }
+  }
+
+  return { kind: 'provision',
+    wait };
+}
+
+/**
  * Parses arguments after the script name.
  * @param args Command line arguments.
- * @returns `serve` for no arguments or `serve`, `check` with its options, usage text otherwise.
+ * @returns `serve` for no arguments or `serve`, `check` or `provision` with their options, usage text otherwise.
  */
 export function parseCommand(args: readonly string[]): Command {
   if (args.length === 0 || (args.length === 1 && args[0] === 'serve')) {
@@ -118,6 +153,10 @@ export function parseCommand(args: readonly string[]): Command {
 
   if (args[0] === 'check') {
     return parseCheck(args.slice(1));
+  }
+
+  if (args[0] === 'provision') {
+    return parseProvision(args.slice(1));
   }
 
   return { kind: 'usage',

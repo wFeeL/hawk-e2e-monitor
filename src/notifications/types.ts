@@ -69,3 +69,9 @@ export interface NotificationWebhook {
   /** Webhook channel. */
   webhook: ChannelSettings;
 }
+
+/** A rule input that replaces an existing rule. */
+export interface NotificationRuleUpdate extends NotificationRuleInput {
+  /** Rule to replace. */
+  ruleId: string;
+}

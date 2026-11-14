@@ -5,6 +5,8 @@ import { startFakeHawk } from '../test-support/fake-hawk/index.js';
 import type { FakeApiError, FakeHawk } from '../test-support/fake-hawk/index.js';
 import { systemClock } from '../time/clock.js';
 import { createGraphqlTransport } from './graphql.js';
+import type { GraphqlOperation, GraphqlTransport } from './graphql.js';
+import type { NotificationRule, NotificationRuleInput } from '../notifications/types.js';
 import { createHawkApi } from './hawk-api.js';
 import type { HawkApi } from './hawk-api.js';
 
@@ -340,5 +342,90 @@ describe('hawk api queries', () => {
 
     expect((await checkErrorOf(api.removeEvent(hawk.projectId, stored.id, signal))).errorClass).toBe('api_unavailable');
     expect(hawk.api.operations.filter(name => name === 'RemoveEvent')).toHaveLength(3);
+  });
+});
+
+describe('notification rules', () => {
+  const input = (): NotificationRuleInput => {
+    const off = { isEnabled: false,
+      endpoint: '' };
+
+    return { projectId: hawk.projectId,
+      isEnabled: true,
+      whatToReceive: 'ONLY_NEW',
+      including: ['[e2e:api-test]'],
+      excluding: [],
+      channels: { email: off,
+        slack: off,
+        loop: off,
+        telegram: off,
+        webhook: { isEnabled: true,
+          endpoint: 'https://hooks.example.com/hooks/webhook/x' } } };
+  };
+
+  it('reads the default rule with a null webhook', async () => {
+    const rules = await apiFor().notificationRules(hawk.projectId, signal);
+
+    expect(rules).toHaveLength(1);
+    expect(rules[0]?.channels.webhook).toBeNull();
+    expect(rules[0]?.channels.email.isEnabled).toBe(true);
+  });
+
+  it('turns a null channel into a disabled one', async () => {
+    const [rule] = hawk.rules.list(hawk.projectId);
+
+    hawk.rules.remove(hawk.projectId, rule?.id ?? '');
+    hawk.rules.seed(hawk.projectId, { ...rule as NotificationRule,
+      channels: { ...rule?.channels,
+        slack: null } as unknown as NotificationRule['channels'] });
+
+    const [read] = await apiFor().notificationRules(hawk.projectId, signal);
+
+    expect(read?.channels.slack).toEqual({ isEnabled: false,
+      endpoint: '' });
+  });
+
+  it('creates, updates and deletes a rule', async () => {
+    const api = apiFor();
+    const id = await api.createNotificationRule(input(), signal);
+
+    expect((await api.notificationRules(hawk.projectId, signal))[0]?.id).toBe(id);
+    expect(await api.updateNotificationRule({ ...input(),
+      ruleId: id,
+      isEnabled: false }, signal)).toBe(id);
+    expect((await api.notificationRules(hawk.projectId, signal))[0]?.isEnabled).toBe(false);
+
+    await api.deleteNotificationRule(hawk.projectId, id, signal);
+
+    expect((await api.notificationRules(hawk.projectId, signal)).map(rule => rule.id)).not.toContain(id);
+  });
+
+  it('update of an unknown rule gives null', async () => {
+    expect(await apiFor().updateNotificationRule({ ...input(),
+      ruleId: 'f'.repeat(24) }, signal)).toBeNull();
+  });
+
+  it('create is not repeated after a timeout', async () => {
+    hawk.api.knobs.createThenHang = true;
+
+    const error = await checkErrorOf(apiFor(hawk.password, 100).createNotificationRule(input(), signal));
+
+    expect(error.errorClass).toBe('api_unavailable');
+    expect(hawk.api.operations.filter(name => name === 'CreateNotificationRule')).toHaveLength(1);
+  });
+
+  it('an unknown project is api_forbidden', async () => {
+    const transport: GraphqlTransport = {
+      request: async <T>(operation: GraphqlOperation): Promise<T> => Promise.resolve((operation.name === 'Login'
+        ? { login: { accessToken: 'a',
+            refreshToken: 'r' } }
+        : { project: null }) as T),
+    };
+    const api = createHawkApi({ transport,
+      email: 'e',
+      password: 'p',
+      clock: systemClock });
+
+    expect((await checkErrorOf(api.notificationRules(hawk.projectId, signal))).errorClass).toBe('api_forbidden');
   });
 });
