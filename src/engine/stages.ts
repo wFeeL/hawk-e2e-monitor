@@ -102,6 +102,12 @@ function toOutcome(name: StageName, settled: Settled | undefined, reason: AbortR
   }
 
   if (!settled.done) {
+    // After the run deadline a thrown failure is mostly the abort itself, so it must not blame Hawk.
+    if (reason === 'run') {
+      return { status: 'failed',
+        error: new CheckError('run_timeout', { stage: name }) };
+    }
+
     return { status: 'failed',
       error: settled.error instanceof CheckError
         ? settled.error
