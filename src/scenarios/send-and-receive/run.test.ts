@@ -156,7 +156,43 @@ describe('failures', () => {
       errorClass: 'event_not_found',
       culprit: 'hawk' });
     expect(result.message).toMatch(/API answered \d+ times/u);
+    // Cleanup searches after an accepted send, finds nothing and has nothing to remove.
     expect(result.cleanup.status).toBe('skipped');
+    expect(stageOf(result, 'cleanup')).toMatchObject({ status: 'skipped',
+      details: { found: false } });
+    expect(hawk.api.removeCalls).toBe(0);
+  });
+
+  it('an accepted event that shows up only after stage 4 is found and removed by cleanup', async () => {
+    hawk.collector.knobs.processingDelayMs = 600;
+
+    const { deps } = createTestDeps(hawk, { env: { EVENT_VISIBLE_TIMEOUT_MS: '150',
+      CLEANUP_TIMEOUT_MS: '1500' } });
+    let stageSignal: AbortSignal | undefined;
+    const waitingFind: ScenarioDeps['api'] = { ...deps.api,
+      findEvents: async (projectId, search, signal) => {
+        // The first search is stage 4; a search with another signal is the cleanup's, which waits for the delayed event.
+        stageSignal ??= signal;
+
+        if (signal !== stageSignal) {
+          while (hawk.store.all(hawk.projectId).length === 0) {
+            await systemClock.sleep(10, signal);
+          }
+        }
+
+        return deps.api.findEvents(projectId, search, signal);
+      } };
+    const result = await runSendAndReceive({ ...deps,
+      api: waitingFind }, { sequence: 1 });
+
+    expect(result).toMatchObject({ status: 'failed',
+      failedStage: 'event_visible',
+      errorClass: 'event_not_found' });
+    expect(stageOf(result, 'collector_accept').status).toBe('ok');
+    expect(result.sendMayHaveReached).toBe(false);
+    expect(result.cleanup.status).toBe('ok');
+    expect(hawk.api.removeCalls).toBe(1);
+    expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
   });
 
   it('API down: api_availability, api_unavailable, no POST reached the fake', async () => {

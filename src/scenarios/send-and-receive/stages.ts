@@ -429,7 +429,8 @@ export function cleanupStage(budgetMs: number): StageSpec<ScenarioContext> {
       let target = state.event;
 
       if (target === undefined) {
-        if (!state.sendMayHaveReached) {
+        // An accepted event may still be on its way through the workers, so look for it too.
+        if (!state.sendMayHaveReached && state.sendOutcome?.kind !== 'accepted') {
           return { status: 'skipped' };
         }
 
