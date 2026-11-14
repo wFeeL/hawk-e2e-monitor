@@ -178,7 +178,24 @@ describe('collectorAcceptStage', () => {
     expect(stored?.catcherType).toBe(plan.catcherType);
     expect(stored?.payload).toEqual({ title: plan.title,
       type: 'e2e-check',
-      context: plan.context });
+      context: plan.context,
+      backtrace: [{ file: 'hawk-e2e-monitor/check.js',
+        line: 1,
+        column: 1,
+        function: 'check' }] });
+  });
+
+  it('payload carries one backtrace frame', async () => {
+    const { context } = scenario();
+
+    await run(collectorAcceptStage(BUDGET_MS), context);
+
+    const [stored] = hawk.store.all(hawk.projectId);
+
+    expect(stored?.payload.backtrace).toEqual([{ file: 'hawk-e2e-monitor/check.js',
+      line: 1,
+      column: 1,
+      function: 'check' }]);
   });
 
   it('fails with the class of a rejection and does not mark the send as reached', async () => {
@@ -212,7 +229,7 @@ describe('collectorAcceptStage', () => {
 });
 
 describe('checkEventFields', () => {
-  const plan = planRun(testConfig(), { sequence: 1 });
+  const plan = planRun(testConfig(), { sequence: 1 }, 'send-and-receive-event');
   const good: FoundEvent = { originalEventId: 'e1',
     groupHash: 'g',
     totalCount: 1,
@@ -271,7 +288,7 @@ describe('checkEventFields', () => {
 });
 
 describe('isOurEvent', () => {
-  const plan = planRun(testConfig(), { sequence: 1 });
+  const plan = planRun(testConfig(), { sequence: 1 }, 'send-and-receive-event');
   const base: FoundEvent = { originalEventId: 'e1',
     groupHash: 'g',
     totalCount: 1,

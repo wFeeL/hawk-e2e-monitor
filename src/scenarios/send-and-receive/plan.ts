@@ -9,8 +9,14 @@ const FIRST_LETTER_CODE = 97;
 const HTTP_CATCHER = 'errors/nodejs';
 const WS_CATCHER = 'errors/javascript';
 
-/** Name of the scenario in titles and results. */
-export const SCENARIO_NAME = 'send-and-receive-event';
+/** Scenarios that send a test event. */
+export const SCENARIO_NAMES = ['send-and-receive-event', 'check-notification'] as const;
+
+/** Name of a scenario in titles and results. */
+export type ScenarioName = typeof SCENARIO_NAMES[number];
+
+/** Name of the first scenario, which F1 runs. */
+export const SCENARIO_NAME: ScenarioName = 'send-and-receive-event';
 
 /** What the event carries in its `context`, so a mangled title can still be recognized. */
 export interface RunContextPayload {
@@ -19,7 +25,7 @@ export interface RunContextPayload {
   /** Id of the monitor instance. */
   instanceId: string;
   /** Scenario name. */
-  scenario: typeof SCENARIO_NAME;
+  scenario: ScenarioName;
   /** Transport of the first send. */
   transport: Transport;
   /** Run number. */
@@ -112,20 +118,22 @@ export function createRunId(randomLetters: RandomLetters = systemLetters): strin
  * Builds the event title.
  * @param instanceId Id of this monitor, unique among instances.
  * @param runId Random id from `createRunId`.
+ * @param scenario Scenario the event belongs to.
  * @returns Title that starts with `[e2e:<instanceId>] <runId> `.
  */
-export function buildTitle(instanceId: string, runId: string): string {
-  return `[e2e:${instanceId}] ${runId} ${SCENARIO_NAME}`;
+export function buildTitle(instanceId: string, runId: string, scenario: ScenarioName): string {
+  return `[e2e:${instanceId}] ${runId} ${scenario}`;
 }
 
 /**
  * Decides everything about a run up front.
  * @param config Validated configuration.
  * @param options Run number and optional overrides.
+ * @param scenario Scenario that runs.
  * @param randomLetters Source of letters for the run id, for tests.
  * @returns Transport, catcher type, repeat flag, title and context of the run.
  */
-export function planRun(config: Config, options: PlanOptions, randomLetters?: RandomLetters): RunPlan {
+export function planRun(config: Config, options: PlanOptions, scenario: ScenarioName, randomLetters?: RandomLetters): RunPlan {
   const { sequence } = options;
   const transport = options.transport ?? chooseTransport(sequence, config.transportMode);
   const runId = createRunId(randomLetters);
@@ -136,10 +144,10 @@ export function planRun(config: Config, options: PlanOptions, randomLetters?: Ra
     transport,
     catcherType: transport === 'http' ? HTTP_CATCHER : WS_CATCHER,
     repeat: options.repeat ?? shouldRepeat(sequence, config.transportMode, config.repeatEveryNRuns),
-    title: buildTitle(config.instanceId, runId),
+    title: buildTitle(config.instanceId, runId, scenario),
     context: { runId,
       instanceId: config.instanceId,
-      scenario: SCENARIO_NAME,
+      scenario,
       transport,
       sequence },
   };

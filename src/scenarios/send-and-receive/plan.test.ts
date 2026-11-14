@@ -43,7 +43,11 @@ describe('createRunId', () => {
 
 describe('buildTitle', () => {
   it('has the instance id, the run id and the scenario name', () => {
-    expect(buildTitle('mon-1', 'rabc')).toBe('[e2e:mon-1] rabc send-and-receive-event');
+    expect(buildTitle('mon-1', 'rabc', 'send-and-receive-event')).toBe('[e2e:mon-1] rabc send-and-receive-event');
+  });
+
+  it('title of check-notification', () => {
+    expect(buildTitle('mon-1', 'rabc', 'check-notification')).toBe('[e2e:mon-1] rabc check-notification');
   });
 });
 
@@ -51,7 +55,7 @@ describe('planRun', () => {
   const letters = (count: number): string => 'a'.repeat(count);
 
   it('http run: nodejs catcher, context and title', () => {
-    const plan = planRun(testConfig({ instanceId: 'mon' }), { sequence: 3 }, letters);
+    const plan = planRun(testConfig({ instanceId: 'mon' }), { sequence: 3 }, 'send-and-receive-event', letters);
 
     expect(plan).toEqual({
       runId: `r${'a'.repeat(15)}`,
@@ -68,21 +72,28 @@ describe('planRun', () => {
     });
   });
 
+  it('check-notification puts its name in the title and the context', () => {
+    const plan = planRun(testConfig({ instanceId: 'mon' }), { sequence: 1 }, 'check-notification', letters);
+
+    expect(plan.title).toBe(`[e2e:mon] r${'a'.repeat(15)} check-notification`);
+    expect(plan.context.scenario).toBe('check-notification');
+  });
+
   it('ws run uses the javascript catcher', () => {
-    expect(planRun(testConfig(), { sequence: 2 }, letters).catcherType).toBe('errors/javascript');
+    expect(planRun(testConfig(), { sequence: 2 }, 'send-and-receive-event', letters).catcherType).toBe('errors/javascript');
   });
 
   it('computes repeat from the config', () => {
     const config = testConfig({ repeatEveryNRuns: 2 });
 
-    expect(planRun(config, { sequence: 4 }, letters).repeat).toBe(true);
-    expect(planRun(config, { sequence: 5 }, letters).repeat).toBe(false);
+    expect(planRun(config, { sequence: 4 }, 'send-and-receive-event', letters).repeat).toBe(true);
+    expect(planRun(config, { sequence: 5 }, 'send-and-receive-event', letters).repeat).toBe(false);
   });
 
   it('options override transport and repeat', () => {
     const plan = planRun(testConfig({ repeatEveryNRuns: 0 }), { sequence: 1,
       transport: 'ws',
-      repeat: true }, letters);
+      repeat: true }, 'send-and-receive-event', letters);
 
     expect(plan.transport).toBe('ws');
     expect(plan.catcherType).toBe('errors/javascript');

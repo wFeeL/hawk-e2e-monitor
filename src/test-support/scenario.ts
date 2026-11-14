@@ -152,7 +152,7 @@ export function createTestScenario(hawk: FakeHawk, options: TestScenarioOptions 
   const { config, collector, api, clock } = deps;
   const plan = planRun(config, { sequence: options.sequence ?? 1,
     transport: options.transport,
-    repeat: options.repeat }, deps.randomLetters);
+    repeat: options.repeat }, 'send-and-receive-event', deps.randomLetters);
 
   return {
     context: { config,

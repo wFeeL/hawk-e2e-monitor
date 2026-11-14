@@ -10,6 +10,11 @@ import type { Clock } from '../../time/clock.js';
 import type { RunPlan } from './plan.js';
 
 const LOW_QUOTA_SHARE = 0.1;
+// The loop sender fails on an event without a backtrace.
+const BACKTRACE = [{ file: 'hawk-e2e-monitor/check.js',
+  line: 1,
+  column: 1,
+  function: 'check' }];
 
 /** What the stages learn on the way and hand to later stages and the verdict. */
 export interface ScenarioState {
@@ -59,7 +64,8 @@ export function eventMessage(context: ScenarioContext): CollectorMessage {
     catcherType: plan.catcherType,
     payload: { title: plan.title,
       type: 'e2e-check',
-      context: plan.context } };
+      context: plan.context,
+      backtrace: BACKTRACE } };
 }
 
 /**

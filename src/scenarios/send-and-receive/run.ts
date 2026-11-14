@@ -84,7 +84,7 @@ function toCleanupResult(stage: StageResult): CleanupResult {
 export async function runSendAndReceive(deps: ScenarioDeps, options: PlanOptions): Promise<RunResult> {
   const { config, clock } = deps;
   const { budgets } = config;
-  const plan = planRun(config, options, deps.randomLetters);
+  const plan = planRun(config, options, SCENARIO_NAME, deps.randomLetters);
   const state: ScenarioState = { sendMayHaveReached: false };
   const context: ScenarioContext = { config,
     plan,
