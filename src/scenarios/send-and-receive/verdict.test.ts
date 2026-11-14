@@ -124,4 +124,40 @@ describe('decideVerdict', () => {
 
     expect(verdict.error?.message).toBe('API did not respond');
   });
+
+  it('a late duplicate after a run without a repeat fails event_visible', () => {
+    const verdict = decideVerdict(stages(stage('event_repeated', 'skipped'), stage('cleanup', 'ok', { details: { lateTotalCount: 2 } })), { sendMayHaveReached: false });
+
+    expect(verdict).toMatchObject({ status: 'failed',
+      failedStage: 'event_visible' });
+    expect(verdict.error?.errorClass).toBe('duplicate_event');
+    expect(verdict.error?.culprit).toBe('hawk');
+    expect(verdict.error?.message).toBe('The event count grew to 2 after the check, expected 1');
+  });
+
+  it('a late duplicate after a repeat fails event_repeated', () => {
+    const verdict = decideVerdict(stages(stage('cleanup', 'ok', { details: { lateTotalCount: 3 } })), { sendMayHaveReached: false });
+
+    expect(verdict.failedStage).toBe('event_repeated');
+    expect(verdict.error?.message).toBe('The event count grew to 3 after the check, expected 2');
+  });
+
+  it('an earlier failure outranks a late duplicate', () => {
+    const verdict = decideVerdict(stages(
+      stage('event_repeated', 'failed', { errorClass: 'repeat_not_counted',
+        message: 'not counted' }),
+      stage('cleanup', 'ok', { details: { lateTotalCount: 3 } })
+    ), { sendMayHaveReached: false });
+
+    expect(verdict.failedStage).toBe('event_repeated');
+    expect(verdict.error?.errorClass).toBe('repeat_not_counted');
+  });
+
+  it('a late duplicate outranks a cleanup failure', () => {
+    const verdict = decideVerdict(stages(stage('event_repeated', 'skipped'), stage('cleanup', 'failed', { errorClass: 'cleanup_failed',
+      details: { lateTotalCount: 2 } })), { sendMayHaveReached: false });
+
+    expect(verdict.failedStage).toBe('event_visible');
+    expect(verdict.error?.errorClass).toBe('duplicate_event');
+  });
 });

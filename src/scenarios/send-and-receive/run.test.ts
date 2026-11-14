@@ -1,8 +1,10 @@
 import { Buffer } from 'node:buffer';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { RunResult, StageResult } from '../../engine/result.js';
+import { CheckError } from '../../errors/taxonomy.js';
 import { encodeToken, startFakeHawk } from '../../test-support/fake-hawk/index.js';
 import type { CollectorReplyOverride, FakeHawk } from '../../test-support/fake-hawk/index.js';
+import type { EventCard, HawkApi } from '../../clients/hawk-api.js';
 import { createTestDeps } from '../../test-support/scenario.js';
 import type { TestDepsOptions } from '../../test-support/scenario.js';
 import { systemClock } from '../../time/clock.js';
@@ -59,6 +61,44 @@ function stageOf(result: RunResult, name: StageResult['name']): StageResult {
   }
 
   return found;
+}
+
+/**
+ * Wraps the API so that the card read of the cleanup recheck runs a hook first.
+ * Card reads are told apart by their signal: each stage uses one, so the Nth distinct signal is the Nth stage that reads cards.
+ * @param api API client to wrap.
+ * @param ordinal Which distinct signal is the cleanup's: 2 without a repeat, 3 with one.
+ * @param hook Runs before the read; returning a value replaces the answer, returning nothing lets the read go through.
+ * @returns Wrapped client.
+ */
+function hookCleanupCard(api: HawkApi, ordinal: number, hook: () => EventCard | null | undefined): HawkApi {
+  const signals = new Set<AbortSignal>();
+
+  return { ...api,
+    eventCard: async (projectId, eventId, signal) => {
+      signals.add(signal);
+
+      if (signals.size === ordinal) {
+        const replaced = hook();
+
+        if (replaced !== undefined) {
+          return replaced;
+        }
+      }
+
+      return api.eventCard(projectId, eventId, signal);
+    } };
+}
+
+/** Puts a second copy of the stored event into the fake Hawk, as a worker finishing late would. */
+function ingestLateDuplicate(): void {
+  const [event] = hawk.store.all(hawk.projectId);
+
+  if (event === undefined) {
+    throw new Error('No event to duplicate');
+  }
+
+  hawk.store.ingest(hawk.projectId, event.catcherType, structuredClone(event.payload));
 }
 
 /**
@@ -491,5 +531,74 @@ describe('transport and repeat', () => {
     expect(result.status).toBe('ok');
     expect(result.transport).toBe(transport);
     expect(stageOf(result, 'event_repeated').status).toBe(repeated);
+  });
+});
+
+describe('late duplicate', () => {
+  it('without a repeat: event_visible, duplicate_event, and the event is still removed', async () => {
+    const { deps } = createTestDeps(hawk);
+    const result = await runSendAndReceive({ ...deps,
+      api: hookCleanupCard(deps.api, 2, () => {
+        ingestLateDuplicate();
+
+        return undefined;
+      }) }, { sequence: 1 });
+
+    expect(result).toMatchObject({ status: 'failed',
+      failedStage: 'event_visible',
+      errorClass: 'duplicate_event',
+      culprit: 'hawk',
+      message: 'The event count grew to 2 after the check, expected 1' });
+    expect(stageOf(result, 'event_visible').status).toBe('ok');
+    expect(stageOf(result, 'cleanup').details).toMatchObject({ lateTotalCount: 2 });
+    expect(result.cleanup.status).toBe('ok');
+    expect(hawk.api.removeCalls).toBe(1);
+    expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
+  });
+
+  it('after a repeat: event_repeated', async () => {
+    const { deps } = createTestDeps(hawk);
+    const result = await runSendAndReceive({ ...deps,
+      api: hookCleanupCard(deps.api, 3, () => {
+        ingestLateDuplicate();
+
+        return undefined;
+      }) }, { sequence: 1,
+      repeat: true });
+
+    expect(result).toMatchObject({ status: 'failed',
+      failedStage: 'event_repeated',
+      errorClass: 'duplicate_event',
+      message: 'The event count grew to 3 after the check, expected 2' });
+    expect(hawk.api.removeCalls).toBe(1);
+  });
+
+  it('a recheck that fails does not fail the run', async () => {
+    const { deps } = createTestDeps(hawk);
+    const result = await runSendAndReceive({ ...deps,
+      api: hookCleanupCard(deps.api, 2, () => {
+        throw new CheckError('api_unavailable', { code: 'TIMEOUT' });
+      }) }, { sequence: 1 });
+
+    expect(result.status).toBe('ok');
+    expect(stageOf(result, 'cleanup')).toMatchObject({ status: 'ok',
+      details: { recheck: 'failed' } });
+    expect(hawk.api.removeCalls).toBe(1);
+  });
+
+  it('a recheck that finds no card does not fail the run', async () => {
+    const { deps } = createTestDeps(hawk);
+    const result = await runSendAndReceive({ ...deps,
+      api: hookCleanupCard(deps.api, 2, () => null) }, { sequence: 1 });
+
+    expect(result.status).toBe('ok');
+    expect(stageOf(result, 'cleanup').details).toMatchObject({ recheck: 'missing' });
+    expect(hawk.api.removeCalls).toBe(1);
+  });
+
+  it('a healthy recheck leaves no trace in the details', async () => {
+    const result = await run();
+
+    expect(stageOf(result, 'cleanup').details).toBeUndefined();
   });
 });

@@ -426,6 +426,7 @@ export function cleanupStage(budgetMs: number): StageSpec<ScenarioContext> {
     run: async ({ api, config, plan, state }, signal): Promise<StageOutcome> => {
       const { projectId } = config.hawk;
       const refuse = (event: FoundEvent): CheckError => new CheckError('cleanup_refused', { detail: `"${event.title}" (${event.originalEventId})` });
+      const details: Record<string, unknown> = {};
       let target = state.event;
 
       if (target === undefined) {
@@ -454,23 +455,54 @@ export function cleanupStage(budgetMs: number): StageSpec<ScenarioContext> {
         if (target === undefined) {
           throw refuse(first);
         }
-      } else if (!isOurEvent(target, plan, config.instanceId)) {
-        throw refuse(target);
+      } else {
+        if (!isOurEvent(target, plan, config.instanceId)) {
+          throw refuse(target);
+        }
+
+        // A worker may count one more copy after the check; the verdict reads the count from here.
+        try {
+          const card = await api.eventCard(projectId, target.originalEventId, signal);
+
+          if (card === null) {
+            details.recheck = 'missing';
+          } else if (card.totalCount > target.totalCount) {
+            details.lateTotalCount = card.totalCount;
+          }
+        } catch (error) {
+          if (!(error instanceof CheckError)) {
+            throw error;
+          }
+
+          details.recheck = 'failed';
+        }
       }
 
+      const withDetails = (outcome: StageOutcome): StageOutcome => Object.keys(details).length > 0
+        ? { ...outcome,
+            details }
+        : outcome;
       let removed: boolean;
 
       try {
         removed = await api.removeEvent(projectId, target.originalEventId, signal);
       } catch (error) {
-        throw cleanupFailure(error);
+        const failure = cleanupFailure(error);
+
+        if (!(failure instanceof CheckError)) {
+          throw failure;
+        }
+
+        return withDetails({ status: 'failed',
+          error: failure });
       }
 
       if (!removed) {
-        throw new CheckError('cleanup_failed', { detail: 'Hawk answered that nothing was removed' });
+        return withDetails({ status: 'failed',
+          error: new CheckError('cleanup_failed', { detail: 'Hawk answered that nothing was removed' }) });
       }
 
-      return { status: 'ok' };
+      return withDetails({ status: 'ok' });
     },
   };
 }
