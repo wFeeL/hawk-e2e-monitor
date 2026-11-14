@@ -44,6 +44,30 @@ export interface StageBudgets {
   run: number;
 }
 
+/** Settings of the notification receiver and the public address. */
+export interface NotificationConfig {
+  /** Interface the receiver listens on. */
+  receiverHost: string;
+  /** Receiver TCP port; 0 lets the OS choose. */
+  receiverPort: number;
+  /** Secret part of the receiver paths; required by the notification commands. */
+  receiverSecret?: string;
+  /** Fixed public https address of the receiver. */
+  publicBaseUrl?: string;
+  /** Metrics address of the tunnel that reports the public hostname. */
+  tunnelMetricsUrl?: string;
+  /** Whether the rule also has the loop channel. */
+  loop: boolean;
+  /** Time to wait for the notification. */
+  timeoutMs: number;
+  /** Time to wait for the second channel after the first. */
+  pairWaitMs: number;
+  /** Time limit of the stage that resolves the address and provisions the rule. */
+  setupTimeoutMs: number;
+  /** Time Hawk needs to reload the rules after a change that affects matching. */
+  ruleCacheWarmupMs: number;
+}
+
 /** Service configuration in the shape the rest of the code uses. */
 export interface Config {
   /** Id of this monitor instance. */
@@ -68,6 +92,8 @@ export interface Config {
   lateDuplicateWaitMs: number;
   /** Time limits of the stages and the run. */
   budgets: StageBudgets;
+  /** Notification receiver and public address. */
+  notifications: NotificationConfig;
 }
 
 /** Validated configuration together with the parsed environment. */
@@ -98,6 +124,21 @@ export interface ConfigError {
   variable: string;
   /** What is wrong; never contains the variable value. */
   message: string;
+}
+
+/** Thrown when a command needs settings the environment does not provide. */
+export class ConfigFailure extends Error {
+  public readonly errors: ConfigError[];
+
+  /**
+   * Creates the error.
+   * @param errors Every missing setting.
+   */
+  constructor(errors: ConfigError[]) {
+    super(errors.map(error => `${error.variable}: ${error.message}`).join('; '));
+    this.name = 'ConfigFailure';
+    this.errors = errors;
+  }
 }
 
 /** Outcome of `loadConfig`. */
@@ -172,6 +213,18 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): L
         cleanup: values.CLEANUP_TIMEOUT_MS,
         run: values.RUN_TIMEOUT_MS,
       },
+      notifications: {
+        receiverHost: values.RECEIVER_HOST,
+        receiverPort: values.RECEIVER_PORT,
+        ...values.RECEIVER_SECRET === undefined ? {} : { receiverSecret: values.RECEIVER_SECRET },
+        ...values.PUBLIC_BASE_URL === undefined ? {} : { publicBaseUrl: values.PUBLIC_BASE_URL },
+        ...values.TUNNEL_METRICS_URL === undefined ? {} : { tunnelMetricsUrl: values.TUNNEL_METRICS_URL },
+        loop: values.NOTIFY_LOOP,
+        timeoutMs: values.NOTIFICATION_TIMEOUT_MS,
+        pairWaitMs: values.NOTIFICATION_PAIR_WAIT_MS,
+        setupTimeoutMs: values.NOTIFICATION_SETUP_TIMEOUT_MS,
+        ruleCacheWarmupMs: values.RULE_CACHE_WARMUP_MS,
+      },
     },
   };
 }
@@ -185,4 +238,32 @@ export function formatConfigErrors(errors: readonly ConfigError[]): string {
   const lines = errors.map(error => `  ${error.variable}: ${error.message}`);
 
   return ['Invalid configuration:', ...lines, 'See .env.example for all variables.'].join('\n') + '\n';
+}
+
+/**
+ * Checks the settings that only the notification commands need.
+ * @param config Loaded configuration.
+ * @returns The notification settings with the secret present.
+ * @throws ConfigFailure when the secret or both address sources are missing.
+ */
+export function notificationSettings(config: Config): NotificationConfig & Required<Pick<NotificationConfig, 'receiverSecret'>> {
+  const { notifications } = config;
+  const errors: ConfigError[] = [];
+
+  if (notifications.receiverSecret === undefined) {
+    errors.push({ variable: 'RECEIVER_SECRET',
+      message: 'is required for this command' });
+  }
+
+  if (notifications.publicBaseUrl === undefined && notifications.tunnelMetricsUrl === undefined) {
+    errors.push({ variable: 'PUBLIC_BASE_URL',
+      message: 'set PUBLIC_BASE_URL or TUNNEL_METRICS_URL' });
+  }
+
+  if (notifications.receiverSecret === undefined || errors.length > 0) {
+    throw new ConfigFailure(errors);
+  }
+
+  return { ...notifications,
+    receiverSecret: notifications.receiverSecret };
 }

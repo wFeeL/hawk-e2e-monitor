@@ -9,6 +9,9 @@ export const TEST_INTEGRATION_TOKEN = Buffer.from(JSON.stringify({ integrationId
 /** Valid 24-character hex project id for config tests. */
 export const TEST_PROJECT_ID = '0123456789abcdef01234567';
 
+/** Valid 32-character receiver secret for tests. */
+export const TEST_RECEIVER_SECRET = 'test-receiver-secret-0123456789a';
+
 /**
  * Builds a minimal valid environment for config tests.
  * @param overrides Variables that replace or remove (when undefined) the defaults.
@@ -23,6 +26,7 @@ export function validEnv(overrides: Record<string, string | undefined> = {}): Re
     HAWK_PROJECT_ID: TEST_PROJECT_ID,
     HAWK_EMAIL: 'monitor@example.com',
     HAWK_PASSWORD: 'test-password',
+    RECEIVER_SECRET: TEST_RECEIVER_SECRET,
     ...overrides,
   };
 }

@@ -19,6 +19,10 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     CLEANUP_TIMEOUT_MS: '600',
     LATE_DUPLICATE_WAIT_MS: '10',
     RUN_TIMEOUT_MS: '3000',
+    NOTIFICATION_TIMEOUT_MS: '500',
+    NOTIFICATION_PAIR_WAIT_MS: '100',
+    NOTIFICATION_SETUP_TIMEOUT_MS: '600',
+    RULE_CACHE_WARMUP_MS: '50',
   })));
 
   return {
@@ -28,6 +32,8 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
       port: 0 },
     shutdownTimeoutMs: 1000,
     healthCheckTimeoutMs: 100,
+    notifications: { ...config.notifications,
+      receiverPort: 0 },
     ...overrides,
   };
 }

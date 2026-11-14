@@ -34,6 +34,9 @@ const SHORT_LIMITS: Record<string, string> = {
   CLEANUP_TIMEOUT_MS: '5000',
   LATE_DUPLICATE_WAIT_MS: '10',
   RUN_TIMEOUT_MS: '20000',
+  NOTIFICATION_TIMEOUT_MS: '2000',
+  NOTIFICATION_PAIR_WAIT_MS: '500',
+  NOTIFICATION_SETUP_TIMEOUT_MS: '2000',
 };
 
 /** Tight limits for tests that make a timeout happen on purpose (delays of 300 ms and more). */
@@ -47,6 +50,9 @@ export const TIMEOUT_LIMITS: Record<string, string> = {
   CLEANUP_TIMEOUT_MS: '600',
   LATE_DUPLICATE_WAIT_MS: '10',
   RUN_TIMEOUT_MS: '5000',
+  NOTIFICATION_TIMEOUT_MS: '400',
+  NOTIFICATION_PAIR_WAIT_MS: '100',
+  NOTIFICATION_SETUP_TIMEOUT_MS: '400',
 };
 
 /** What a test may change about the setup. */
