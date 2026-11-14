@@ -3,7 +3,8 @@ import type { ErrorClass } from '../errors/taxonomy.js';
 import type { Clock } from '../time/clock.js';
 import { GraphqlFailure } from './graphql.js';
 import type { GraphqlOperation, GraphqlTransport } from './graphql.js';
-import { EVENT_CARD, FIND_EVENTS, LOGIN, PROJECT_TOKEN, REFRESH_TOKENS, REMOVE_EVENT, WORKSPACE_QUOTA } from './operations.js';
+import type { ChannelSettings, NotificationRule, NotificationRuleInput, NotificationRuleUpdate } from '../notifications/types.js';
+import { CREATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE, EVENT_CARD, FIND_EVENTS, LOGIN, NOTIFICATION_RULES, PROJECT_TOKEN, REFRESH_TOKENS, REMOVE_EVENT, UPDATE_NOTIFICATION_RULE, WORKSPACE_QUOTA } from './operations.js';
 
 const ACCESS_EXPIRED = 'ACCESS_TOKEN_EXPIRED_ERROR';
 const UNAUTHENTICATED = 'UNAUTHENTICATED';
@@ -107,6 +108,71 @@ export interface HawkApi {
    * @returns False when Hawk answered that nothing was removed.
    */
   removeEvent(projectId: string, eventId: string, signal: AbortSignal): Promise<boolean>;
+  /**
+   * Reads the notification rules of a project.
+   * @param projectId 24-character hex id of the project.
+   * @param signal Deadline of the caller.
+   * @returns Rules in Hawk order; a missing channel other than `webhook` reads as disabled.
+   * @throws CheckError `api_forbidden` when the project is not visible to the account.
+   */
+  notificationRules(projectId: string, signal: AbortSignal): Promise<NotificationRule[]>;
+  /**
+   * Creates a rule. Not repeated, because a repeat would create a second rule.
+   * @param input Rule to create.
+   * @param signal Deadline of the caller.
+   * @returns Id of the new rule.
+   */
+  createNotificationRule(input: NotificationRuleInput, signal: AbortSignal): Promise<string>;
+  /**
+   * Replaces a rule as a whole.
+   * @param input New content of the rule with its id.
+   * @param signal Deadline of the caller.
+   * @returns Id of the rule, or null when the rule no longer exists.
+   */
+  updateNotificationRule(input: NotificationRuleUpdate, signal: AbortSignal): Promise<string | null>;
+  /**
+   * Deletes a rule; Hawk answers null whether or not it existed.
+   * @param projectId Project that owns the rule, 24 hex characters.
+   * @param ruleId Rule to delete.
+   * @param signal Deadline of the caller.
+   * @returns Resolves when Hawk accepted the request.
+   */
+  deleteNotificationRule(projectId: string, ruleId: string, signal: AbortSignal): Promise<void>;
+}
+
+/** Channels of a raw rule: any of them may be null. */
+type RawChannels = Partial<Record<'email' | 'slack' | 'loop' | 'telegram' | 'webhook', ChannelSettings | null>>;
+
+/** A rule in a raw answer. */
+interface RawRule extends Omit<NotificationRule, 'channels'> {
+  /** Channels, possibly with nulls. */
+  channels: RawChannels;
+}
+
+/** Answer of the NotificationRules query. */
+interface NotificationRulesData {
+  /** Null when the project is not visible. */
+  project: NotificationsProject | null;
+}
+
+/** Project part of the NotificationRules answer. */
+interface NotificationsProject {
+  /** Rules, null when the field is empty. */
+  notifications: RawRule[] | null;
+}
+
+/** Answer of the mutations that return a rule id. */
+interface RuleIdData {
+  /** Created rule. */
+  createProjectNotificationsRule?: RuleId | null;
+  /** Updated rule, null when it is gone. */
+  updateProjectNotificationsRule?: RuleId | null;
+}
+
+/** A rule reduced to its id. */
+interface RuleId {
+  /** Rule id. */
+  id: string;
 }
 
 /** Access and refresh tokens of the session. */
@@ -245,6 +311,32 @@ function toFoundEvent(event: RawEvent): FoundEvent {
     catcherType: event.catcherType,
     title: event.payload.title,
     context: event.payload.context ?? null };
+}
+
+/**
+ * Replaces a missing channel with a disabled one.
+ * @param channel Channel of a raw rule.
+ * @returns The channel, or a disabled stand-in.
+ */
+function channelOrOff(channel: ChannelSettings | null | undefined): ChannelSettings {
+  return channel ?? { isEnabled: false,
+    endpoint: '' };
+}
+
+/**
+ * Converts a raw rule.
+ * @param rule Rule of an answer.
+ * @returns Rule whose channels are all set, except `webhook` that stays null.
+ */
+function toRule(rule: RawRule): NotificationRule {
+  const { channels } = rule;
+
+  return { ...rule,
+    channels: { email: channelOrOff(channels.email),
+      slack: channelOrOff(channels.slack),
+      loop: channelOrOff(channels.loop),
+      telegram: channelOrOff(channels.telegram),
+      webhook: channels.webhook ?? null } };
 }
 
 /**
@@ -402,6 +494,34 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
       }
 
       return [...byGroup.values()];
+    },
+    async notificationRules(projectId, signal) {
+      const data = await authorized<NotificationRulesData>(NOTIFICATION_RULES, { projectId }, signal);
+
+      if (!data.project) {
+        throw new CheckError('api_forbidden', { projectId,
+          detail: 'project not found or not visible to the account' });
+      }
+
+      return (data.project.notifications ?? []).map(toRule);
+    },
+    async createNotificationRule(input, signal) {
+      const data = await authorized<RuleIdData>(CREATE_NOTIFICATION_RULE, { input }, signal);
+
+      if (!data.createProjectNotificationsRule) {
+        throw new CheckError('api_error', { detail: 'create answered without a rule' });
+      }
+
+      return data.createProjectNotificationsRule.id;
+    },
+    async updateNotificationRule(input, signal) {
+      const data = await authorized<RuleIdData>(UPDATE_NOTIFICATION_RULE, { input }, signal);
+
+      return data.updateProjectNotificationsRule?.id ?? null;
+    },
+    async deleteNotificationRule(projectId, ruleId, signal) {
+      await authorized<unknown>(DELETE_NOTIFICATION_RULE, { input: { projectId,
+        ruleId } }, signal);
     },
     async removeEvent(projectId, eventId, signal) {
       let failedBefore = false;
