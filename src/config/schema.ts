@@ -118,7 +118,8 @@ export const ENV_SHAPE = {
 };
 
 /**
- * Checks that depend on several variables; runs only when every variable is valid on its own.
+ * Checks that depend on several variables.
+ * Zod also runs it when a field failed a format rule, so it skips itself when the values it needs are unusable.
  * @param env Parsed variables.
  * @param ctx Collects the issues.
  */
