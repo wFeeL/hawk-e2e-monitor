@@ -10,6 +10,16 @@
 #   workspace.ts  Query.workspaces, Workspace
 #   plans.ts      Plan.eventsLimit
 #   resolvers/encodedJSON.ts, typeDefs/index.ts  scalar EncodedJSON
+#   notifications.ts  NotificationsChannelSettings (:11), NotificationsChannels (:31)
+#                 without webPush and desktopPush
+#   notificationsInput.ts  NotificationsChannelSettingsInput (:7),
+#                 NotificationsChannelsInput (:27) without webPush and desktopPush
+#   projectNotifications.ts  ReceiveTypes (:7), ProjectNotificationsRule (:22)
+#   projectNotificationsMutations.ts  CreateProjectNotificationsRuleInput (:7),
+#                 UpdateProjectNotificationsRuleInput (:52),
+#                 ProjectNotificationRulePointer (:102), Mutation.createProjectNotificationsRule (:118),
+#                 updateProjectNotificationsRule (:126), deleteProjectNotificationsRule (:134)
+#   project.ts    Project.notifications (:389)
 # The Hawk default `sort: EventsSortOrder = lastRepetitionTime` is not an
 # EventsSortOrder value in Hawk itself, so it is left out here.
 
@@ -69,6 +79,7 @@ type DailyEventsPortion {
 type Project {
   id: ID!
   token: String!
+  notifications: [ProjectNotificationsRule]
   event(eventId: ID!, originalEventId: ID!): Event
   dailyEventsPortion(
     limit: Int! = 50
@@ -79,6 +90,78 @@ type Project {
     release: String
     assignee: ID
   ): DailyEventsPortion
+}
+
+enum ReceiveTypes {
+  ONLY_NEW
+  SEEN_MORE
+}
+
+type NotificationsChannelSettings {
+  isEnabled: Boolean!
+  endpoint: String!
+  minPeriod: Int!
+}
+
+type NotificationsChannels {
+  email: NotificationsChannelSettings
+  telegram: NotificationsChannelSettings
+  slack: NotificationsChannelSettings
+  loop: NotificationsChannelSettings
+  webhook: NotificationsChannelSettings
+}
+
+type ProjectNotificationsRule {
+  id: ID!
+  isEnabled: Boolean!
+  whatToReceive: ReceiveTypes!
+  including: [String!]!
+  excluding: [String!]!
+  channels: NotificationsChannels
+  threshold: Int
+  thresholdPeriod: Int
+}
+
+input NotificationsChannelSettingsInput {
+  isEnabled: Boolean! = true
+  endpoint: String!
+  minPeriod: Int! = 60
+}
+
+input NotificationsChannelsInput {
+  email: NotificationsChannelSettingsInput
+  telegram: NotificationsChannelSettingsInput
+  slack: NotificationsChannelSettingsInput
+  loop: NotificationsChannelSettingsInput
+  webhook: NotificationsChannelSettingsInput
+}
+
+input CreateProjectNotificationsRuleInput {
+  projectId: ID!
+  isEnabled: Boolean! = true
+  whatToReceive: ReceiveTypes! = ONLY_NEW
+  including: [String!]! = []
+  excluding: [String!]! = []
+  channels: NotificationsChannelsInput!
+  threshold: Int
+  thresholdPeriod: Int
+}
+
+input UpdateProjectNotificationsRuleInput {
+  ruleId: ID!
+  projectId: ID!
+  isEnabled: Boolean! = true
+  whatToReceive: ReceiveTypes! = ONLY_NEW
+  including: [String!]! = []
+  excluding: [String!]! = []
+  channels: NotificationsChannelsInput!
+  threshold: Int
+  thresholdPeriod: Int
+}
+
+input ProjectNotificationRulePointer {
+  projectId: ID!
+  ruleId: ID!
 }
 
 type Workspace {
@@ -98,4 +181,7 @@ type Mutation {
   login(email: String!, password: String!): Tokens!
   refreshTokens(refreshToken: String!): Tokens!
   removeEvent(projectId: ID!, eventId: ID!): Boolean!
+  createProjectNotificationsRule(input: CreateProjectNotificationsRuleInput!): ProjectNotificationsRule
+  updateProjectNotificationsRule(input: UpdateProjectNotificationsRuleInput!): ProjectNotificationsRule
+  deleteProjectNotificationsRule(input: ProjectNotificationRulePointer!): ProjectNotificationsRule
 }

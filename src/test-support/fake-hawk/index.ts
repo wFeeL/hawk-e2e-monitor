@@ -3,16 +3,22 @@ import { startFakeApi } from './api.js';
 import type { FakeApi } from './api.js';
 import { startFakeCollector } from './collector.js';
 import type { FakeCollector } from './collector.js';
+import { startFakeNotifier } from './notifier.js';
+import type { FakeNotifier } from './notifier.js';
+import { createFakeRules } from './rules.js';
+import type { FakeRules } from './rules.js';
 import { createFakeStore, objectIdLike } from './store.js';
 import type { FakeStore } from './store.js';
 import { decodeTokenKey, encodeToken } from './token.js';
 
 export * from './api.js';
 export * from './collector.js';
+export * from './notifier.js';
+export * from './rules.js';
 export * from './store.js';
 export * from './token.js';
 
-/** A whole fake Hawk: collector, API and the events behind them. */
+/** A whole fake Hawk: collector, API, notifier and the events behind them. */
 export interface FakeHawk {
   /** HTTP and WebSocket collector. */
   collector: FakeCollector;
@@ -20,6 +26,10 @@ export interface FakeHawk {
   api: FakeApi;
   /** Shared event store. */
   store: FakeStore;
+  /** Notification rules shared by the API and the notifier. */
+  rules: FakeRules;
+  /** Notifier with the webhook and loop senders. */
+  notifier: FakeNotifier;
   /** 24 hex project id. */
   projectId: string;
   /** Account email. */
@@ -29,7 +39,7 @@ export interface FakeHawk {
   /** Valid integration token. */
   token: string;
   /**
-   * Stops both servers.
+   * Stops the servers and the notifier.
    * @returns Resolves when both ports are released.
    */
   close(): Promise<void>;
@@ -49,22 +59,38 @@ export async function startFakeHawk(): Promise<FakeHawk> {
     projectId,
     validTokenKey: decodeTokenKey(token) ?? '',
     blocked: () => false });
+  // The switches live in the API's knobs, which exist only after it starts, so they are read lazily.
+  let fakeApi: FakeApi | undefined;
+  const rules = createFakeRules({ allowPrivateWebhook: () => fakeApi?.knobs.allowPrivateWebhook ?? true,
+    resolves: host => fakeApi?.knobs.unresolvableHosts?.includes(host) !== true });
   const api = await startFakeApi({ store,
     projectId,
     email,
     password,
-    token });
+    token,
+    rules });
+
+  fakeApi = api;
+
+  const notifier = startFakeNotifier({ store,
+    rules,
+    projectId,
+    projectName: 'fake-project',
+    workspaceId: 'fake-workspace',
+    garageUrl: 'http://garage.invalid' });
 
   return {
     collector,
     api,
     store,
+    rules,
+    notifier,
     projectId,
     email,
     password,
     token,
     async close() {
-      await Promise.all([collector.close(), api.close()]);
+      await Promise.all([collector.close(), api.close(), notifier.close()]);
     },
   };
 }

@@ -59,5 +59,41 @@ export const REMOVE_EVENT: GraphqlOperation = {
   idempotent: false,
 };
 
+/** Notification rules of a project with all channel settings. */
+export const NOTIFICATION_RULES: GraphqlOperation = {
+  name: 'NotificationRules',
+  document: `query NotificationRules($projectId: ID!) {
+  project(projectId: $projectId) {
+    id
+    notifications {
+      id isEnabled whatToReceive including excluding threshold thresholdPeriod
+      channels { email { isEnabled endpoint minPeriod } slack { isEnabled endpoint minPeriod } loop { isEnabled endpoint minPeriod } telegram { isEnabled endpoint minPeriod } webhook { isEnabled endpoint minPeriod } }
+    }
+  }
+}`,
+  idempotent: true,
+};
+
+/** Creates a rule; repeating it would create a second rule, so no blind retries. */
+export const CREATE_NOTIFICATION_RULE: GraphqlOperation = {
+  name: 'CreateNotificationRule',
+  document: 'mutation CreateNotificationRule($input: CreateProjectNotificationsRuleInput!) { createProjectNotificationsRule(input: $input) { id } }',
+  idempotent: false,
+};
+
+/** Replaces a rule as a whole; the same input gives the same rule. */
+export const UPDATE_NOTIFICATION_RULE: GraphqlOperation = {
+  name: 'UpdateNotificationRule',
+  document: 'mutation UpdateNotificationRule($input: UpdateProjectNotificationsRuleInput!) { updateProjectNotificationsRule(input: $input) { id } }',
+  idempotent: true,
+};
+
+/** Deletes a rule; deleting twice leaves the same state. */
+export const DELETE_NOTIFICATION_RULE: GraphqlOperation = {
+  name: 'DeleteNotificationRule',
+  document: 'mutation DeleteNotificationRule($input: ProjectNotificationRulePointer!) { deleteProjectNotificationsRule(input: $input) { id } }',
+  idempotent: true,
+};
+
 /** Every operation the monitor sends. */
-export const ALL_OPERATIONS: readonly GraphqlOperation[] = [LOGIN, REFRESH_TOKENS, PROJECT_TOKEN, WORKSPACE_QUOTA, FIND_EVENTS, EVENT_CARD, REMOVE_EVENT];
+export const ALL_OPERATIONS: readonly GraphqlOperation[] = [LOGIN, REFRESH_TOKENS, PROJECT_TOKEN, WORKSPACE_QUOTA, FIND_EVENTS, EVENT_CARD, REMOVE_EVENT, NOTIFICATION_RULES, CREATE_NOTIFICATION_RULE, UPDATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE];

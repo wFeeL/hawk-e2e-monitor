@@ -4,7 +4,7 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
-import type { FakeStore } from './store.js';
+import type { FakeStore, StoredEvent } from './store.js';
 import { decodeTokenKey } from './token.js';
 
 const MAX_BODY_BYTES = 1_000_000;
@@ -64,6 +64,11 @@ export interface FakeCollectorKnobs {
   processingDelayMs?: number;
   /** Rewrites the payload before it is stored. */
   mutatePayload?: (payload: Record<string, unknown>) => Record<string, unknown>;
+  /**
+   * Awaited before the answer of an accepted event, after its (possibly delayed) `ingest`.
+   * Gets the stored event. Not called for dropped events or rejected messages.
+   */
+  holdReply?: (event: StoredEvent | undefined) => Promise<void>;
 }
 
 /** Running fake collector. */
@@ -168,33 +173,49 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
     timers.add(timer);
   };
 
-  const ingest = (catcherType: string, payload: Record<string, unknown>): void => {
-    store.ingest(projectId, catcherType, payload);
-  };
+  const ingest = (catcherType: string, payload: Record<string, unknown>): StoredEvent => store.ingest(projectId, catcherType, payload);
 
-  const accept = (submission: number, catcherType: string, payload: Record<string, unknown>): void => {
+  /**
+   * Stores the event.
+   * @param submission Number of the submission.
+   * @param catcherType Catcher type of the message.
+   * @param payload Event payload.
+   * @returns The stored event once stored, `'dropped'` when the knob drops it, undefined when the ingest is delayed and nobody holds the answer.
+   */
+  const accept = async (submission: number, catcherType: string, payload: Record<string, unknown>): Promise<StoredEvent | 'dropped' | undefined> => {
     const drop = typeof knobs.dropEvents === 'function' ? knobs.dropEvents(submission) : knobs.dropEvents === true;
 
     if (drop) {
-      return;
+      return 'dropped';
     }
 
     const stored = knobs.mutatePayload ? knobs.mutatePayload(structuredClone(payload)) : payload;
     const copies = knobs.duplicateOnAccept === true ? 2 : 1;
-    const run = (): void => {
+    const run = (): StoredEvent | undefined => {
+      let last: StoredEvent | undefined;
+
       for (let copy = 0; copy < copies; copy += 1) {
-        ingest(catcherType, structuredClone(stored));
+        last = ingest(catcherType, structuredClone(stored));
       }
+
+      return last;
     };
 
     if (knobs.processingDelayMs !== undefined && knobs.processingDelayMs > 0) {
-      later(run, knobs.processingDelayMs);
-    } else {
-      run();
+      const delayed = new Promise<StoredEvent | undefined>((resolve) => {
+        later(() => {
+          resolve(run());
+        }, knobs.processingDelayMs ?? 0);
+      });
+
+      // Without a hold the answer does not wait for the delayed ingest.
+      return knobs.holdReply ? delayed : undefined;
     }
+
+    return run();
   };
 
-  const handleMessage = (raw: string): Answer => {
+  const handleMessage = async (raw: string): Promise<Answer> => {
     submissions += 1;
 
     const submission = submissions;
@@ -259,7 +280,11 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
       return jsonAnswer(400, 'Invalid payload JSON format');
     }
 
-    accept(submission, catcherType, payload as Record<string, unknown>);
+    const stored = await accept(submission, catcherType, payload as Record<string, unknown>);
+
+    if (stored !== 'dropped' && knobs.holdReply) {
+      await knobs.holdReply(stored);
+    }
 
     const answer = knobs.replyAfterAccept
       ? { status: knobs.replyAfterAccept.status,
@@ -363,7 +388,14 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
         return;
       }
 
-      send(response, handleMessage(Buffer.concat(chunks).toString('utf8')));
+      handleMessage(Buffer.concat(chunks).toString('utf8')).then((answer) => {
+        send(response, answer);
+      }, () => {
+        send(response, { status: 500,
+          body: 'Internal error',
+          contentType: PLAIN_TYPE,
+          delayMs: 0 });
+      });
     });
   };
 
@@ -373,16 +405,21 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
     socket.on('message', (data: Buffer, isBinary: boolean) => {
       wsMessages += 1;
 
-      const answer = handleMessage(data.toString('utf8'));
-      const mode = knobs.ws ?? 'normal';
+      handleMessage(data.toString('utf8')).then((answer) => {
+        const mode = knobs.ws ?? 'normal';
 
-      if (mode === 'close_after_message') {
-        socket.close();
-      } else if (mode === 'normal') {
-        later(() => {
-          socket.send(answer.body, { binary: isBinary });
-        }, answer.delayMs);
-      }
+        if (mode === 'close_after_message') {
+          socket.close();
+        } else if (mode === 'normal') {
+          later(() => {
+            if (socket.readyState === socket.OPEN) {
+              socket.send(answer.body, { binary: isBinary });
+            }
+          }, answer.delayMs);
+        }
+      }, () => {
+        socket.terminate();
+      });
     });
   });
 

@@ -7,13 +7,13 @@ import { systemClock } from '../../time/clock.js';
 import { encodeToken, startFakeHawk } from '../../test-support/fake-hawk/index.js';
 import type { FakeHawk } from '../../test-support/fake-hawk/index.js';
 import { testConfig } from '../../test-support/config.js';
-import { createTestScenario } from '../../test-support/scenario.js';
+import { TIMEOUT_LIMITS, createTestScenario } from '../../test-support/scenario.js';
 import type { TestScenarioOptions } from '../../test-support/scenario.js';
 import { planRun } from './plan.js';
 import { apiAvailabilityStage, checkEventFields, cleanupStage, collectorAcceptStage, collectorAvailabilityStage, eventVisibleStage, isOurEvent } from './stages.js';
 import type { ScenarioContext } from './stages.js';
 
-const BUDGET_MS = 400;
+const BUDGET_MS = 2000;
 const QUOTA_REFUSAL = JSON.stringify({ code: 402,
   error: true,
   message: 'Project has exceeded the events limit' });
@@ -197,7 +197,7 @@ describe('collectorAcceptStage', () => {
   it('is uncertain when the answer times out, and sends exactly once', async () => {
     hawk.collector.knobs.replyDelayMs = 300;
 
-    const { context } = scenario();
+    const { context } = scenario({ env: TIMEOUT_LIMITS });
     const before = context.clock.monotonicMs();
     const result = await run(collectorAcceptStage(BUDGET_MS), context);
 

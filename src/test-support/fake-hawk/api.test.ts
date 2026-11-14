@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { startFakeApi } from './api.js';
 import type { FakeApi } from './api.js';
+import type { NotificationRule } from '../../notifications/types.js';
 import { fakeHawkEnv, startFakeHawk } from './index.js';
+import { createFakeRules } from './rules.js';
 import { createFakeStore } from './store.js';
 import type { FakeStore } from './store.js';
 
@@ -81,6 +83,8 @@ interface ProjectShape {
   event: EventShape | null;
   /** Search results. */
   dailyEventsPortion: Record<'dailyEvents', DailyEventShape[]>;
+  /** Notification rules. */
+  notifications: NotificationRule[];
 }
 
 /** GraphQL `data` with every field the fake can return. */
@@ -95,6 +99,12 @@ interface DataShape {
   workspaces: WorkspaceShape[];
   /** `RemoveEvent` result. */
   removeEvent: boolean;
+  /** `CreateNotificationRule` result. */
+  createProjectNotificationsRule: Record<'id', string>;
+  /** `UpdateNotificationRule` result. */
+  updateProjectNotificationsRule: Record<'id', string> | null;
+  /** `DeleteNotificationRule` result. */
+  deleteProjectNotificationsRule: null;
 }
 
 /** GraphQL error entry. */
@@ -641,6 +651,251 @@ describe('fake hawk', () => {
         search: 'via collector' }, session.accessToken)).project.dailyEventsPortion.dailyEvents;
 
       expect(rows).toHaveLength(1);
+    } finally {
+      await hawk.close();
+    }
+  });
+});
+
+/**
+ * Builds the input of a rule mutation with the four mandatory channels and a webhook.
+ * @param webhookEndpoint Address of the webhook channel.
+ * @param extra Other input fields.
+ * @returns The `input` variable.
+ */
+function ruleInput(webhookEndpoint = 'https://example.com/hooks/webhook/s', extra: Record<string, unknown> = {}): Record<string, unknown> {
+  const off = { isEnabled: false,
+    endpoint: '' };
+
+  return { projectId: PROJECT,
+    including: ['[e2e:t]'],
+    channels: { email: off,
+      slack: off,
+      loop: off,
+      telegram: off,
+      webhook: { endpoint: webhookEndpoint } },
+    ...extra };
+}
+
+/**
+ * Reads the rules of the project through the API.
+ * @param api Target API.
+ * @param accessToken Bearer token.
+ * @returns Rules as the `NotificationRules` query returns them.
+ */
+async function rulesThrough(api: FakeApi, accessToken: string): Promise<NotificationRule[]> {
+  return dataOf(await gql(api, 'NotificationRules', { projectId: PROJECT }, accessToken)).project.notifications;
+}
+
+describe('fake api notification rules', () => {
+  it('a project starts with the default rule: SEEN_MORE, email on, webhook null', async () => {
+    const { api } = await start();
+    const { accessToken } = await login(api);
+    const [rule, ...rest] = await rulesThrough(api, accessToken);
+
+    expect(rest).toEqual([]);
+    expect(rule).toMatchObject({ whatToReceive: 'SEEN_MORE',
+      threshold: 20,
+      thresholdPeriod: 3_600_000 });
+    expect(rule?.channels.email).toEqual({ isEnabled: true,
+      endpoint: EMAIL,
+      minPeriod: 60 });
+    expect(rule?.channels.webhook).toBeNull();
+  });
+
+  it('create answers with an id and the rule goes first', async () => {
+    const { api } = await start();
+    const { accessToken } = await login(api);
+    const created = dataOf(await gql(api, 'CreateNotificationRule', { input: ruleInput() }, accessToken));
+    const rules = await rulesThrough(api, accessToken);
+
+    expect(rules).toHaveLength(2);
+    expect(rules[0]?.id).toBe(created.createProjectNotificationsRule.id);
+    expect(rules[0]).toMatchObject({ isEnabled: true,
+      whatToReceive: 'ONLY_NEW',
+      including: ['[e2e:t]'],
+      excluding: [] });
+    expect(rules[0]?.channels.webhook).toEqual({ isEnabled: true,
+      endpoint: 'https://example.com/hooks/webhook/s',
+      minPeriod: 60 });
+  });
+
+  it('update replaces the rule, an unknown rule gives null', async () => {
+    const { api } = await start();
+    const { accessToken } = await login(api);
+    const { id } = dataOf(await gql(api, 'CreateNotificationRule', { input: ruleInput() }, accessToken)).createProjectNotificationsRule;
+    const updated = dataOf(await gql(api, 'UpdateNotificationRule', { input: { ...ruleInput('https://example.com/new'),
+      ruleId: id } }, accessToken));
+    const missing = dataOf(await gql(api, 'UpdateNotificationRule', { input: { ...ruleInput(),
+      ruleId: 'f'.repeat(24) } }, accessToken));
+
+    expect(updated.updateProjectNotificationsRule).toEqual({ id });
+    expect(missing.updateProjectNotificationsRule).toBeNull();
+    expect((await rulesThrough(api, accessToken))[0]?.channels.webhook?.endpoint).toBe('https://example.com/new');
+  });
+
+  it('delete returns null and removes', async () => {
+    const { api } = await start();
+    const { accessToken } = await login(api);
+    const { id } = dataOf(await gql(api, 'CreateNotificationRule', { input: ruleInput() }, accessToken)).createProjectNotificationsRule;
+    const answer = await gql(api, 'DeleteNotificationRule', { input: { projectId: PROJECT,
+      ruleId: id } }, accessToken);
+
+    expect(answer.body).toEqual({ data: { deleteProjectNotificationsRule: null } });
+    expect(await rulesThrough(api, accessToken)).toHaveLength(1);
+  });
+
+  it.each([
+    ['NotificationRules', { projectId: 'c'.repeat(24) }],
+    ['CreateNotificationRule', { input: { ...ruleInput(),
+      projectId: 'c'.repeat(24) } }],
+    ['UpdateNotificationRule', { input: { ...ruleInput(),
+      projectId: 'c'.repeat(24),
+      ruleId: 'x' } }],
+    ['DeleteNotificationRule', { input: { projectId: 'c'.repeat(24),
+      ruleId: 'x' } }],
+  ])('%s for a foreign project is FORBIDDEN', async (name, variables) => {
+    const { api } = await start();
+    const { accessToken } = await login(api);
+
+    expect(errorOf(await gql(api, name, variables, accessToken))).toEqual({ message: FORBIDDEN_MESSAGE,
+      extensions: { code: 'FORBIDDEN' } });
+    expect(await rulesThrough(api, accessToken)).toHaveLength(1);
+  });
+
+  it('the project mutations of the own project are not FORBIDDEN', async () => {
+    const { api } = await start();
+    const { accessToken } = await login(api);
+
+    expect((await gql(api, 'CreateNotificationRule', { input: ruleInput() }, accessToken)).body.errors).toBeUndefined();
+  });
+
+  it('validation errors come with the code and text of Hawk', async () => {
+    const { api } = await start();
+    const { accessToken } = await login(api);
+    const noEmail = ruleInput();
+    const channels = noEmail.channels as Record<string, unknown>;
+
+    api.knobs.allowPrivateWebhook = false;
+
+    const port = errorOf(await gql(api, 'CreateNotificationRule', { input: ruleInput('https://example.com:8443/x') }, accessToken));
+
+    delete channels.email;
+
+    const missing = errorOf(await gql(api, 'CreateNotificationRule', { input: noEmail }, accessToken));
+
+    expect(port).toEqual({ message: 'Webhook URL port 8443 is not allowed — only 80 (http) and 443 (https)',
+      extensions: { code: 'BAD_USER_INPUT' } });
+    expect(missing).toEqual({ message: `Cannot read properties of undefined (reading 'isEnabled')`,
+      extensions: { code: 'INTERNAL_SERVER_ERROR' } });
+  });
+
+  it('allowPrivateWebhook is true by default and flips at any time', async () => {
+    const { api } = await start();
+    const { accessToken } = await login(api);
+    const local = ruleInput('http://127.0.0.1:54321/hooks/webhook/s');
+
+    expect((await gql(api, 'CreateNotificationRule', { input: local }, accessToken)).body.errors).toBeUndefined();
+
+    api.knobs.allowPrivateWebhook = false;
+
+    expect(errorOf(await gql(api, 'CreateNotificationRule', { input: local }, accessToken)).message).toContain('port 54321');
+  });
+
+  it('unresolvableHosts are rejected', async () => {
+    const { api } = await start();
+    const { accessToken } = await login(api);
+
+    api.knobs.unresolvableHosts = ['gone.example.com'];
+
+    expect(errorOf(await gql(api, 'CreateNotificationRule', { input: ruleInput('https://gone.example.com/x') }, accessToken)).message)
+      .toBe('Cannot resolve webhook hostname "gone.example.com"');
+  });
+
+  it('the errors knob works by the name of a rule operation', async () => {
+    const { api } = await start();
+    const { accessToken } = await login(api);
+
+    api.knobs.errors = Object.fromEntries([['UpdateNotificationRule', { code: 'FORBIDDEN',
+      message: 'Not enough permissions' }]]);
+
+    expect(errorOf(await gql(api, 'UpdateNotificationRule', { input: { ...ruleInput(),
+      ruleId: 'x' } }, accessToken))).toEqual({ message: 'Not enough permissions',
+      extensions: { code: 'FORBIDDEN' } });
+  });
+
+  it('createThenHang creates the rule, never answers once, then behaves normally', async () => {
+    const { api } = await start();
+    const { accessToken } = await login(api);
+    const headers = new Headers();
+    const abort = new AbortController();
+
+    headers.set('content-type', 'application/json');
+    headers.set('authorization', `Bearer ${accessToken}`);
+    api.knobs.createThenHang = true;
+
+    const hanging = fetch(api.url, { method: 'POST',
+      headers,
+      body: JSON.stringify({ operationName: 'CreateNotificationRule',
+        variables: { input: ruleInput() } }),
+      signal: abort.signal }).then(() => 'answered', () => 'aborted');
+
+    // The rule shows up although the answer never does; the client gives up only then.
+    while ((await rulesThrough(api, accessToken)).length < 2) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+
+    abort.abort();
+
+    expect(await hanging).toBe('aborted');
+
+    const second = dataOf(await gql(api, 'CreateNotificationRule', { input: ruleInput() }, accessToken));
+
+    expect(second.createProjectNotificationsRule.id).toMatch(/^[0-9a-f]{24}$/u);
+    expect(await rulesThrough(api, accessToken)).toHaveLength(3);
+  });
+
+  it('operations records the rule operations', async () => {
+    const { api } = await start();
+    const { accessToken } = await login(api);
+
+    await rulesThrough(api, accessToken);
+    await gql(api, 'CreateNotificationRule', { input: ruleInput() }, accessToken);
+
+    expect(api.operations).toEqual(['Login', 'NotificationRules', 'CreateNotificationRule']);
+  });
+
+  it('uses the rules it is given and seeds the default rule into them', async () => {
+    const rules = createFakeRules({ allowPrivateWebhook: () => true,
+      resolves: () => true });
+    const store = createFakeStore();
+    const api = await startFakeApi({ store,
+      projectId: PROJECT,
+      email: EMAIL,
+      password: PASSWORD,
+      token: TOKEN,
+      rules });
+
+    apis.push(api);
+
+    expect(api.rules).toBe(rules);
+    expect(rules.list(PROJECT)).toHaveLength(1);
+    expect(rules.list(PROJECT)[0]?.channels.email.endpoint).toBe(EMAIL);
+  });
+
+  it('fake hawk shares one rule store between its parts and reads the knobs lazily', async () => {
+    const hawk = await startFakeHawk();
+
+    try {
+      expect(hawk.rules).toBe(hawk.api.rules);
+      expect(hawk.rules.list(hawk.projectId)).toHaveLength(1);
+
+      hawk.api.knobs.allowPrivateWebhook = false;
+
+      const rejected = hawk.rules.create(hawk.projectId, { ...ruleInput('http://127.0.0.1:1234/x'),
+        projectId: hawk.projectId });
+
+      expect(rejected).toMatchObject({ code: 'BAD_USER_INPUT' });
     } finally {
       await hawk.close();
     }
