@@ -11,12 +11,34 @@ describe('parseCommand', () => {
   });
 
   it('unknown command prints usage', () => {
-    const command = parseCommand(['provision']);
+    const command = parseCommand(['deploy']);
 
     expect(command).toEqual({
       kind: 'usage',
-      message: expect.stringContaining('Unknown command "provision"') as string,
+      message: expect.stringContaining('Unknown command "deploy"') as string,
     });
+    expect(command.kind === 'usage' ? command.message : '').toContain(USAGE);
+  });
+
+  it('provision waits by default', () => {
+    expect(parseCommand(['provision'])).toEqual({ kind: 'provision',
+      wait: true });
+  });
+
+  it('provision --no-wait does not wait', () => {
+    expect(parseCommand(['provision', '--no-wait'])).toEqual({ kind: 'provision',
+      wait: false });
+  });
+
+  it.each([
+    [['provision', '--bogus'], 'unknown option "--bogus"'],
+    [['provision', '--no-wait', '--no-wait'], 'twice'],
+    [['provision', 'extra'], 'unknown option "extra"'],
+  ])('provision %j is usage', (args, reason) => {
+    const command = parseCommand(args);
+
+    expect(command.kind).toBe('usage');
+    expect(command.kind === 'usage' ? command.message : '').toContain(reason);
     expect(command.kind === 'usage' ? command.message : '').toContain(USAGE);
   });
 

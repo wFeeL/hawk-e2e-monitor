@@ -1,5 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { createRedactor, redactDeep, stripTokenSecret } from './redact.js';
+import { createMutableRedactor, createRedactor, redactDeep, stripTokenSecret } from './redact.js';
+
+describe('mutable redactor', () => {
+  it('masks a secret added after creation and keeps the old ones', () => {
+    const { redact, add } = createMutableRedactor(['first-secret']);
+
+    expect(redact('first-secret and later.example.com')).toBe('*** and later.example.com');
+
+    add('later.example.com');
+
+    expect(redact('first-secret and later.example.com')).toBe('*** and ***');
+  });
+
+  it('masks the longer value first and ignores short ones', () => {
+    const { redact, add } = createMutableRedactor([]);
+
+    add('host.example.com');
+    add('host.example.com:8443');
+    add('ab');
+
+    expect(redact('https://host.example.com:8443/ ab')).toBe('https://***/ ab');
+  });
+});
 
 describe('redact', () => {
   it('redactor masks every secret occurrence', () => {
