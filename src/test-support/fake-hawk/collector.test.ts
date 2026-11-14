@@ -459,6 +459,42 @@ describe('fake collector WebSocket', () => {
     expect(collector.wsClients()).toBe(0);
   });
 
+  it('blacklisted answers every path with 429 before routing, and counts no POST', async () => {
+    const { collector, store } = await start();
+
+    collector.knobs.blacklisted = true;
+
+    for (const path of ['', 'health', 'other']) {
+      const response = await fetch(new URL(path, collector.url), { method: path === '' ? 'POST' : 'GET',
+        ...path === '' ? { body: JSON.stringify(validMessage()) } : {} });
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get('content-type')).toBe(PLAIN_TYPE);
+      expect(await response.text()).toBe('Too Many Requests');
+    }
+
+    expect(collector.posts).toBe(0);
+    expect(store.all(PROJECT)).toHaveLength(0);
+  });
+
+  it('blacklisted refuses the WebSocket upgrade with 429', async () => {
+    const { collector } = await start();
+
+    collector.knobs.blacklisted = true;
+
+    const socket = new WebSocket(collector.wsUrl);
+    const status = await new Promise<number | undefined>((resolve) => {
+      socket.once('unexpected-response', (_request, response) => {
+        resolve(response.statusCode);
+      });
+      socket.once('error', () => {
+        resolve(undefined);
+      });
+    });
+
+    expect(status).toBe(429);
+  });
+
   it('close_after_message accepts the event and closes without a reply', async () => {
     const { collector, store } = await start();
     const socket = await connect(collector);

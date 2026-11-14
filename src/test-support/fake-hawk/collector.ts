@@ -52,6 +52,8 @@ export interface FakeCollectorKnobs {
   replyDelayMs?: number;
   /** Answer of `/health`; by default 200 with both flags true. */
   health?: HealthFlags | HealthText;
+  /** The monitor's IP is blacklisted: every request, including the upgrade, gets 429 before routing. */
+  blacklisted?: boolean;
   /** WebSocket behavior. */
   ws?: 'normal' | 'reject_upgrade' | 'close_after_message' | 'silent';
   /** Accepts but never stores the event. */
@@ -314,6 +316,15 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
   };
 
   const handle = (request: IncomingMessage, response: ServerResponse): void => {
+    if (knobs.blacklisted === true) {
+      send(response, { status: 429,
+        body: 'Too Many Requests',
+        contentType: PLAIN_TYPE,
+        delayMs: 0 });
+
+      return;
+    }
+
     const { pathname } = new URL(request.url ?? '/', 'http://127.0.0.1');
 
     if (pathname === '/health') {
@@ -376,6 +387,12 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
   });
 
   server.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+    if (knobs.blacklisted === true) {
+      socket.end('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 17\r\n\r\nToo Many Requests');
+
+      return;
+    }
+
     if (request.url !== '/ws') {
       socket.destroy();
 

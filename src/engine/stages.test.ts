@@ -191,6 +191,45 @@ describe('runStage', () => {
     expect(clock.pending()).toBe(0);
   });
 
+  it('a stage that throws after the run deadline is run_timeout, not the thrown class', async () => {
+    const clock = createFakeClock();
+    const controller = new AbortController();
+    const running = runStage({ name: 'api_availability',
+      budgetMs: 100_000,
+      run: (_context, signal) => new Promise<StageOutcome>((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          reject(new CheckError('api_unavailable', { code: 'TIMEOUT' }));
+        });
+      }) }, undefined, { clock,
+      runSignal: controller.signal });
+
+    await clock.advance(200);
+    controller.abort();
+    await clock.advance(0);
+
+    expect(await running).toMatchObject({ status: 'failed',
+      errorClass: 'run_timeout',
+      culprit: 'monitor' });
+  });
+
+  it('a stage that throws after its own budget keeps the thrown class', async () => {
+    const clock = createFakeClock();
+    const running = runStage({ name: 'api_availability',
+      budgetMs: 1000,
+      run: (_context, signal) => new Promise<StageOutcome>((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          reject(new CheckError('api_unavailable', { code: 'TIMEOUT' }));
+        });
+      }) }, undefined, { clock,
+      runSignal: neverAbort() });
+
+    await clock.advance(1000);
+
+    expect(await running).toMatchObject({ status: 'failed',
+      errorClass: 'api_unavailable',
+      culprit: 'hawk' });
+  });
+
   it('a run signal aborted on entry aborts the stage', async () => {
     const clock = createFakeClock();
     const controller = new AbortController();

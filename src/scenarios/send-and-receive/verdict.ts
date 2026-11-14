@@ -32,6 +32,17 @@ export function decideVerdict(stages: readonly StageResult[], _state: ScenarioSt
   const failed = stages.find(stage => stage.name !== 'cleanup' && stage.status === 'failed');
 
   if (failed === undefined) {
+    const late = stages.find(stage => stage.name === 'cleanup')?.details?.lateTotalCount;
+
+    if (typeof late === 'number') {
+      const repeated = stages.find(stage => stage.name === 'event_repeated')?.status === 'ok';
+
+      return { status: 'failed',
+        failedStage: repeated ? 'event_repeated' : 'event_visible',
+        error: new CheckError('duplicate_event', { count: late },
+          { message: `The event count grew to ${String(late)} after the check, expected ${repeated ? '2' : '1'}` }) };
+    }
+
     const cleanup = stages.find(stage => stage.name === 'cleanup' && stage.status === 'failed');
 
     return cleanup === undefined

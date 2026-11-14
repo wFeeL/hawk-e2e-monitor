@@ -349,6 +349,15 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
         status });
     }
 
+    // The blacklist is checked before routing, so `/health` answers 429 as well.
+    const verdict = status === HTTP_TOO_MANY ? classifyCollectorReply(status, text) : undefined;
+
+    if (verdict?.kind === 'rejected') {
+      throw new CheckError(verdict.errorClass, { ...facts(),
+        status,
+        detail: verdict.message });
+    }
+
     throw new CheckError('collector_unexpected_response', { ...facts(),
       status,
       detail: text.slice(0, SNIPPET_LENGTH) });
