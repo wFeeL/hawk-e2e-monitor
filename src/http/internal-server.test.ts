@@ -8,8 +8,6 @@ import { createInternalServer } from './internal-server.js';
 import type { InternalServerOptions } from './internal-server.js';
 
 const HUNG_TIMEOUT_MS = 50;
-const SLOW_CHECK_MS = 60;
-const PARALLEL_BUDGET_MS = 150;
 const HANG_BUDGET_MS = 1000;
 
 const servers: Server[] = [];
@@ -45,17 +43,6 @@ async function start(overrides: Partial<InternalServerOptions> = {}): Promise<Ru
 
   return { port,
     call: async (path, init) => fetch(`http://127.0.0.1:${String(port)}${path}`, init) };
-}
-
-/**
- * Resolves after a delay.
- * @param ms Delay in milliseconds.
- * @returns Promise settled by a real timer.
- */
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 afterEach(async () => {
@@ -126,23 +113,34 @@ describe('internal server', () => {
   });
 
   it('checks run in parallel', async () => {
-    const slow = (name: string): InternalServerOptions['liveness'][number] => ({
+    const checkCount = 3;
+    let started = 0;
+    let release = (): void => undefined;
+    const allStarted = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // Each check waits for the others to start: run one after another, the first never finishes before the timeout.
+    const barrier = (name: string): InternalServerOptions['liveness'][number] => ({
       name,
       run: async () => {
-        await sleep(SLOW_CHECK_MS);
+        started += 1;
+
+        if (started === checkCount) {
+          release();
+        }
+
+        await allStarted;
 
         return true;
       },
     });
     const { call } = await start({
       checkTimeoutMs: 200,
-      liveness: [slow('a'), slow('b'), slow('c')],
+      liveness: [barrier('a'), barrier('b'), barrier('c')],
     });
-    const started = performance.now();
     const res = await call('/healthz');
 
     expect(res.status).toBe(200);
-    expect(performance.now() - started).toBeLessThan(PARALLEL_BUDGET_MS);
   });
 
   it('logs reason of a failed check', async () => {
