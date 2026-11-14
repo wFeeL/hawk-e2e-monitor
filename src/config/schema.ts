@@ -1,11 +1,22 @@
 import { z } from 'zod';
+import { decodeIntegrationToken } from '../hawk/token.js';
 import { durationMs } from './duration.js';
 
 const DEFAULT_INTERNAL_PORT = 8090;
 const MAX_PORT = 65_535;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5000;
 const DEFAULT_HEALTH_CHECK_TIMEOUT_MS = 2000;
+const DEFAULT_HTTP_TIMEOUT_MS = 5000;
+const DEFAULT_AVAILABILITY_TIMEOUT_MS = 15_000;
+const DEFAULT_ACCEPT_TIMEOUT_MS = 10_000;
+const DEFAULT_VISIBLE_TIMEOUT_MS = 120_000;
+const DEFAULT_CLEANUP_TIMEOUT_MS = 15_000;
+const DEFAULT_RUN_TIMEOUT_MS = 480_000;
+const DEFAULT_REPEAT_EVERY_N_RUNS = 6;
+const MAX_INSTANCE_DIGITS = 12;
+const PROJECT_ID_PATTERN = /^[0-9a-f]{24}$/;
 const PORT_MESSAGE = 'must be a port number from 1 to 65535';
+const REPEAT_MESSAGE = 'must be a whole number, 0 or more';
 
 /** Registry metadata of a variable that is safe to print. */
 export interface PublicMeta {
@@ -34,6 +45,22 @@ export const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 /** One of `LOG_LEVELS`. */
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
+/** Ways to pick the transport of a run. */
+export const TRANSPORT_MODES = ['alternate', 'http', 'ws'] as const;
+
+/** One of `TRANSPORT_MODES`. */
+export type TransportMode = (typeof TRANSPORT_MODES)[number];
+
+/** Stage time limits, as environment variable and the key `Config.budgets` stores it under. */
+export const STAGE_TIMEOUT_VARS = [
+  ['COLLECTOR_AVAILABILITY_TIMEOUT_MS', 'collectorAvailability'],
+  ['API_AVAILABILITY_TIMEOUT_MS', 'apiAvailability'],
+  ['COLLECTOR_ACCEPT_TIMEOUT_MS', 'collectorAccept'],
+  ['EVENT_VISIBLE_TIMEOUT_MS', 'eventVisible'],
+  ['EVENT_REPEATED_TIMEOUT_MS', 'eventRepeated'],
+  ['CLEANUP_TIMEOUT_MS', 'cleanup'],
+] as const;
+
 /**
  * Builds the schema for an http(s) URL variable.
  * @returns URL schema with a fixed error message.
@@ -45,7 +72,9 @@ function httpUrl(): z.ZodURL {
 
 /** Schemas of all environment variables, in the order errors are reported. */
 export const ENV_SHAPE = {
-  INSTANCE_ID: pub(z.string().regex(/^[a-z0-9-]{1,32}$/, 'must be 1-32 characters: a-z, 0-9, -')),
+  INSTANCE_ID: pub(z.string().regex(/^[a-z0-9-]{1,32}$/, 'must be 1-32 characters: a-z, 0-9, -')
+    // The grouper masks values that look like card numbers (13-19 digits).
+    .refine(value => value.replaceAll(/\D/gu, '').length <= MAX_INSTANCE_DIGITS, 'must contain at most 12 digits')),
   LOG_LEVEL: pub(z.enum(LOG_LEVELS).default('info')),
   INTERNAL_HOST: pub(z.string().min(1)
     .default('127.0.0.1')),
@@ -63,14 +92,78 @@ export const ENV_SHAPE = {
   HAWK_API_URL: pub(httpUrl()),
   HAWK_COLLECTOR_URL: pub(httpUrl().optional()),
   HAWK_INTEGRATION_TOKEN: z.string().min(1)
-    .regex(/^\S+$/, 'must not contain whitespace'),
-  HAWK_PROJECT_ID: pub(z.string().min(1)),
+    .regex(/^\S+$/, 'must not contain whitespace')
+    .refine(value => decodeIntegrationToken(value) !== undefined,
+      'must be a Hawk integration token (base64 JSON with integrationId and secret)'),
+  HAWK_PROJECT_ID: pub(z.string().regex(PROJECT_ID_PATTERN, 'must be a 24-character hex id')),
   HAWK_EMAIL: pub(z.email({ message: 'must be an email address' })),
   HAWK_PASSWORD: z.string().min(1),
+  TRANSPORT_MODE: pub(z.enum(TRANSPORT_MODES).default('alternate')),
+  REPEAT_EVERY_N_RUNS: pub(
+    z.string()
+      .regex(/^\d+$/, REPEAT_MESSAGE)
+      .transform(Number)
+      .pipe(z.number(REPEAT_MESSAGE).int(REPEAT_MESSAGE)
+        .min(0, REPEAT_MESSAGE))
+      .default(DEFAULT_REPEAT_EVERY_N_RUNS)
+  ),
+  HTTP_TIMEOUT_MS: pub(durationMs(DEFAULT_HTTP_TIMEOUT_MS)),
+  COLLECTOR_AVAILABILITY_TIMEOUT_MS: pub(durationMs(DEFAULT_AVAILABILITY_TIMEOUT_MS)),
+  API_AVAILABILITY_TIMEOUT_MS: pub(durationMs(DEFAULT_AVAILABILITY_TIMEOUT_MS)),
+  COLLECTOR_ACCEPT_TIMEOUT_MS: pub(durationMs(DEFAULT_ACCEPT_TIMEOUT_MS)),
+  EVENT_VISIBLE_TIMEOUT_MS: pub(durationMs(DEFAULT_VISIBLE_TIMEOUT_MS)),
+  EVENT_REPEATED_TIMEOUT_MS: pub(durationMs(DEFAULT_VISIBLE_TIMEOUT_MS)),
+  CLEANUP_TIMEOUT_MS: pub(durationMs(DEFAULT_CLEANUP_TIMEOUT_MS)),
+  RUN_TIMEOUT_MS: pub(durationMs(DEFAULT_RUN_TIMEOUT_MS)),
 };
 
+/**
+ * Checks that depend on several variables; runs only when every variable is valid on its own.
+ * @param env Parsed variables.
+ * @param ctx Collects the issues.
+ */
+function checkCombinations(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx): void {
+  // Zod runs this check even when a field failed a format rule, so skip values that are not usable.
+  const numbers = ['HTTP_TIMEOUT_MS', 'RUN_TIMEOUT_MS', ...STAGE_TIMEOUT_VARS.map(([name]) => name)] as const;
+
+  if (!URL.canParse(env.HAWK_API_URL) || numbers.some(name => typeof env[name] !== 'number')) {
+    return;
+  }
+
+  let stagesTotal = 0;
+
+  for (const [name] of STAGE_TIMEOUT_VARS) {
+    if (env.HTTP_TIMEOUT_MS >= env[name]) {
+      ctx.addIssue({ code: 'custom',
+        path: ['HTTP_TIMEOUT_MS'],
+        message: `must be less than ${name}` });
+    }
+  }
+
+  for (const [name] of STAGE_TIMEOUT_VARS.slice(0, -1)) {
+    stagesTotal += env[name];
+  }
+
+  if (stagesTotal > env.RUN_TIMEOUT_MS) {
+    ctx.addIssue({ code: 'custom',
+      path: ['RUN_TIMEOUT_MS'],
+      message: `must be at least the sum of the timeouts of stages 1-5 (${String(stagesTotal)} ms)` });
+  }
+
+  const hostname = new URL(env.HAWK_API_URL).hostname;
+  const production = hostname === 'hawk.so' || hostname.endsWith('.hawk.so');
+
+  if (env.HAWK_COLLECTOR_URL === undefined && !production) {
+    ctx.addIssue({ code: 'custom',
+      path: ['HAWK_COLLECTOR_URL'],
+      message: 'must be set when HAWK_API_URL is not a hawk.so host' });
+  }
+}
+
+const baseSchema = z.object(ENV_SHAPE);
+
 /** Schema of the whole environment. */
-export const envSchema = z.object(ENV_SHAPE);
+export const envSchema = baseSchema.superRefine(checkCombinations);
 
 /** Environment after validation and defaults. */
 export type ParsedEnv = z.output<typeof envSchema>;

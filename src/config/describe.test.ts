@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { validEnv } from '../test-support/env.js';
@@ -17,11 +18,13 @@ function summarize(overrides: Record<string, string | undefined> = {}): ReturnTy
 describe('describeConfig', () => {
   it('hides secrets', () => {
     const summary = summarize({ HAWK_PASSWORD: 's3cr3t-probe',
-      HAWK_INTEGRATION_TOKEN: 'tok-probe' });
+      HAWK_INTEGRATION_TOKEN: Buffer.from(JSON.stringify({ integrationId: 'tok-probe',
+        secret: 'sec-probe' })).toString('base64') });
 
     expect(summary.values.HAWK_PASSWORD).toBe('***');
     expect(JSON.stringify(summary)).not.toContain('s3cr3t-probe');
     expect(JSON.stringify(summary)).not.toContain('tok-probe');
+    expect(summary.values.HAWK_INTEGRATION_TOKEN).toBe('***');
   });
 
   it('shows public values', () => {
@@ -29,10 +32,13 @@ describe('describeConfig', () => {
 
     expect(values.INSTANCE_ID).toBe('test');
     expect(values.INTERNAL_PORT).toBe('8090');
+    expect(values.TRANSPORT_MODE).toBe('alternate');
+    expect(values.RUN_TIMEOUT_MS).toBe('480000');
   });
 
   it('marks unset values', () => {
-    expect(summarize().values.HAWK_COLLECTOR_URL).toBe('(unset)');
+    expect(summarize({ HAWK_API_URL: 'https://api.hawk.so/graphql',
+      HAWK_COLLECTOR_URL: undefined }).values.HAWK_COLLECTOR_URL).toBe('(unset)');
   });
 
   it('strips userinfo from URLs', () => {
@@ -43,22 +49,8 @@ describe('describeConfig', () => {
     expect(value).not.toContain('pa55');
   });
 
-  it('warns about mixed hosts', () => {
-    expect(summarize().warnings).toEqual([
-      'HAWK_COLLECTOR_URL is not set: events will go to the production collector derived from the integration token (<integrationId>.k1.hawk.so)',
-    ]);
-  });
-
-  it('no warning for production API', () => {
-    expect(summarize({ HAWK_API_URL: 'https://api.hawk.so/graphql' }).warnings).toEqual([]);
-  });
-
-  it('look-alike domain is not production', () => {
-    expect(summarize({ HAWK_API_URL: 'https://api.nothawk.so/graphql' }).warnings).toHaveLength(1);
-  });
-
-  it('no warning when collector is set', () => {
-    expect(summarize({ HAWK_COLLECTOR_URL: 'http://localhost:3000/' }).warnings).toEqual([]);
+  it('has no warnings', () => {
+    expect(summarize().warnings).toEqual([]);
   });
 });
 

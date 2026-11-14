@@ -1,5 +1,6 @@
+import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
-import { validEnv } from '../test-support/env.js';
+import { TEST_INTEGRATION_TOKEN, TEST_PROJECT_ID, validEnv } from '../test-support/env.js';
 import { expectErrors, expectOk } from '../test-support/result.js';
 import { formatConfigErrors, loadConfig } from './load.js';
 
@@ -12,7 +13,19 @@ describe('loadConfig', () => {
       port: 8090 });
     expect(config.shutdownTimeoutMs).toBe(5000);
     expect(config.healthCheckTimeoutMs).toBe(2000);
-    expect(config.hawk.collectorUrl).toBeUndefined();
+    expect(config.hawk.collectorUrl).toBe('http://localhost:3000/');
+    expect(config.transportMode).toBe('alternate');
+    expect(config.repeatEveryNRuns).toBe(6);
+    expect(config.httpTimeoutMs).toBe(5000);
+    expect(config.budgets).toEqual({
+      collectorAvailability: 15_000,
+      apiAvailability: 15_000,
+      collectorAccept: 10_000,
+      eventVisible: 120_000,
+      eventRepeated: 120_000,
+      cleanup: 15_000,
+      run: 480_000,
+    });
   });
 
   it('maps every variable', () => {
@@ -23,6 +36,16 @@ describe('loadConfig', () => {
       SHUTDOWN_TIMEOUT_MS: '3000',
       HEALTH_CHECK_TIMEOUT_MS: '1500',
       HAWK_COLLECTOR_URL: 'http://localhost:3000/',
+      TRANSPORT_MODE: 'ws',
+      REPEAT_EVERY_N_RUNS: '0',
+      HTTP_TIMEOUT_MS: '1000',
+      COLLECTOR_AVAILABILITY_TIMEOUT_MS: '2000',
+      API_AVAILABILITY_TIMEOUT_MS: '3000',
+      COLLECTOR_ACCEPT_TIMEOUT_MS: '4000',
+      EVENT_VISIBLE_TIMEOUT_MS: '5000',
+      EVENT_REPEATED_TIMEOUT_MS: '6000',
+      CLEANUP_TIMEOUT_MS: '7000',
+      RUN_TIMEOUT_MS: '30000',
     })));
 
     expect(config).toEqual({
@@ -35,10 +58,22 @@ describe('loadConfig', () => {
       hawk: {
         apiUrl: 'http://localhost:4000/graphql',
         collectorUrl: 'http://localhost:3000/',
-        integrationToken: 'test-token',
-        projectId: 'test-project',
+        integrationToken: TEST_INTEGRATION_TOKEN,
+        projectId: TEST_PROJECT_ID,
         email: 'monitor@example.com',
         password: 'test-password',
+      },
+      transportMode: 'ws',
+      repeatEveryNRuns: 0,
+      httpTimeoutMs: 1000,
+      budgets: {
+        collectorAvailability: 2000,
+        apiAvailability: 3000,
+        collectorAccept: 4000,
+        eventVisible: 5000,
+        eventRepeated: 6000,
+        cleanup: 7000,
+        run: 30_000,
       },
     });
   });
@@ -58,7 +93,8 @@ describe('loadConfig', () => {
   });
 
   it('treats empty string as missing', () => {
-    const { config } = expectOk(loadConfig(validEnv({ HAWK_COLLECTOR_URL: '' })));
+    const { config } = expectOk(loadConfig(validEnv({ HAWK_API_URL: 'https://api.hawk.so/graphql',
+      HAWK_COLLECTOR_URL: '' })));
 
     expect(config.hawk.collectorUrl).toBeUndefined();
   });
@@ -110,10 +146,88 @@ describe('loadConfig', () => {
     ]);
   });
 
+  it.each(['', 'abc', 'G'.repeat(24), 'ABCDEF0123456789ABCDEF01', '0123456789abcdef0123456'])('rejects bad project id: "%s"', (value) => {
+    const errors = expectErrors(loadConfig(validEnv({ HAWK_PROJECT_ID: value })));
+
+    expect(errors.map(error => error.variable)).toEqual(['HAWK_PROJECT_ID']);
+    expect(errors[0]?.message).toBe(value === '' ? 'is required' : 'must be a 24-character hex id');
+  });
+
+  it.each(['not-base64!', Buffer.from('not json').toString('base64'), Buffer.from('{"integrationId":"","secret":"x"}').toString('base64')])('rejects an integration token that does not decode: %s', (value) => {
+    const errors = expectErrors(loadConfig(validEnv({ HAWK_INTEGRATION_TOKEN: value })));
+
+    expect(errors).toEqual([{ variable: 'HAWK_INTEGRATION_TOKEN',
+      message: 'must be a Hawk integration token (base64 JSON with integrationId and secret)' }]);
+  });
+
+  it('accepts 12 digits in the instance id and rejects 13', () => {
+    expectOk(loadConfig(validEnv({ INSTANCE_ID: 'a1-2-3-4-5-6-7-8-9-0-1-2' })));
+
+    const errors = expectErrors(loadConfig(validEnv({ INSTANCE_ID: 'a1-2-3-4-5-6-7-8-9-0-1-2-3' })));
+
+    expect(errors).toEqual([{ variable: 'INSTANCE_ID',
+      message: 'must contain at most 12 digits' }]);
+  });
+
+  it.each(['alternate', 'http', 'ws'])('accepts TRANSPORT_MODE %s', (value) => {
+    expect(expectOk(loadConfig(validEnv({ TRANSPORT_MODE: value }))).config.transportMode).toBe(value);
+  });
+
+  it('rejects an unknown TRANSPORT_MODE', () => {
+    const errors = expectErrors(loadConfig(validEnv({ TRANSPORT_MODE: 'udp' })));
+
+    expect(errors.map(error => error.variable)).toEqual(['TRANSPORT_MODE']);
+  });
+
+  it.each(['-1', '1.5', 'abc'])('rejects bad REPEAT_EVERY_N_RUNS: %s', (value) => {
+    expect(expectErrors(loadConfig(validEnv({ REPEAT_EVERY_N_RUNS: value })))).toEqual([{ variable: 'REPEAT_EVERY_N_RUNS',
+      message: 'must be a whole number, 0 or more' }]);
+  });
+
+  it('HTTP_TIMEOUT_MS must be less than every stage budget', () => {
+    const errors = expectErrors(loadConfig(validEnv({ HTTP_TIMEOUT_MS: '10000',
+      CLEANUP_TIMEOUT_MS: '10000' })));
+
+    expect(errors).toEqual([
+      { variable: 'HTTP_TIMEOUT_MS',
+        message: 'must be less than COLLECTOR_ACCEPT_TIMEOUT_MS' },
+      { variable: 'HTTP_TIMEOUT_MS',
+        message: 'must be less than CLEANUP_TIMEOUT_MS' },
+    ]);
+  });
+
+  it('RUN_TIMEOUT_MS must cover stages 1-5, cleanup not counted', () => {
+    expectOk(loadConfig(validEnv({ RUN_TIMEOUT_MS: '280000',
+      CLEANUP_TIMEOUT_MS: '99999999' })));
+
+    expect(expectErrors(loadConfig(validEnv({ RUN_TIMEOUT_MS: '279999' })))).toEqual([{ variable: 'RUN_TIMEOUT_MS',
+      message: 'must be at least the sum of the timeouts of stages 1-5 (280000 ms)' }]);
+  });
+
+  it('mixed hosts are an error', () => {
+    const errors = expectErrors(loadConfig(validEnv({ HAWK_COLLECTOR_URL: undefined })));
+
+    expect(errors).toEqual([{ variable: 'HAWK_COLLECTOR_URL',
+      message: 'must be set when HAWK_API_URL is not a hawk.so host' }]);
+  });
+
+  it.each(['https://hawk.so/graphql', 'https://api.hawk.so/graphql'])('collector URL may be empty for %s', (url) => {
+    expect(expectOk(loadConfig(validEnv({ HAWK_API_URL: url,
+      HAWK_COLLECTOR_URL: undefined }))).config.hawk.collectorUrl).toBeUndefined();
+  });
+
+  it('look-alike domain is not production', () => {
+    const errors = expectErrors(loadConfig(validEnv({ HAWK_API_URL: 'https://api.nothawk.so/graphql',
+      HAWK_COLLECTOR_URL: undefined })));
+
+    expect(errors.map(error => error.variable)).toEqual(['HAWK_COLLECTOR_URL']);
+  });
+
   it('never echoes secret values', () => {
     const errors = expectErrors(loadConfig(validEnv({ HAWK_INTEGRATION_TOKEN: 'bad token s3cr3t-probe' })));
 
-    expect(errors.map(error => error.variable)).toEqual(['HAWK_INTEGRATION_TOKEN']);
+    // Both the whitespace rule and the decode rule report it.
+    expect(errors.map(error => error.variable)).toEqual(['HAWK_INTEGRATION_TOKEN', 'HAWK_INTEGRATION_TOKEN']);
     expect(JSON.stringify(errors)).not.toContain('s3cr3t-probe');
     expect(formatConfigErrors(errors)).not.toContain('s3cr3t-probe');
   });

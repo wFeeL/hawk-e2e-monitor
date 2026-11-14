@@ -79,14 +79,6 @@ export function describeEnv(shape: Readonly<Record<string, z.ZodType>>, env: Rea
  * @returns Printable values and warnings.
  */
 export function describeConfig(env: ParsedEnv): ConfigSummary {
-  const warnings: string[] = [];
-  const hostname = new URL(env.HAWK_API_URL).hostname;
-  const production = hostname === 'hawk.so' || hostname.endsWith('.hawk.so');
-
-  if (env.HAWK_COLLECTOR_URL === undefined && !production) {
-    warnings.push('HAWK_COLLECTOR_URL is not set: events will go to the production collector derived from the integration token (<integrationId>.k1.hawk.so)');
-  }
-
   return { values: describeEnv(ENV_SHAPE, env),
-    warnings };
+    warnings: [] };
 }

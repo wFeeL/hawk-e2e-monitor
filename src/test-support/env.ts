@@ -1,3 +1,14 @@
+import { Buffer } from 'node:buffer';
+
+const TEST_ID = '00000000-0000-4000-8000-000000000001';
+
+/** Valid integration token for config tests: base64 of a JSON with `integrationId` and `secret`. */
+export const TEST_INTEGRATION_TOKEN = Buffer.from(JSON.stringify({ integrationId: TEST_ID,
+  secret: TEST_ID })).toString('base64');
+
+/** Valid 24-character hex project id for config tests. */
+export const TEST_PROJECT_ID = '0123456789abcdef01234567';
+
 /**
  * Builds a minimal valid environment for config tests.
  * @param overrides Variables that replace or remove (when undefined) the defaults.
@@ -7,8 +18,9 @@ export function validEnv(overrides: Record<string, string | undefined> = {}): Re
   return {
     INSTANCE_ID: 'test',
     HAWK_API_URL: 'http://localhost:4000/graphql',
-    HAWK_INTEGRATION_TOKEN: 'test-token',
-    HAWK_PROJECT_ID: 'test-project',
+    HAWK_COLLECTOR_URL: 'http://localhost:3000/',
+    HAWK_INTEGRATION_TOKEN: TEST_INTEGRATION_TOKEN,
+    HAWK_PROJECT_ID: TEST_PROJECT_ID,
     HAWK_EMAIL: 'monitor@example.com',
     HAWK_PASSWORD: 'test-password',
     ...overrides,
