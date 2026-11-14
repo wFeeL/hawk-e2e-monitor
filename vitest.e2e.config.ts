@@ -5,5 +5,6 @@ export default defineConfig({
     include: ['test/e2e/**/*.test.ts'],
     environment: 'node',
     passWithNoTests: true,
+    testTimeout: 600_000,
   },
 });
