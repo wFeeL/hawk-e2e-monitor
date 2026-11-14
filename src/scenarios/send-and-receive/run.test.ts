@@ -556,6 +556,29 @@ describe('late duplicate', () => {
     expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
   });
 
+  it('the pause before the recheck is wide enough for a copy that arrives during it', async () => {
+    const waitMs = 50;
+    const { deps } = createTestDeps(hawk, { env: { LATE_DUPLICATE_WAIT_MS: String(waitMs) } });
+    const pausing: ScenarioDeps['clock'] = { ...deps.clock,
+      sleep: async (ms, signal) => {
+        const slept = deps.clock.sleep(ms, signal);
+
+        // The copy lands after the pause has started and before it ends.
+        if (ms === waitMs) {
+          ingestLateDuplicate();
+        }
+
+        return slept;
+      } };
+    const result = await runSendAndReceive({ ...deps,
+      clock: pausing }, { sequence: 1 });
+
+    expect(result).toMatchObject({ status: 'failed',
+      failedStage: 'event_visible',
+      errorClass: 'duplicate_event' });
+    expect(stageOf(result, 'cleanup').details).toMatchObject({ lateTotalCount: 2 });
+  });
+
   it('after a repeat: event_repeated', async () => {
     const { deps } = createTestDeps(hawk);
     const result = await runSendAndReceive({ ...deps,

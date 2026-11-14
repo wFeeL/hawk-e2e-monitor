@@ -17,6 +17,7 @@ describe('loadConfig', () => {
     expect(config.transportMode).toBe('alternate');
     expect(config.repeatEveryNRuns).toBe(6);
     expect(config.httpTimeoutMs).toBe(5000);
+    expect(config.lateDuplicateWaitMs).toBe(5000);
     expect(config.budgets).toEqual({
       collectorAvailability: 15_000,
       apiAvailability: 15_000,
@@ -45,6 +46,7 @@ describe('loadConfig', () => {
       EVENT_VISIBLE_TIMEOUT_MS: '5000',
       EVENT_REPEATED_TIMEOUT_MS: '6000',
       CLEANUP_TIMEOUT_MS: '7000',
+      LATE_DUPLICATE_WAIT_MS: '1234',
       RUN_TIMEOUT_MS: '30000',
     })));
 
@@ -66,6 +68,7 @@ describe('loadConfig', () => {
       transportMode: 'ws',
       repeatEveryNRuns: 0,
       httpTimeoutMs: 1000,
+      lateDuplicateWaitMs: 1234,
       budgets: {
         collectorAvailability: 2000,
         apiAvailability: 3000,
@@ -194,6 +197,21 @@ describe('loadConfig', () => {
       { variable: 'HTTP_TIMEOUT_MS',
         message: 'must be less than CLEANUP_TIMEOUT_MS' },
     ]);
+  });
+
+  it('LATE_DUPLICATE_WAIT_MS may be 0, which turns the pause off', () => {
+    expect(expectOk(loadConfig(validEnv({ LATE_DUPLICATE_WAIT_MS: '0' }))).config.lateDuplicateWaitMs).toBe(0);
+  });
+
+  it.each(['-1', '1.5', 'abc'])('rejects bad LATE_DUPLICATE_WAIT_MS: %s', (value) => {
+    expect(expectErrors(loadConfig(validEnv({ LATE_DUPLICATE_WAIT_MS: value }))).map(error => error.variable)).toEqual(['LATE_DUPLICATE_WAIT_MS']);
+  });
+
+  it('LATE_DUPLICATE_WAIT_MS must be less than CLEANUP_TIMEOUT_MS', () => {
+    expectOk(loadConfig(validEnv({ LATE_DUPLICATE_WAIT_MS: '14999' })));
+
+    expect(expectErrors(loadConfig(validEnv({ LATE_DUPLICATE_WAIT_MS: '15000' })))).toEqual([{ variable: 'LATE_DUPLICATE_WAIT_MS',
+      message: 'must be less than CLEANUP_TIMEOUT_MS' }]);
   });
 
   it('RUN_TIMEOUT_MS must cover stages 1-5, cleanup not counted', () => {

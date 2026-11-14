@@ -423,7 +423,7 @@ export function cleanupStage(budgetMs: number): StageSpec<ScenarioContext> {
   return {
     name: 'cleanup',
     budgetMs,
-    run: async ({ api, config, plan, state }, signal): Promise<StageOutcome> => {
+    run: async ({ api, clock, config, plan, state }, signal): Promise<StageOutcome> => {
       const { projectId } = config.hawk;
       const refuse = (event: FoundEvent): CheckError => new CheckError('cleanup_refused', { detail: `"${event.title}" (${event.originalEventId})` });
       const details: Record<string, unknown> = {};
@@ -460,21 +460,37 @@ export function cleanupStage(budgetMs: number): StageSpec<ScenarioContext> {
           throw refuse(target);
         }
 
-        // A worker may count one more copy after the check; the verdict reads the count from here.
-        try {
-          const card = await api.eventCard(projectId, target.originalEventId, signal);
+        // A worker may count one more copy after the check, so wait a little before the recheck.
+        // The verdict reads the count from `details`.
+        let cut = false;
 
-          if (card === null) {
-            details.recheck = 'missing';
-          } else if (card.totalCount > target.totalCount) {
-            details.lateTotalCount = card.totalCount;
+        if (config.lateDuplicateWaitMs > 0) {
+          try {
+            await clock.sleep(config.lateDuplicateWaitMs, signal);
+          } catch {
+            cut = true;
           }
-        } catch (error) {
-          if (!(error instanceof CheckError)) {
-            throw error;
-          }
+        }
 
-          details.recheck = 'failed';
+        if (cut) {
+          // The budget ran out during the pause; removal still gets its try.
+          details.recheck = 'skipped';
+        } else {
+          try {
+            const card = await api.eventCard(projectId, target.originalEventId, signal);
+
+            if (card === null) {
+              details.recheck = 'missing';
+            } else if (card.totalCount > target.totalCount) {
+              details.lateTotalCount = card.totalCount;
+            }
+          } catch (error) {
+            if (!(error instanceof CheckError)) {
+              throw error;
+            }
+
+            details.recheck = 'failed';
+          }
         }
       }
 
