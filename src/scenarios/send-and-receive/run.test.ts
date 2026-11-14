@@ -619,6 +619,38 @@ describe('late duplicate', () => {
     expect(hawk.api.removeCalls).toBe(1);
   });
 
+  it('a recheck that hangs is cut after one http timeout and the event is still removed', async () => {
+    const { deps } = createTestDeps(hawk);
+    const signals = new Set<AbortSignal>();
+    const hanging: HawkApi = { ...deps.api,
+      eventCard: async (projectId, eventId, signal) => {
+        signals.add(signal);
+
+        // The second signal is the cleanup recheck's: the API hangs until that signal aborts.
+        if (signals.size === 2) {
+          await new Promise<void>((resolve) => {
+            signal.addEventListener('abort', () => {
+              resolve();
+            }, { once: true });
+          });
+
+          throw new CheckError('api_unavailable', { code: 'TIMEOUT' });
+        }
+
+        return deps.api.eventCard(projectId, eventId, signal);
+      } };
+    const result = await runSendAndReceive({ ...deps,
+      api: hanging }, { sequence: 1 });
+
+    expect(result.status).toBe('ok');
+    expect(stageOf(result, 'cleanup')).toMatchObject({ status: 'ok',
+      details: { recheck: 'failed' } });
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain('could not be rechecked');
+    expect(hawk.api.removeCalls).toBe(1);
+    expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
+  });
+
   it('a recheck that finds no card does not fail the run', async () => {
     const { deps } = createTestDeps(hawk);
     const result = await runSendAndReceive({ ...deps,

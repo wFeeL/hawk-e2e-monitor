@@ -481,8 +481,23 @@ export function cleanupStage(budgetMs: number): StageSpec<ScenarioContext> {
           details.recheck = 'skipped';
           details.warning = 'The event count was not rechecked: the cleanup time limit cut the wait';
         } else {
+          // The read gets one HTTP timeout of its own, so retries inside the transport cannot eat the time the removal needs.
+          const recheck = new AbortController();
+          const timer = new AbortController();
+          const onStageAbort = (): void => {
+            recheck.abort();
+          };
+
+          if (signal.aborted) {
+            onStageAbort();
+          } else {
+            signal.addEventListener('abort', onStageAbort, { once: true });
+          }
+
+          clock.sleep(config.httpTimeoutMs, timer.signal).then(onStageAbort, () => undefined);
+
           try {
-            const card = await api.eventCard(projectId, target.originalEventId, signal);
+            const card = await api.eventCard(projectId, target.originalEventId, recheck.signal);
 
             if (card === null) {
               details.recheck = 'missing';
@@ -496,6 +511,9 @@ export function cleanupStage(budgetMs: number): StageSpec<ScenarioContext> {
 
             details.recheck = 'failed';
             details.warning = `The event count could not be rechecked before cleanup: ${error.message}`;
+          } finally {
+            timer.abort();
+            signal.removeEventListener('abort', onStageAbort);
           }
         }
       }

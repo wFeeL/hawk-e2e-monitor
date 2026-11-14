@@ -52,7 +52,7 @@ event a second time.
 | `collector_accept` | the collector confirms the event with code 200 |
 | `event_visible` | the event shows up in the project's event list, its card has the sent title, context, catcher type and a count of 1 |
 | `event_repeated` | in repeat runs, the second event is grouped with the first and the count becomes 2 |
-| `cleanup` | the event is removed after a check that it belongs to this run and instance |
+| `cleanup` | the event is removed after a check that it belongs to this run and instance. Before removal the monitor waits a few seconds and reads the card again: a count that grew means Hawk stored a late duplicate. An event that never showed up during the run is searched for once more, even when the collector confirmed it |
 
 Each stage has its own time limit, and the whole run has one more. Cleanup has
 a separate limit on top of the run limit, so a run that ran out of time still
@@ -105,6 +105,8 @@ Errors inside a single HTTP request are handled locally: the request gets a
 | Quota and the blocked flag are checked before sending | send and watch for 402 | no event is spent. The counter is refreshed by Hawk on a schedule, so the check is approximate |
 | Removal by `originalEventId` after checking that the event is ours | by the event id from the list; without the check | after a repeat the list returns the id of the repeat. Costs one card request, made by the visibility stage anyway |
 | A POST is retried only before it was sent | retry on network errors and 5xx | a retry after sending duplicates the event and gives a false `duplicate_event`. A one-off failure after sending gives `uncertain` instead of a successful resend |
+| Cleanup waits `LATE_DUPLICATE_WAIT_MS` (5 s) and rereads the event card before removing it | one look at the card when the event is first found | a second copy delivered a few seconds later would be removed unnoticed. Every run with a found event takes 5 s longer |
+| Cleanup searches for the event whenever it was sent, also after a confirmed accept | search only when the accept is uncertain | an event that arrives after the visibility deadline would stay in the project. Costs one API request in failed runs |
 | A failed cleanup makes the run fail, but the run keeps the class of the first failure | a warning only | left-over test events break isolation from other users of the project. Costs an alert caused by removal while the event itself passed |
 | The engine supports a group of parallel stages | sequential stages only | the notification check needs to wait for the event and the webhook together. The engine is more complex already in the first version |
 | The fake Hawk used in tests tells requests apart by `operationName` and validates query texts against a schema fixture | a full GraphQL server; no schema check | a typo in a field would otherwise surface only on a live Hawk. The schema fixture must follow API changes |
