@@ -13,6 +13,13 @@ const DEFAULT_VISIBLE_TIMEOUT_MS = 120_000;
 const DEFAULT_CLEANUP_TIMEOUT_MS = 30_000;
 const DEFAULT_LATE_DUPLICATE_WAIT_MS = 5000;
 const DEFAULT_RUN_TIMEOUT_MS = 480_000;
+const DEFAULT_RECEIVER_PORT = 8091;
+const DEFAULT_NOTIFICATION_TIMEOUT_MS = 120_000;
+const DEFAULT_NOTIFICATION_PAIR_WAIT_MS = 15_000;
+const DEFAULT_NOTIFICATION_SETUP_TIMEOUT_MS = 30_000;
+const DEFAULT_RULE_CACHE_WARMUP_MS = 65_000;
+const OWN_SCENARIO_NAME = 'send-and-receive-event';
+const RECEIVER_SECRET_PATTERN = /^[\w-]{32,}$/;
 const DEFAULT_REPEAT_EVERY_N_RUNS = 6;
 const MAX_INSTANCE_DIGITS = 12;
 const CLEANUP_REQUESTS = 4;
@@ -72,23 +79,48 @@ function httpUrl(): z.ZodURL {
     message: 'must be an http(s) URL' });
 }
 
+/**
+ * Builds the schema for a TCP port variable.
+ * @param defaultPort Value used when the variable is not set.
+ * @returns Port schema with a fixed error message.
+ */
+function portVar(defaultPort: number): z.ZodType<number> {
+  return z.string()
+    .regex(/^\d+$/, PORT_MESSAGE)
+    .transform(Number)
+    .pipe(z.number().int()
+      .min(1, PORT_MESSAGE)
+      .max(MAX_PORT, PORT_MESSAGE))
+    .default(defaultPort);
+}
+
+/**
+ * Tells whether a value is an https origin the notifier can reach.
+ * @param value Raw variable value.
+ * @returns True for https, no userinfo, path, query or hash, and port 443 or none.
+ */
+function isPublicBaseUrl(value: string): boolean {
+  if (!URL.canParse(value)) {
+    return false;
+  }
+
+  const url = new URL(value);
+
+  return url.protocol === 'https:' && url.pathname === '/' && url.port === ''
+    && url.username === '' && url.password === '' && url.search === '' && url.hash === '';
+}
+
 /** Schemas of all environment variables, in the order errors are reported. */
 export const ENV_SHAPE = {
   INSTANCE_ID: pub(z.string().regex(/^[a-z0-9-]{1,32}$/, 'must be 1-32 characters: a-z, 0-9, -')
     // The grouper masks values that look like card numbers (13-19 digits).
-    .refine(value => value.replaceAll(/\D/gu, '').length <= MAX_INSTANCE_DIGITS, 'must contain at most 12 digits')),
+    .refine(value => value.replaceAll(/\D/gu, '').length <= MAX_INSTANCE_DIGITS, 'must contain at most 12 digits')
+    // The title of this scenario's events must not match the other scenario's events.
+    .refine(value => !value.toLowerCase().includes(OWN_SCENARIO_NAME), `must not contain "${OWN_SCENARIO_NAME}"`)),
   LOG_LEVEL: pub(z.enum(LOG_LEVELS).default('info')),
   INTERNAL_HOST: pub(z.string().min(1)
     .default('127.0.0.1')),
-  INTERNAL_PORT: pub(
-    z.string()
-      .regex(/^\d+$/, PORT_MESSAGE)
-      .transform(Number)
-      .pipe(z.number().int()
-        .min(1, PORT_MESSAGE)
-        .max(MAX_PORT, PORT_MESSAGE))
-      .default(DEFAULT_INTERNAL_PORT)
-  ),
+  INTERNAL_PORT: pub(portVar(DEFAULT_INTERNAL_PORT)),
   SHUTDOWN_TIMEOUT_MS: pub(durationMs(DEFAULT_SHUTDOWN_TIMEOUT_MS)),
   HEALTH_CHECK_TIMEOUT_MS: pub(durationMs(DEFAULT_HEALTH_CHECK_TIMEOUT_MS)),
   HAWK_API_URL: pub(httpUrl()),
@@ -118,7 +150,52 @@ export const ENV_SHAPE = {
   CLEANUP_TIMEOUT_MS: pub(durationMs(DEFAULT_CLEANUP_TIMEOUT_MS)),
   LATE_DUPLICATE_WAIT_MS: pub(durationMs(DEFAULT_LATE_DUPLICATE_WAIT_MS, { allowZero: true })),
   RUN_TIMEOUT_MS: pub(durationMs(DEFAULT_RUN_TIMEOUT_MS)),
+  RECEIVER_HOST: pub(z.string().min(1)
+    .default('127.0.0.1')),
+  RECEIVER_PORT: pub(portVar(DEFAULT_RECEIVER_PORT)),
+  RECEIVER_SECRET: z.string().regex(RECEIVER_SECRET_PATTERN, 'must be at least 32 characters: A-Z, a-z, 0-9, _ and -')
+    .optional(),
+  PUBLIC_BASE_URL: z.string().refine(isPublicBaseUrl, 'must be an https address without a path, on port 443')
+    .optional(),
+  TUNNEL_METRICS_URL: httpUrl().optional(),
+  NOTIFY_LOOP: pub(z.enum(['true', 'false'], { message: 'must be true or false' })
+    .transform(value => value === 'true')
+    .default(true)),
+  NOTIFICATION_TIMEOUT_MS: pub(durationMs(DEFAULT_NOTIFICATION_TIMEOUT_MS)),
+  NOTIFICATION_PAIR_WAIT_MS: pub(durationMs(DEFAULT_NOTIFICATION_PAIR_WAIT_MS)),
+  NOTIFICATION_SETUP_TIMEOUT_MS: pub(durationMs(DEFAULT_NOTIFICATION_SETUP_TIMEOUT_MS)),
+  RULE_CACHE_WARMUP_MS: pub(durationMs(DEFAULT_RULE_CACHE_WARMUP_MS)),
 };
+
+/**
+ * Checks the timeouts of the check-notification scenario against each other.
+ * @param env Parsed variables with usable numbers.
+ * @param ctx Collects the issues.
+ */
+function checkNotificationBudget(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx): void {
+  if (env.NOTIFICATION_PAIR_WAIT_MS >= env.NOTIFICATION_TIMEOUT_MS) {
+    ctx.addIssue({ code: 'custom',
+      path: ['NOTIFICATION_PAIR_WAIT_MS'],
+      message: 'must be less than NOTIFICATION_TIMEOUT_MS' });
+  }
+
+  if (env.HTTP_TIMEOUT_MS >= env.NOTIFICATION_SETUP_TIMEOUT_MS) {
+    ctx.addIssue({ code: 'custom',
+      path: ['HTTP_TIMEOUT_MS'],
+      message: 'must be less than NOTIFICATION_SETUP_TIMEOUT_MS' });
+  }
+
+  const total = env.COLLECTOR_AVAILABILITY_TIMEOUT_MS + env.API_AVAILABILITY_TIMEOUT_MS + env.NOTIFICATION_SETUP_TIMEOUT_MS
+    + env.COLLECTOR_ACCEPT_TIMEOUT_MS
+    + Math.max(env.EVENT_VISIBLE_TIMEOUT_MS, env.NOTIFICATION_TIMEOUT_MS + env.HTTP_TIMEOUT_MS)
+    + env.EVENT_REPEATED_TIMEOUT_MS;
+
+  if (total > env.RUN_TIMEOUT_MS) {
+    ctx.addIssue({ code: 'custom',
+      path: ['RUN_TIMEOUT_MS'],
+      message: `must be at least the sum of the timeouts of the check-notification stages (${String(total)} ms)` });
+  }
+}
 
 /**
  * Checks that depend on several variables.
@@ -128,7 +205,8 @@ export const ENV_SHAPE = {
  */
 function checkCombinations(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx): void {
   // Zod runs this check even when a field failed a format rule, so skip values that are not usable.
-  const numbers = ['HTTP_TIMEOUT_MS', 'RUN_TIMEOUT_MS', 'LATE_DUPLICATE_WAIT_MS', ...STAGE_TIMEOUT_VARS.map(([name]) => name)] as const;
+  const numbers = ['HTTP_TIMEOUT_MS', 'RUN_TIMEOUT_MS', 'LATE_DUPLICATE_WAIT_MS', ...STAGE_TIMEOUT_VARS.map(([name]) => name),
+    'NOTIFICATION_TIMEOUT_MS', 'NOTIFICATION_PAIR_WAIT_MS', 'NOTIFICATION_SETUP_TIMEOUT_MS'] as const;
 
   if (!URL.canParse(env.HAWK_API_URL) || numbers.some(name => typeof env[name] !== 'number')) {
     return;
@@ -162,6 +240,8 @@ function checkCombinations(env: z.output<typeof baseSchema>, ctx: z.RefinementCt
       path: ['RUN_TIMEOUT_MS'],
       message: `must be at least the sum of the timeouts of stages 1-5 (${String(stagesTotal)} ms)` });
   }
+
+  checkNotificationBudget(env, ctx);
 
   const hostname = new URL(env.HAWK_API_URL).hostname;
   const production = hostname === 'hawk.so' || hostname.endsWith('.hawk.so');

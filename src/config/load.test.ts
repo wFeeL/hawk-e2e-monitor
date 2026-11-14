@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
-import { TEST_INTEGRATION_TOKEN, TEST_PROJECT_ID, validEnv } from '../test-support/env.js';
+import { TEST_INTEGRATION_TOKEN, TEST_PROJECT_ID, TEST_RECEIVER_SECRET, validEnv } from '../test-support/env.js';
 import { expectErrors, expectOk } from '../test-support/result.js';
 import { formatConfigErrors, loadConfig } from './load.js';
 
@@ -48,6 +48,9 @@ describe('loadConfig', () => {
       CLEANUP_TIMEOUT_MS: '7000',
       LATE_DUPLICATE_WAIT_MS: '1234',
       RUN_TIMEOUT_MS: '30000',
+      NOTIFICATION_TIMEOUT_MS: '3000',
+      NOTIFICATION_PAIR_WAIT_MS: '1000',
+      NOTIFICATION_SETUP_TIMEOUT_MS: '4000',
     })));
 
     expect(config).toEqual({
@@ -77,6 +80,16 @@ describe('loadConfig', () => {
         eventRepeated: 6000,
         cleanup: 7000,
         run: 30_000,
+      },
+      notifications: {
+        receiverHost: '127.0.0.1',
+        receiverPort: 8091,
+        receiverSecret: TEST_RECEIVER_SECRET,
+        loop: true,
+        timeoutMs: 3000,
+        pairWaitMs: 1000,
+        setupTimeoutMs: 4000,
+        ruleCacheWarmupMs: 65_000,
       },
     });
   });
@@ -219,11 +232,12 @@ describe('loadConfig', () => {
   });
 
   it('RUN_TIMEOUT_MS must cover stages 1-5, cleanup not counted', () => {
-    expectOk(loadConfig(validEnv({ RUN_TIMEOUT_MS: '280000',
+    // The F2 formula is the larger one, so 315000 satisfies both.
+    expectOk(loadConfig(validEnv({ RUN_TIMEOUT_MS: '315000',
       CLEANUP_TIMEOUT_MS: '99999999' })));
 
-    expect(expectErrors(loadConfig(validEnv({ RUN_TIMEOUT_MS: '279999' })))).toEqual([{ variable: 'RUN_TIMEOUT_MS',
-      message: 'must be at least the sum of the timeouts of stages 1-5 (280000 ms)' }]);
+    expect(expectErrors(loadConfig(validEnv({ RUN_TIMEOUT_MS: '279999' })))).toContainEqual({ variable: 'RUN_TIMEOUT_MS',
+      message: 'must be at least the sum of the timeouts of stages 1-5 (280000 ms)' });
   });
 
   it('mixed hosts are an error', () => {
