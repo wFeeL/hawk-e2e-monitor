@@ -1,13 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { FoundEvent } from '../../clients/hawk-api.js';
 import { runStage } from '../../engine/stages.js';
 import type { StageResult } from '../../engine/result.js';
 import type { StageSpec } from '../../engine/stages.js';
 import { systemClock } from '../../time/clock.js';
 import { encodeToken, startFakeHawk } from '../../test-support/fake-hawk/index.js';
 import type { FakeHawk } from '../../test-support/fake-hawk/index.js';
+import { testConfig } from '../../test-support/config.js';
 import { createTestScenario } from '../../test-support/scenario.js';
 import type { TestScenarioOptions } from '../../test-support/scenario.js';
-import { apiAvailabilityStage, collectorAcceptStage, collectorAvailabilityStage } from './stages.js';
+import { planRun } from './plan.js';
+import { apiAvailabilityStage, checkEventFields, collectorAcceptStage, collectorAvailabilityStage, isOurEvent } from './stages.js';
 import type { ScenarioContext } from './stages.js';
 
 const BUDGET_MS = 400;
@@ -205,5 +208,102 @@ describe('collectorAcceptStage', () => {
     expect(context.state.acceptedAtMs).toBeGreaterThanOrEqual(before);
     expect(context.state.acceptedAtMs).toBeLessThan(before + 50);
     expect(hawk.collector.posts).toBe(1);
+  });
+});
+
+describe('checkEventFields', () => {
+  const plan = planRun(testConfig(), { sequence: 1 });
+  const good: FoundEvent = { originalEventId: 'e1',
+    groupHash: 'g',
+    totalCount: 1,
+    catcherType: plan.catcherType,
+    title: plan.title,
+    context: { runId: plan.runId,
+      instanceId: plan.context.instanceId } };
+
+  it('accepts the event we sent', () => {
+    expect(checkEventFields(good, plan, 1)).toBeUndefined();
+  });
+
+  it.each([
+    ['title', { title: 'other' }],
+    ['context.runId', { context: { runId: 'x',
+      instanceId: plan.context.instanceId } }],
+    ['context.instanceId', { context: { runId: plan.runId,
+      instanceId: 'x' } }],
+    ['catcherType', { catcherType: 'errors/default' }],
+  ] as const)('event_mismatch on %s', (field, change) => {
+    const error = checkEventFields({ ...good,
+      ...change }, plan, 1);
+
+    expect(error?.errorClass).toBe('event_mismatch');
+    expect(error?.facts.field).toBe(field);
+  });
+
+  it('reports the first differing field in the documented order', () => {
+    const error = checkEventFields({ ...good,
+      title: 'other',
+      catcherType: 'errors/default' }, plan, 1);
+
+    expect(error?.facts.field).toBe('title');
+  });
+
+  it('event_mismatch when the context is missing', () => {
+    expect(checkEventFields({ ...good,
+      context: null }, plan, 1)?.facts.field).toBe('context.runId');
+  });
+
+  it('duplicate_event when totalCount is above the expected count', () => {
+    const error = checkEventFields({ ...good,
+      totalCount: 3 }, plan, 2);
+
+    expect(error?.errorClass).toBe('duplicate_event');
+    expect(error?.facts.count).toBe(3);
+  });
+
+  it('event_mismatch when totalCount is below the expected count', () => {
+    const error = checkEventFields({ ...good,
+      totalCount: 0 }, plan, 1);
+
+    expect(error?.errorClass).toBe('event_mismatch');
+    expect(error?.facts.field).toBe('totalCount');
+  });
+});
+
+describe('isOurEvent', () => {
+  const plan = planRun(testConfig(), { sequence: 1 });
+  const base: FoundEvent = { originalEventId: 'e1',
+    groupHash: 'g',
+    totalCount: 1,
+    catcherType: plan.catcherType,
+    title: 'unrelated',
+    context: {} };
+
+  it('recognizes the title prefix', () => {
+    expect(isOurEvent({ ...base,
+      title: plan.title }, plan, plan.context.instanceId)).toBe(true);
+  });
+
+  it('recognizes our context when the title is mangled', () => {
+    expect(isOurEvent({ ...base,
+      context: { runId: plan.runId,
+        instanceId: plan.context.instanceId } }, plan, plan.context.instanceId)).toBe(true);
+  });
+
+  it('refuses a title of another run or instance', () => {
+    expect(isOurEvent({ ...base,
+      title: `[e2e:${plan.context.instanceId}] rother send-and-receive-event` }, plan, plan.context.instanceId)).toBe(false);
+    expect(isOurEvent({ ...base,
+      title: `[e2e:other] ${plan.runId} send-and-receive-event` }, plan, plan.context.instanceId)).toBe(false);
+  });
+
+  it('refuses a context with only the run id', () => {
+    expect(isOurEvent({ ...base,
+      context: { runId: plan.runId } }, plan, plan.context.instanceId)).toBe(false);
+  });
+
+  it('refuses a foreign event with an empty context', () => {
+    expect(isOurEvent({ ...base,
+      title: `foreign ${plan.runId}` }, plan, plan.context.instanceId)).toBe(false);
   });
 });
