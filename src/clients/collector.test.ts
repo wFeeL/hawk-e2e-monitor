@@ -338,6 +338,16 @@ describe('health', () => {
     expect(error.facts.status).toBe(503);
   });
 
+  it('health on 429 Too Many Requests is ip_blacklisted', async () => {
+    collector.knobs.blacklisted = true;
+
+    const error = await checkError(clientFor().health(signal));
+
+    expect(error.errorClass).toBe('ip_blacklisted');
+    expect(error.culprit).toBe('monitor');
+    expect(error.facts.status).toBe(429);
+  });
+
   it('other statuses are unexpected', async () => {
     collector.knobs.health = { status: 404,
       text: 'Not found' };

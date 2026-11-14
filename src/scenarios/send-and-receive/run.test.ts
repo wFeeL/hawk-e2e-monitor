@@ -184,6 +184,19 @@ describe('failures', () => {
     expect(result.stages.slice(1, 5).every(stage => stage.status === 'skipped')).toBe(true);
   });
 
+  it('a blacklisted monitor IP: collector_availability, ip_blacklisted, culprit monitor, no POST', async () => {
+    hawk.collector.knobs.blacklisted = true;
+
+    const result = await run();
+
+    expect(result).toMatchObject({ status: 'failed',
+      failedStage: 'collector_availability',
+      errorClass: 'ip_blacklisted',
+      culprit: 'monitor' });
+    expect(hawk.collector.posts).toBe(0);
+    expect(result.stages.slice(1, 5).every(stage => stage.status === 'skipped')).toBe(true);
+  });
+
   it('402 quota: quota_exhausted with the monitor as culprit', async () => {
     replyAt(QUOTA_REFUSAL, SECOND_SUBMISSION);
 
