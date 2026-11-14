@@ -10,7 +10,7 @@ import { testConfig } from '../../test-support/config.js';
 import { createTestScenario } from '../../test-support/scenario.js';
 import type { TestScenarioOptions } from '../../test-support/scenario.js';
 import { planRun } from './plan.js';
-import { apiAvailabilityStage, checkEventFields, collectorAcceptStage, collectorAvailabilityStage, isOurEvent } from './stages.js';
+import { apiAvailabilityStage, checkEventFields, cleanupStage, collectorAcceptStage, collectorAvailabilityStage, eventVisibleStage, isOurEvent } from './stages.js';
 import type { ScenarioContext } from './stages.js';
 
 const BUDGET_MS = 400;
@@ -305,5 +305,24 @@ describe('isOurEvent', () => {
   it('refuses a foreign event with an empty context', () => {
     expect(isOurEvent({ ...base,
       title: `foreign ${plan.runId}` }, plan, plan.context.instanceId)).toBe(false);
+  });
+});
+
+describe('cleanupStage pause', () => {
+  it('skips the recheck when the pause is cut by the budget, and still tries to remove', async () => {
+    const { context } = scenario();
+
+    await run(collectorAcceptStage(BUDGET_MS), context);
+    await run(eventVisibleStage(BUDGET_MS), context);
+
+    const slow: ScenarioContext = { ...context,
+      config: { ...context.config,
+        lateDuplicateWaitMs: 5000 } };
+    const result = await runStage(cleanupStage(100), slow, { clock: systemClock,
+      runSignal: new AbortController().signal });
+
+    expect(result.details).toMatchObject({ recheck: 'skipped' });
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'cleanup_failed' });
   });
 });

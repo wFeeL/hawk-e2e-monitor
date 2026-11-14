@@ -12,6 +12,7 @@ import { runSendAndReceive } from './run.js';
 import type { ScenarioDeps } from './run.js';
 import type { PlanOptions } from './plan.js';
 
+const LATE_EVENT_WARNING = 'The event appeared only after the event_visible deadline and was removed by cleanup';
 const SECOND_SUBMISSION = 2;
 const THIRD_SUBMISSION = 3;
 const QUOTA_REFUSAL: CollectorReplyOverride = { status: 402,
@@ -127,6 +128,7 @@ describe('healthy fake', () => {
     expect(result.stages.filter(stage => stage.status === 'ok').every(stage => stage.durationMs > 0)).toBe(true);
     expect(result.event).toMatchObject({ totalCount: 1 });
     expect(result.cleanup).toEqual({ status: 'ok' });
+    expect(stageOf(result, 'cleanup').details).toBeUndefined();
     expect(result.sendMayHaveReached).toBe(false);
     expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
     expect(hawk.api.removeCalls).toBe(1);
@@ -231,6 +233,9 @@ describe('failures', () => {
     expect(stageOf(result, 'collector_accept').status).toBe('ok');
     expect(result.sendMayHaveReached).toBe(false);
     expect(result.cleanup.status).toBe('ok');
+    expect(stageOf(result, 'cleanup').details).toMatchObject({ foundBySearch: true,
+      originalEventId: expect.any(String) as string });
+    expect(result.warnings).toEqual([LATE_EVENT_WARNING]);
     expect(hawk.api.removeCalls).toBe(1);
     expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
   });
@@ -343,6 +348,9 @@ describe('failures', () => {
       errorClass: 'collector_unavailable' });
     expect(stageOf(result, 'event_visible').errorClass).toBe('event_not_found');
     expect(result.cleanup.status).toBe('ok');
+    expect(stageOf(result, 'cleanup').details).toMatchObject({ foundBySearch: true,
+      originalEventId: expect.any(String) as string });
+    expect(result.warnings).toEqual([LATE_EVENT_WARNING]);
     expect(hawk.api.removeCalls).toBe(1);
     expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
   });
@@ -556,6 +564,29 @@ describe('late duplicate', () => {
     expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
   });
 
+  it('the pause before the recheck is wide enough for a copy that arrives during it', async () => {
+    const waitMs = 50;
+    const { deps } = createTestDeps(hawk, { env: { LATE_DUPLICATE_WAIT_MS: String(waitMs) } });
+    const pausing: ScenarioDeps['clock'] = { ...deps.clock,
+      sleep: async (ms, signal) => {
+        const slept = deps.clock.sleep(ms, signal);
+
+        // The copy lands after the pause has started and before it ends.
+        if (ms === waitMs) {
+          ingestLateDuplicate();
+        }
+
+        return slept;
+      } };
+    const result = await runSendAndReceive({ ...deps,
+      clock: pausing }, { sequence: 1 });
+
+    expect(result).toMatchObject({ status: 'failed',
+      failedStage: 'event_visible',
+      errorClass: 'duplicate_event' });
+    expect(stageOf(result, 'cleanup').details).toMatchObject({ lateTotalCount: 2 });
+  });
+
   it('after a repeat: event_repeated', async () => {
     const { deps } = createTestDeps(hawk);
     const result = await runSendAndReceive({ ...deps,
@@ -575,14 +606,16 @@ describe('late duplicate', () => {
 
   it('a recheck that fails does not fail the run', async () => {
     const { deps } = createTestDeps(hawk);
+    const failure = new CheckError('api_unavailable', { code: 'TIMEOUT' });
     const result = await runSendAndReceive({ ...deps,
       api: hookCleanupCard(deps.api, 2, () => {
-        throw new CheckError('api_unavailable', { code: 'TIMEOUT' });
+        throw failure;
       }) }, { sequence: 1 });
 
     expect(result.status).toBe('ok');
     expect(stageOf(result, 'cleanup')).toMatchObject({ status: 'ok',
       details: { recheck: 'failed' } });
+    expect(result.warnings).toEqual([`The event count could not be rechecked before cleanup: ${failure.message}`]);
     expect(hawk.api.removeCalls).toBe(1);
   });
 
@@ -593,7 +626,20 @@ describe('late duplicate', () => {
 
     expect(result.status).toBe('ok');
     expect(stageOf(result, 'cleanup').details).toMatchObject({ recheck: 'missing' });
+    expect(result.warnings).toEqual([]);
     expect(hawk.api.removeCalls).toBe(1);
+  });
+
+  it('a wait cut by the cleanup limit skips the recheck and warns', async () => {
+    const { deps } = createTestDeps(hawk);
+    const result = await runSendAndReceive({ ...deps,
+      config: { ...deps.config,
+        lateDuplicateWaitMs: 5000,
+        budgets: { ...deps.config.budgets,
+          cleanup: 100 } } }, { sequence: 1 });
+
+    expect(stageOf(result, 'cleanup').details).toMatchObject({ recheck: 'skipped' });
+    expect(result.warnings).toEqual(['The event count was not rechecked: the cleanup time limit cut the wait']);
   });
 
   it('a healthy recheck leaves no trace in the details', async () => {

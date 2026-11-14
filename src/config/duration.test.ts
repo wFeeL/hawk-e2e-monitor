@@ -25,4 +25,12 @@ describe('durationMs', () => {
   it.each(['1.5', '10s', '-1'])('rejects fractions and units: %s', (value) => {
     expect(durationMs(5000).safeParse(value).error?.issues[0]?.message).toBe('must be a whole number of milliseconds');
   });
+
+  it('accepts zero when allowed', () => {
+    expect(durationMs(5000, { allowZero: true }).safeParse('0').data).toBe(0);
+  });
+
+  it('still rejects fractions when zero is allowed', () => {
+    expect(durationMs(5000, { allowZero: true }).safeParse('1.5').error?.issues[0]?.message).toBe('must be a whole number of milliseconds');
+  });
 });

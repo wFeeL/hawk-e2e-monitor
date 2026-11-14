@@ -423,7 +423,7 @@ export function cleanupStage(budgetMs: number): StageSpec<ScenarioContext> {
   return {
     name: 'cleanup',
     budgetMs,
-    run: async ({ api, config, plan, state }, signal): Promise<StageOutcome> => {
+    run: async ({ api, clock, config, plan, state }, signal): Promise<StageOutcome> => {
       const { projectId } = config.hawk;
       const refuse = (event: FoundEvent): CheckError => new CheckError('cleanup_refused', { detail: `"${event.title}" (${event.originalEventId})` });
       const details: Record<string, unknown> = {};
@@ -455,26 +455,48 @@ export function cleanupStage(budgetMs: number): StageSpec<ScenarioContext> {
         if (target === undefined) {
           throw refuse(first);
         }
+
+        // The event outran stage 4's deadline; leave a trace so the late arrival is visible in the result.
+        details.foundBySearch = true;
+        details.originalEventId = target.originalEventId;
       } else {
         if (!isOurEvent(target, plan, config.instanceId)) {
           throw refuse(target);
         }
 
-        // A worker may count one more copy after the check; the verdict reads the count from here.
-        try {
-          const card = await api.eventCard(projectId, target.originalEventId, signal);
+        // A worker may count one more copy after the check, so wait a little before the recheck.
+        // The verdict reads the count from `details`.
+        let cut = false;
 
-          if (card === null) {
-            details.recheck = 'missing';
-          } else if (card.totalCount > target.totalCount) {
-            details.lateTotalCount = card.totalCount;
+        if (config.lateDuplicateWaitMs > 0) {
+          try {
+            await clock.sleep(config.lateDuplicateWaitMs, signal);
+          } catch {
+            cut = true;
           }
-        } catch (error) {
-          if (!(error instanceof CheckError)) {
-            throw error;
-          }
+        }
 
-          details.recheck = 'failed';
+        if (cut) {
+          // The budget ran out during the pause; removal still gets its try.
+          details.recheck = 'skipped';
+          details.warning = 'The event count was not rechecked: the cleanup time limit cut the wait';
+        } else {
+          try {
+            const card = await api.eventCard(projectId, target.originalEventId, signal);
+
+            if (card === null) {
+              details.recheck = 'missing';
+            } else if (card.totalCount > target.totalCount) {
+              details.lateTotalCount = card.totalCount;
+            }
+          } catch (error) {
+            if (!(error instanceof CheckError)) {
+              throw error;
+            }
+
+            details.recheck = 'failed';
+            details.warning = `The event count could not be rechecked before cleanup: ${error.message}`;
+          }
         }
       }
 
@@ -500,6 +522,10 @@ export function cleanupStage(budgetMs: number): StageSpec<ScenarioContext> {
       if (!removed) {
         return withDetails({ status: 'failed',
           error: new CheckError('cleanup_failed', { detail: 'Hawk answered that nothing was removed' }) });
+      }
+
+      if (details.foundBySearch === true) {
+        details.warning = 'The event appeared only after the event_visible deadline and was removed by cleanup';
       }
 
       return withDetails({ status: 'ok' });

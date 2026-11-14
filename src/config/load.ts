@@ -64,6 +64,8 @@ export interface Config {
   repeatEveryNRuns: number;
   /** Time limit of one HTTP request or WebSocket exchange. */
   httpTimeoutMs: number;
+  /** Pause before cleanup rechecks the event count; 0 turns it off. */
+  lateDuplicateWaitMs: number;
   /** Time limits of the stages and the run. */
   budgets: StageBudgets;
 }
@@ -160,6 +162,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): L
       transportMode: values.TRANSPORT_MODE,
       repeatEveryNRuns: values.REPEAT_EVERY_N_RUNS,
       httpTimeoutMs: values.HTTP_TIMEOUT_MS,
+      lateDuplicateWaitMs: values.LATE_DUPLICATE_WAIT_MS,
       budgets: {
         collectorAvailability: values.COLLECTOR_AVAILABILITY_TIMEOUT_MS,
         apiAvailability: values.API_AVAILABILITY_TIMEOUT_MS,

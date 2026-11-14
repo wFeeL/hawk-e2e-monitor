@@ -10,10 +10,12 @@ const DEFAULT_HTTP_TIMEOUT_MS = 5000;
 const DEFAULT_AVAILABILITY_TIMEOUT_MS = 15_000;
 const DEFAULT_ACCEPT_TIMEOUT_MS = 10_000;
 const DEFAULT_VISIBLE_TIMEOUT_MS = 120_000;
-const DEFAULT_CLEANUP_TIMEOUT_MS = 15_000;
+const DEFAULT_CLEANUP_TIMEOUT_MS = 30_000;
+const DEFAULT_LATE_DUPLICATE_WAIT_MS = 5000;
 const DEFAULT_RUN_TIMEOUT_MS = 480_000;
 const DEFAULT_REPEAT_EVERY_N_RUNS = 6;
 const MAX_INSTANCE_DIGITS = 12;
+const CLEANUP_REQUESTS = 4;
 const PROJECT_ID_PATTERN = /^[0-9a-f]{24}$/;
 const PORT_MESSAGE = 'must be a port number from 1 to 65535';
 const REPEAT_MESSAGE = 'must be a whole number, 0 or more';
@@ -114,6 +116,7 @@ export const ENV_SHAPE = {
   EVENT_VISIBLE_TIMEOUT_MS: pub(durationMs(DEFAULT_VISIBLE_TIMEOUT_MS)),
   EVENT_REPEATED_TIMEOUT_MS: pub(durationMs(DEFAULT_VISIBLE_TIMEOUT_MS)),
   CLEANUP_TIMEOUT_MS: pub(durationMs(DEFAULT_CLEANUP_TIMEOUT_MS)),
+  LATE_DUPLICATE_WAIT_MS: pub(durationMs(DEFAULT_LATE_DUPLICATE_WAIT_MS, { allowZero: true })),
   RUN_TIMEOUT_MS: pub(durationMs(DEFAULT_RUN_TIMEOUT_MS)),
 };
 
@@ -125,10 +128,19 @@ export const ENV_SHAPE = {
  */
 function checkCombinations(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx): void {
   // Zod runs this check even when a field failed a format rule, so skip values that are not usable.
-  const numbers = ['HTTP_TIMEOUT_MS', 'RUN_TIMEOUT_MS', ...STAGE_TIMEOUT_VARS.map(([name]) => name)] as const;
+  const numbers = ['HTTP_TIMEOUT_MS', 'RUN_TIMEOUT_MS', 'LATE_DUPLICATE_WAIT_MS', ...STAGE_TIMEOUT_VARS.map(([name]) => name)] as const;
 
   if (!URL.canParse(env.HAWK_API_URL) || numbers.some(name => typeof env[name] !== 'number')) {
     return;
+  }
+
+  // After the wait cleanup reads the card once and removes the event in up to three attempts.
+  const cleanupNeeds = env.LATE_DUPLICATE_WAIT_MS + CLEANUP_REQUESTS * env.HTTP_TIMEOUT_MS;
+
+  if (cleanupNeeds > env.CLEANUP_TIMEOUT_MS) {
+    ctx.addIssue({ code: 'custom',
+      path: ['LATE_DUPLICATE_WAIT_MS'],
+      message: `must leave room for the recheck and removal: LATE_DUPLICATE_WAIT_MS + 4 * HTTP_TIMEOUT_MS must not exceed CLEANUP_TIMEOUT_MS (${String(cleanupNeeds)} ms)` });
   }
 
   let stagesTotal = 0;
