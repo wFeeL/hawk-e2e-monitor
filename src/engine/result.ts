@@ -2,7 +2,7 @@ import type { Transport } from '../clients/collector.js';
 import type { Culprit, ErrorClass } from '../errors/taxonomy.js';
 
 /** Stages of a run, in execution order. */
-export type StageName = 'collector_availability' | 'api_availability' | 'collector_accept' | 'event_visible' | 'event_repeated' | 'cleanup';
+export type StageName = 'collector_availability' | 'api_availability' | 'notification_setup' | 'collector_accept' | 'event_visible' | 'notification_formed' | 'event_repeated' | 'cleanup';
 
 /** How a stage ended. */
 export type StageStatus = 'ok' | 'failed' | 'uncertain' | 'skipped';

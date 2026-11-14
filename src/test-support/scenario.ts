@@ -3,9 +3,15 @@ import type { CollectorClient, Transport } from '../clients/collector.js';
 import { createGraphqlTransport } from '../clients/graphql.js';
 import { createHawkApi } from '../clients/hawk-api.js';
 import type { HawkApi } from '../clients/hawk-api.js';
-import { loadConfig } from '../config/load.js';
+import { loadConfig, notificationSettings } from '../config/load.js';
 import type { Config } from '../config/load.js';
 import { collectorEndpoints, decodeIntegrationToken } from '../hawk/token.js';
+import { createProvisioner } from '../notifications/provisioning.js';
+import type { Provisioner } from '../notifications/provisioning.js';
+import type { PublicAddress } from '../notifications/address.js';
+import { startReceiver } from '../receiver/server.js';
+import type { Receiver } from '../receiver/server.js';
+import type { NotificationContext } from '../scenarios/check-notification/stages.js';
 import { planRun } from '../scenarios/send-and-receive/plan.js';
 import type { RunPlan } from '../scenarios/send-and-receive/plan.js';
 import { createScenarioRedactor } from '../scenarios/send-and-receive/run.js';
@@ -15,6 +21,8 @@ import { systemClock } from '../time/clock.js';
 import type { Clock } from '../time/clock.js';
 import { memoryLogger } from './logger.js';
 import type { MemoryLogger } from './logger.js';
+import { httpAddress } from './address.js';
+import { TEST_RECEIVER_SECRET } from './env.js';
 import { fakeHawkEnv } from './fake-hawk/index.js';
 import type { FakeHawk } from './fake-hawk/index.js';
 import { expectOk } from './result.js';
@@ -22,6 +30,7 @@ import { expectOk } from './result.js';
 const RETRY_DELAYS_MS = [5, 10];
 const FAKE_LETTER = 'a';
 const POLL_SCHEDULE_MS = [20, 40];
+const PRE_PROVISION_TIMEOUT_MS = 5000;
 
 /** Limits for healthy-path tests: far above what a loaded CI machine needs, so a slow start never fails a run. `HTTP_TIMEOUT_MS` stays below every budget. */
 const SHORT_LIMITS: Record<string, string> = {
@@ -166,5 +175,132 @@ export function createTestScenario(hawk: FakeHawk, options: TestScenarioOptions 
     plan,
     collector,
     api,
+  };
+}
+
+/** What a test may change about a notification setup. */
+export interface NotificationTestOptions extends TestScenarioOptions {
+  /** Provisioner of the run; a fresh one on the real clock by default. */
+  provisioner?: Provisioner;
+  /** Whether the rule is provisioned before the run, so the run sees no change and no warmup; true by default. */
+  preProvision?: boolean;
+  /** Replaces the address lookup. */
+  resolveAddress?: (signal: AbortSignal) => Promise<PublicAddress>;
+}
+
+/** The parts a notification scenario needs besides the F1 dependencies. */
+export interface NotificationTestDeps {
+  /** F1 dependencies. */
+  deps: ScenarioDeps;
+  /** Logger kept inside `deps`. */
+  logger: MemoryLogger;
+  /** Receiver on a random loopback port. */
+  receiver: Receiver;
+  /** Address of the receiver over plain HTTP. */
+  address: PublicAddress;
+  /** Provisioner of the run. */
+  provisioner: Provisioner;
+  /** Finds the address. */
+  resolveAddress: (signal: AbortSignal) => Promise<PublicAddress>;
+  /** Pauses between attempts of the address calls. */
+  retryDelaysMs: readonly number[];
+  /** Values the run asked to mask. */
+  secrets: string[];
+  /** Adds a value to `secrets`. */
+  addSecret: (value: string) => void;
+  /** Stops the receiver; call it before the fake Hawk closes. */
+  close(): Promise<void>;
+}
+
+/**
+ * Builds the dependencies of a notification run on a fake Hawk: a receiver, an address that points at it and a rule already provisioned.
+ * Notification waits are 800 ms with a pair wait of 200 ms unless the environment says otherwise.
+ * @param hawk Running fake Hawk.
+ * @param options Environment overrides, clock, provisioner and address lookup.
+ * @returns F1 dependencies and the notification parts.
+ */
+export async function createNotificationTestDeps(hawk: FakeHawk, options: NotificationTestOptions = {}): Promise<NotificationTestDeps> {
+  const { deps, logger } = createTestDeps(hawk, { ...options,
+    env: { RECEIVER_SECRET: TEST_RECEIVER_SECRET,
+      TUNNEL_METRICS_URL: 'http://127.0.0.1:9',
+      NOTIFICATION_TIMEOUT_MS: '800',
+      NOTIFICATION_PAIR_WAIT_MS: '200',
+      ...options.env } });
+  const settings = notificationSettings(deps.config);
+  const receiver = await startReceiver({ host: '127.0.0.1',
+    port: 0,
+    secret: settings.receiverSecret,
+    clock: deps.clock,
+    logger });
+  const address = httpAddress(receiver.port);
+  const provisionerDeps = { api: deps.api,
+    projectId: deps.config.hawk.projectId,
+    instanceId: deps.config.instanceId,
+    secret: settings.receiverSecret,
+    loop: settings.loop,
+    warmupMs: settings.ruleCacheWarmupMs };
+
+  if (options.preProvision !== false) {
+    await createProvisioner({ ...provisionerDeps,
+      clock: systemClock }).provision(address, AbortSignal.timeout(PRE_PROVISION_TIMEOUT_MS));
+  }
+
+  const secrets: string[] = [];
+
+  return {
+    deps,
+    logger,
+    receiver,
+    address,
+    provisioner: options.provisioner ?? createProvisioner({ ...provisionerDeps,
+      clock: systemClock }),
+    resolveAddress: options.resolveAddress ?? (() => Promise.resolve(address)),
+    retryDelaysMs: RETRY_DELAYS_MS,
+    secrets,
+    addSecret: (value) => {
+      secrets.push(value);
+    },
+    close: async () => receiver.close(),
+  };
+}
+
+/** A notification context on a fake Hawk, with its parts exposed. */
+export interface NotificationTestScenario extends NotificationTestDeps {
+  /** Context to pass to stages. */
+  context: NotificationContext;
+  /** Plan of the run. */
+  plan: RunPlan;
+}
+
+/**
+ * Builds a context for notification stages run one by one against a fake Hawk.
+ * @param hawk Running fake Hawk.
+ * @param options Run number, overrides and clock.
+ * @returns Context and its parts.
+ */
+export async function createNotificationTestScenario(hawk: FakeHawk, options: NotificationTestOptions = {}): Promise<NotificationTestScenario> {
+  const parts = await createNotificationTestDeps(hawk, options);
+  const { config, collector, api, clock } = parts.deps;
+  const plan = planRun(config, { sequence: options.sequence ?? 1,
+    transport: options.transport,
+    repeat: options.repeat }, 'check-notification', parts.deps.randomLetters);
+
+  return {
+    ...parts,
+    plan,
+    context: { config,
+      plan,
+      collector,
+      api,
+      clock,
+      pollScheduleMs: parts.deps.pollScheduleMs,
+      state: { sendMayHaveReached: false },
+      receiver: parts.receiver,
+      provisioner: parts.provisioner,
+      settings: notificationSettings(config),
+      resolveAddress: parts.resolveAddress,
+      retryDelaysMs: parts.retryDelaysMs,
+      addSecret: parts.addSecret,
+      notification: { warmup: false } },
   };
 }

@@ -131,14 +131,18 @@ export function apiAvailabilityStage(budgetMs: number): StageSpec<ScenarioContex
 /**
  * Stage 3: sends the event over the planned transport.
  * @param budgetMs Time limit of the stage.
+ * @param beforeSend Called right before the first send, for what must be in place before the event leaves.
  * @returns Stage spec.
  */
-export function collectorAcceptStage(budgetMs: number): StageSpec<ScenarioContext> {
+export function collectorAcceptStage(budgetMs: number, beforeSend?: () => void): StageSpec<ScenarioContext> {
   return {
     name: 'collector_accept',
     budgetMs,
     run: async (context, signal): Promise<StageOutcome> => {
       const { collector, clock, plan, state } = context;
+
+      beforeSend?.();
+
       const startedMs = clock.monotonicMs();
       const outcome = await collector.send(eventMessage(context), plan.transport, signal);
 

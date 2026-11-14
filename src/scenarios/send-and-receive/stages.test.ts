@@ -185,6 +185,18 @@ describe('collectorAcceptStage', () => {
         function: 'check' }] });
   });
 
+  it('calls beforeSend before the event reaches the collector', async () => {
+    const { context } = scenario();
+    let postsAtHook = -1;
+    const result = await run(collectorAcceptStage(BUDGET_MS, () => {
+      postsAtHook = hawk.collector.posts;
+    }), context);
+
+    expect(result.status).toBe('ok');
+    expect(postsAtHook).toBe(0);
+    expect(hawk.collector.posts).toBe(1);
+  });
+
   it('payload carries one backtrace frame', async () => {
     const { context } = scenario();
 
