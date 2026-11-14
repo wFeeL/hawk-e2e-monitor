@@ -12,6 +12,7 @@ import { runSendAndReceive } from './run.js';
 import type { ScenarioDeps } from './run.js';
 import type { PlanOptions } from './plan.js';
 
+const LATE_EVENT_WARNING = 'The event appeared only after the event_visible deadline and was removed by cleanup';
 const SECOND_SUBMISSION = 2;
 const THIRD_SUBMISSION = 3;
 const QUOTA_REFUSAL: CollectorReplyOverride = { status: 402,
@@ -127,6 +128,7 @@ describe('healthy fake', () => {
     expect(result.stages.filter(stage => stage.status === 'ok').every(stage => stage.durationMs > 0)).toBe(true);
     expect(result.event).toMatchObject({ totalCount: 1 });
     expect(result.cleanup).toEqual({ status: 'ok' });
+    expect(stageOf(result, 'cleanup').details).toBeUndefined();
     expect(result.sendMayHaveReached).toBe(false);
     expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
     expect(hawk.api.removeCalls).toBe(1);
@@ -231,6 +233,9 @@ describe('failures', () => {
     expect(stageOf(result, 'collector_accept').status).toBe('ok');
     expect(result.sendMayHaveReached).toBe(false);
     expect(result.cleanup.status).toBe('ok');
+    expect(stageOf(result, 'cleanup').details).toMatchObject({ foundBySearch: true,
+      originalEventId: expect.any(String) as string });
+    expect(result.warnings).toEqual([LATE_EVENT_WARNING]);
     expect(hawk.api.removeCalls).toBe(1);
     expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
   });
@@ -343,6 +348,9 @@ describe('failures', () => {
       errorClass: 'collector_unavailable' });
     expect(stageOf(result, 'event_visible').errorClass).toBe('event_not_found');
     expect(result.cleanup.status).toBe('ok');
+    expect(stageOf(result, 'cleanup').details).toMatchObject({ foundBySearch: true,
+      originalEventId: expect.any(String) as string });
+    expect(result.warnings).toEqual([LATE_EVENT_WARNING]);
     expect(hawk.api.removeCalls).toBe(1);
     expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
   });

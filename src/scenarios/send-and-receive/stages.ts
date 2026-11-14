@@ -455,6 +455,10 @@ export function cleanupStage(budgetMs: number): StageSpec<ScenarioContext> {
         if (target === undefined) {
           throw refuse(first);
         }
+
+        // The event outran stage 4's deadline; leave a trace so the late arrival is visible in the result.
+        details.foundBySearch = true;
+        details.originalEventId = target.originalEventId;
       } else {
         if (!isOurEvent(target, plan, config.instanceId)) {
           throw refuse(target);
@@ -516,6 +520,10 @@ export function cleanupStage(budgetMs: number): StageSpec<ScenarioContext> {
       if (!removed) {
         return withDetails({ status: 'failed',
           error: new CheckError('cleanup_failed', { detail: 'Hawk answered that nothing was removed' }) });
+      }
+
+      if (details.foundBySearch === true) {
+        details.warning = 'The event appeared only after the event_visible deadline and was removed by cleanup';
       }
 
       return withDetails({ status: 'ok' });
