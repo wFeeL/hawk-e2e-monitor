@@ -134,7 +134,7 @@ function checkCombinations(env: z.output<typeof baseSchema>, ctx: z.RefinementCt
     return;
   }
 
-  // After the wait cleanup reads the card once and removes the event in up to three attempts.
+  // After the wait cleanup reads the card once, capped at one HTTP timeout, then removes the event in up to three attempts.
   const cleanupNeeds = env.LATE_DUPLICATE_WAIT_MS + CLEANUP_REQUESTS * env.HTTP_TIMEOUT_MS;
 
   if (cleanupNeeds > env.CLEANUP_TIMEOUT_MS) {
