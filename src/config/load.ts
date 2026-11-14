@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 import { ENV_SHAPE, envSchema } from './schema.js';
-import type { LogLevel, ParsedEnv } from './schema.js';
+import type { LogLevel, ParsedEnv, TransportMode } from './schema.js';
 
 /** Address of the internal HTTP server (health, readiness). */
 export interface InternalConfig {
@@ -26,6 +26,24 @@ export interface HawkConfig {
   password: string;
 }
 
+/** Time limits of the stages and of the whole run. */
+export interface StageBudgets {
+  /** Stage `collector_availability`. */
+  collectorAvailability: number;
+  /** Stage `api_availability`. */
+  apiAvailability: number;
+  /** Stage `collector_accept`. */
+  collectorAccept: number;
+  /** Stage `event_visible`. */
+  eventVisible: number;
+  /** Stage `event_repeated`. */
+  eventRepeated: number;
+  /** Stage `cleanup`; counted outside `run`. */
+  cleanup: number;
+  /** Stages 1-5 together. */
+  run: number;
+}
+
 /** Service configuration in the shape the rest of the code uses. */
 export interface Config {
   /** Id of this monitor instance. */
@@ -40,6 +58,14 @@ export interface Config {
   healthCheckTimeoutMs: number;
   /** Access to Hawk. */
   hawk: HawkConfig;
+  /** How a run picks its transport. */
+  transportMode: TransportMode;
+  /** Every N-th run of a transport repeats the event; 0 turns repeats off. */
+  repeatEveryNRuns: number;
+  /** Time limit of one HTTP request or WebSocket exchange. */
+  httpTimeoutMs: number;
+  /** Time limits of the stages and the run. */
+  budgets: StageBudgets;
 }
 
 /** Validated configuration together with the parsed environment. */
@@ -130,6 +156,18 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): L
         projectId: values.HAWK_PROJECT_ID,
         email: values.HAWK_EMAIL,
         password: values.HAWK_PASSWORD,
+      },
+      transportMode: values.TRANSPORT_MODE,
+      repeatEveryNRuns: values.REPEAT_EVERY_N_RUNS,
+      httpTimeoutMs: values.HTTP_TIMEOUT_MS,
+      budgets: {
+        collectorAvailability: values.COLLECTOR_AVAILABILITY_TIMEOUT_MS,
+        apiAvailability: values.API_AVAILABILITY_TIMEOUT_MS,
+        collectorAccept: values.COLLECTOR_ACCEPT_TIMEOUT_MS,
+        eventVisible: values.EVENT_VISIBLE_TIMEOUT_MS,
+        eventRepeated: values.EVENT_REPEATED_TIMEOUT_MS,
+        cleanup: values.CLEANUP_TIMEOUT_MS,
+        run: values.RUN_TIMEOUT_MS,
       },
     },
   };

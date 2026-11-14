@@ -2,6 +2,7 @@ import process from 'node:process';
 import { startApp, StartupError } from './app.js';
 import type { AppHandle } from './app.js';
 import { parseCommand } from './cli.js';
+import { runCheckCommand } from './commands/check.js';
 import type { Config } from './config/load.js';
 import { formatConfigErrors, loadConfig } from './config/load.js';
 import { describeConfig } from './config/describe.js';
@@ -101,10 +102,19 @@ if (command.kind === 'usage') {
 } else {
   const result = loadConfig(process.env);
 
-  if (result.ok) {
-    await serve(result.config, result.env);
-  } else {
+  if (!result.ok) {
     process.stderr.write(formatConfigErrors(result.errors));
     process.exitCode = 1;
+  } else if (command.kind === 'check') {
+    process.exitCode = await runCheckCommand(command, result.config, {
+      stdout: (text) => {
+        process.stdout.write(text);
+      },
+      stderr: (text) => {
+        process.stderr.write(text);
+      },
+    });
+  } else {
+    await serve(result.config, result.env);
   }
 }

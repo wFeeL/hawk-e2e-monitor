@@ -9,14 +9,24 @@ import { expectOk } from './result.js';
  * @returns Complete configuration.
  */
 export function testConfig(overrides: Partial<Config> = {}): Config {
+  const { config } = expectOk(loadConfig(validEnv({
+    HTTP_TIMEOUT_MS: '100',
+    COLLECTOR_AVAILABILITY_TIMEOUT_MS: '300',
+    API_AVAILABILITY_TIMEOUT_MS: '300',
+    COLLECTOR_ACCEPT_TIMEOUT_MS: '300',
+    EVENT_VISIBLE_TIMEOUT_MS: '300',
+    EVENT_REPEATED_TIMEOUT_MS: '300',
+    CLEANUP_TIMEOUT_MS: '300',
+    RUN_TIMEOUT_MS: '3000',
+  })));
+
   return {
-    instanceId: 'test',
+    ...config,
     logLevel: 'error',
     internal: { host: '127.0.0.1',
       port: 0 },
     shutdownTimeoutMs: 1000,
     healthCheckTimeoutMs: 100,
-    hawk: expectOk(loadConfig(validEnv())).config.hawk,
     ...overrides,
   };
 }
