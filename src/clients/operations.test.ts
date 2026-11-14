@@ -9,10 +9,10 @@ import type { FakeApiError, FakeHawk } from '../test-support/fake-hawk/index.js'
 import { systemClock } from '../time/clock.js';
 import { GraphqlFailure, createGraphqlTransport } from './graphql.js';
 import type { GraphqlOperation, GraphqlTransport } from './graphql.js';
-import { ALL_OPERATIONS, EVENT_CARD, FIND_EVENTS, LOGIN, PROJECT_TOKEN, REFRESH_TOKENS, REMOVE_EVENT, WORKSPACE_QUOTA } from './operations.js';
+import { ALL_OPERATIONS, CREATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE, EVENT_CARD, FIND_EVENTS, LOGIN, NOTIFICATION_RULES, PROJECT_TOKEN, REFRESH_TOKENS, REMOVE_EVENT, UPDATE_NOTIFICATION_RULE, WORKSPACE_QUOTA } from './operations.js';
 
 const FIXTURE = new URL('../../test/fixtures/hawk-api.graphql', import.meta.url);
-const OPERATION_COUNT = 7;
+const OPERATION_COUNT = 11;
 
 /** What the Login mutation returns inside `data`. */
 interface LoginData {
@@ -121,9 +121,9 @@ afterEach(async () => {
 describe('operations', () => {
   const schema = buildSchema(readFileSync(FIXTURE, 'utf8'));
 
-  it('lists all seven operations', () => {
+  it('lists all eleven operations', () => {
     expect(ALL_OPERATIONS).toHaveLength(OPERATION_COUNT);
-    expect(ALL_OPERATIONS).toEqual([LOGIN, REFRESH_TOKENS, PROJECT_TOKEN, WORKSPACE_QUOTA, FIND_EVENTS, EVENT_CARD, REMOVE_EVENT]);
+    expect(ALL_OPERATIONS).toEqual([LOGIN, REFRESH_TOKENS, PROJECT_TOKEN, WORKSPACE_QUOTA, FIND_EVENTS, EVENT_CARD, REMOVE_EVENT, NOTIFICATION_RULES, CREATE_NOTIFICATION_RULE, UPDATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE]);
   });
 
   it.each(ALL_OPERATIONS.map(operation => [operation.name, operation] as const))(
@@ -146,9 +146,22 @@ describe('operations', () => {
     expect(errors[0]?.message).toContain('toke');
   });
 
-  it('only RemoveEvent and RefreshTokens are not idempotent', () => {
+  it('only RefreshTokens, CreateNotificationRule and RemoveEvent are not idempotent', () => {
     expect(ALL_OPERATIONS.filter(operation => !operation.idempotent).map(operation => operation.name))
-      .toEqual(['RefreshTokens', 'RemoveEvent']);
+      .toEqual(['RefreshTokens', 'RemoveEvent', 'CreateNotificationRule']);
+  });
+
+  it('CreateNotificationRule is not idempotent', () => {
+    expect(CREATE_NOTIFICATION_RULE.idempotent).toBe(false);
+    expect([NOTIFICATION_RULES, UPDATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE].every(operation => operation.idempotent)).toBe(true);
+  });
+
+  it('a typo in NotificationRules is caught', () => {
+    const typo = NOTIFICATION_RULES.document.replace('whatToReceive', 'whatToReceiv');
+    const errors = validate(schema, parse(typo));
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.message).toContain('whatToReceiv');
   });
 });
 
