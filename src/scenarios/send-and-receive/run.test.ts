@@ -606,14 +606,16 @@ describe('late duplicate', () => {
 
   it('a recheck that fails does not fail the run', async () => {
     const { deps } = createTestDeps(hawk);
+    const failure = new CheckError('api_unavailable', { code: 'TIMEOUT' });
     const result = await runSendAndReceive({ ...deps,
       api: hookCleanupCard(deps.api, 2, () => {
-        throw new CheckError('api_unavailable', { code: 'TIMEOUT' });
+        throw failure;
       }) }, { sequence: 1 });
 
     expect(result.status).toBe('ok');
     expect(stageOf(result, 'cleanup')).toMatchObject({ status: 'ok',
       details: { recheck: 'failed' } });
+    expect(result.warnings).toEqual([`The event count could not be rechecked before cleanup: ${failure.message}`]);
     expect(hawk.api.removeCalls).toBe(1);
   });
 
@@ -624,7 +626,20 @@ describe('late duplicate', () => {
 
     expect(result.status).toBe('ok');
     expect(stageOf(result, 'cleanup').details).toMatchObject({ recheck: 'missing' });
+    expect(result.warnings).toEqual([]);
     expect(hawk.api.removeCalls).toBe(1);
+  });
+
+  it('a wait cut by the cleanup limit skips the recheck and warns', async () => {
+    const { deps } = createTestDeps(hawk);
+    const result = await runSendAndReceive({ ...deps,
+      config: { ...deps.config,
+        lateDuplicateWaitMs: 5000,
+        budgets: { ...deps.config.budgets,
+          cleanup: 100 } } }, { sequence: 1 });
+
+    expect(stageOf(result, 'cleanup').details).toMatchObject({ recheck: 'skipped' });
+    expect(result.warnings).toEqual(['The event count was not rechecked: the cleanup time limit cut the wait']);
   });
 
   it('a healthy recheck leaves no trace in the details', async () => {

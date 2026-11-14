@@ -479,6 +479,7 @@ export function cleanupStage(budgetMs: number): StageSpec<ScenarioContext> {
         if (cut) {
           // The budget ran out during the pause; removal still gets its try.
           details.recheck = 'skipped';
+          details.warning = 'The event count was not rechecked: the cleanup time limit cut the wait';
         } else {
           try {
             const card = await api.eventCard(projectId, target.originalEventId, signal);
@@ -494,6 +495,7 @@ export function cleanupStage(budgetMs: number): StageSpec<ScenarioContext> {
             }
 
             details.recheck = 'failed';
+            details.warning = `The event count could not be rechecked before cleanup: ${error.message}`;
           }
         }
       }
