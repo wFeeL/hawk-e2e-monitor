@@ -91,3 +91,84 @@ describe('fake store', () => {
     expect(objectIdLike()).toMatch(/^[0-9a-f]{24}$/u);
   });
 });
+
+describe('fake store subscribe', () => {
+  it('tells isNew on the first event and false on a repetition', () => {
+    const store = createFakeStore();
+    const seen: Array<[string, string, boolean, number]> = [];
+
+    store.subscribe((projectId, event, isNew) => {
+      seen.push([projectId, event.id, isNew, event.totalCount]);
+    });
+
+    const first = store.ingest(PROJECT, 'errors/nodejs', { title: 'boom' });
+
+    store.ingest(PROJECT, 'errors/nodejs', { title: 'boom' });
+
+    expect(seen).toEqual([[PROJECT, first.id, true, 1], [PROJECT, first.id, false, 2]]);
+  });
+
+  it('a removed event is new again when it comes back', () => {
+    const store = createFakeStore();
+    const flags: boolean[] = [];
+
+    store.subscribe((_projectId, _event, isNew) => {
+      flags.push(isNew);
+    });
+
+    const first = store.ingest(PROJECT, 'errors/nodejs', { title: 'boom' });
+
+    store.remove(PROJECT, first.id);
+    store.ingest(PROJECT, 'errors/nodejs', { title: 'boom' });
+
+    expect(flags).toEqual([true, true]);
+  });
+
+  it('the unsubscribe function stops the calls and others keep going', () => {
+    const store = createFakeStore();
+    const calls = { a: 0,
+      b: 0 };
+    const stopA = store.subscribe(() => {
+      calls.a += 1;
+    });
+
+    store.subscribe(() => {
+      calls.b += 1;
+    });
+    store.ingest(PROJECT, 'errors/nodejs', { title: 'one' });
+    stopA();
+    store.ingest(PROJECT, 'errors/nodejs', { title: 'two' });
+
+    expect(calls).toEqual({ a: 1,
+      b: 2 });
+  });
+
+  it('a throwing listener does not break ingest or the other listeners', () => {
+    const store = createFakeStore();
+    let reached = false;
+
+    store.subscribe(() => {
+      throw new Error('listener failed');
+    });
+    store.subscribe(() => {
+      reached = true;
+    });
+
+    const event = store.ingest(PROJECT, 'errors/nodejs', { title: 'boom' });
+
+    expect(store.get(PROJECT, event.id)).toBe(event);
+    expect(reached).toBe(true);
+  });
+
+  it('the listener already sees the event in the store', () => {
+    const store = createFakeStore();
+    let found = false;
+
+    store.subscribe((projectId, event) => {
+      found = store.get(projectId, event.id) === event;
+    });
+    store.ingest(PROJECT, 'errors/nodejs', { title: 'boom' });
+
+    expect(found).toBe(true);
+  });
+});

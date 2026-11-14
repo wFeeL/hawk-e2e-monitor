@@ -393,6 +393,111 @@ describe('fake collector knobs', () => {
   });
 });
 
+describe('fake collector holdReply', () => {
+  it('delays the answer until the hold resolves and hands over the stored event', async () => {
+    const { collector, store } = await start();
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const held: Array<string | undefined> = [];
+    let entered = (): void => undefined;
+    const reached = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+
+    collector.knobs.holdReply = async (event) => {
+      held.push(event?.id);
+      entered();
+      await gate;
+    };
+
+    let answered = false;
+    const reply = post(collector, JSON.stringify(validMessage())).then((value) => {
+      answered = true;
+
+      return value;
+    });
+
+    await reached;
+
+    // The event is stored before the hold starts; the answer waits for the gate.
+    expect(held).toEqual([store.all(PROJECT)[0]?.id]);
+    expect(answered).toBe(false);
+
+    release();
+
+    expect((await reply).status).toBe(200);
+  });
+
+  it('with processingDelayMs the hold gets the event after the delayed ingest', async () => {
+    const { collector, store } = await start();
+    const seen: Array<string | undefined> = [];
+
+    collector.knobs.processingDelayMs = 20;
+    collector.knobs.holdReply = (event) => {
+      seen.push(event?.id);
+
+      return Promise.resolve();
+    };
+
+    await post(collector, JSON.stringify(validMessage()));
+
+    expect(seen).toEqual([store.all(PROJECT)[0]?.id]);
+  });
+
+  it('is not called for dropped events or rejected messages', async () => {
+    const { collector } = await start();
+    let calls = 0;
+
+    collector.knobs.holdReply = () => {
+      calls += 1;
+
+      return Promise.resolve();
+    };
+    collector.knobs.dropEvents = true;
+    await post(collector, JSON.stringify(validMessage()));
+    collector.knobs.dropEvents = false;
+    await post(collector, 'not json');
+
+    expect(calls).toBe(0);
+  });
+
+  it('holds the WebSocket answer too', async () => {
+    const { collector } = await start();
+    const socket = await connect(collector);
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered = (): void => undefined;
+    const reached = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+
+    collector.knobs.holdReply = async () => {
+      entered();
+      await gate;
+    };
+
+    let answered = false;
+    const answer = nextMessage(socket).then((value) => {
+      answered = true;
+
+      return value;
+    });
+
+    socket.send(JSON.stringify(validMessage()));
+    await reached;
+
+    expect(answered).toBe(false);
+
+    release();
+
+    expect((await answer).text).toBe(jsonReply(200, 'OK'));
+  });
+});
+
 describe('fake collector WebSocket', () => {
   it('ws replies to every message and keeps the socket open', async () => {
     const { collector, store } = await start();

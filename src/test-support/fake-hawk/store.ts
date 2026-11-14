@@ -20,6 +20,9 @@ export interface StoredEvent {
   lastRepetitionId: string | undefined;
 }
 
+/** Called after an event was stored or repeated. */
+export type StoreListener = (projectId: string, event: StoredEvent, isNew: boolean) => void;
+
 /** In-memory events with the grouping behavior of the Hawk grouper worker. */
 export interface FakeStore {
   /**
@@ -57,6 +60,13 @@ export interface FakeStore {
    * @returns Events in insertion order.
    */
   all(projectId: string): StoredEvent[];
+  /**
+   * Listens to every `ingest`, the way the grouper hands events to the notifier.
+   * A listener that throws is ignored, so it cannot break `ingest` or other listeners.
+   * @param listener Gets the project, the live event and whether it started a new group.
+   * @returns Function that removes the listener.
+   */
+  subscribe(listener: StoreListener): () => void;
 }
 
 /**
@@ -84,6 +94,17 @@ function titleOf(payload: Record<string, unknown>): string {
 export function createFakeStore(newId: () => string = objectIdLike): FakeStore {
   // Map by project, then by original event id; Map keeps insertion order.
   const projects = new Map<string, Map<string, StoredEvent>>();
+  const listeners = new Set<StoreListener>();
+
+  const announce = (projectId: string, event: StoredEvent, isNew: boolean): void => {
+    for (const listener of listeners) {
+      try {
+        listener(projectId, event, isNew);
+      } catch {
+        // A broken listener is the test's problem, not the store's.
+      }
+    }
+  };
 
   const eventsOf = (projectId: string): Map<string, StoredEvent> => {
     let events = projects.get(projectId);
@@ -109,6 +130,7 @@ export function createFakeStore(newId: () => string = objectIdLike): FakeStore {
         existing.totalCount += 1;
         existing.repetitionIds.push(repetitionId);
         existing.lastRepetitionId = repetitionId;
+        announce(projectId, existing, false);
 
         return existing;
       }
@@ -124,6 +146,7 @@ export function createFakeStore(newId: () => string = objectIdLike): FakeStore {
       };
 
       events.set(created.id, created);
+      announce(projectId, created, true);
 
       return created;
     },
@@ -144,5 +167,12 @@ export function createFakeStore(newId: () => string = objectIdLike): FakeStore {
     get: (projectId, eventId) => eventsOf(projectId).get(eventId),
     remove: (projectId, eventId) => eventsOf(projectId).delete(eventId),
     all: projectId => [...eventsOf(projectId).values()],
+    subscribe(listener) {
+      listeners.add(listener);
+
+      return () => {
+        listeners.delete(listener);
+      };
+    },
   };
 }
