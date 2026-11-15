@@ -10,6 +10,10 @@ import type { MutableRedactor } from '../errors/redact.js';
 import { collectorEndpoints, decodeIntegrationToken } from '../hawk/token.js';
 import { createLogger } from '../log/logger.js';
 import { startReceiver } from '../receiver/server.js';
+import { runNewProject } from '../scenarios/new-project/run.js';
+import { createdProjects } from '../storage/created-projects.js';
+import { openDatabase } from '../storage/database.js';
+import { createHistory } from '../storage/history.js';
 import { runEndpointsProbe } from '../scenarios/endpoints-probe/run.js';
 import { runCheckNotification } from '../scenarios/check-notification/run.js';
 import type { NotificationDeps } from '../scenarios/check-notification/run.js';
@@ -164,6 +168,32 @@ const runSendAndReceiveCommand: CheckScenario = async (command, config, io, deps
 };
 
 /**
+ * Runs `new-project` with the record of created projects in the history file, so a project left behind is found by the sweep.
+ * @param command Parsed `check` command.
+ * @param config Validated configuration.
+ * @param io Output streams.
+ * @param deps Replacements for the default dependencies, for tests.
+ * @param masking Redactor shared with the logger.
+ * @returns Exit code.
+ */
+const runNewProjectCommand: CheckScenario = async (command, config, io, deps, masking) => {
+  const history = createHistory(openDatabase(config.monitoring.databasePath));
+
+  try {
+    const result = await runNewProject({ ...defaultDeps(config, io, masking),
+      ...deps.pollScheduleMs === undefined ? {} : { pollScheduleMs: deps.pollScheduleMs },
+      addSecret: masking.add,
+      projects: createdProjects(history) }, { sequence: command.sequence });
+
+    io.stdout(`${JSON.stringify(result)}\n`);
+
+    return summarize(result, io, masking);
+  } finally {
+    history.close();
+  }
+};
+
+/**
  * Stands in for a scenario whose command is not written yet.
  * @param command Parsed `check` command.
  * @param _config Validated configuration.
@@ -198,7 +228,7 @@ const runProbeCommand: CheckScenario = async (command, config, io, deps, masking
 const CHECKS: Readonly<Record<ScenarioName, CheckScenario>> = {
   [SEND_AND_RECEIVE_EVENT]: runSendAndReceiveCommand,
   [CHECK_NOTIFICATION]: runNotificationCommand,
-  [NEW_PROJECT]: runMissingCommand,
+  [NEW_PROJECT]: runNewProjectCommand,
   [SOURCEMAPS]: runMissingCommand,
   [SENTRY_ENVELOPE]: runMissingCommand,
   [ENDPOINTS_PROBE]: runProbeCommand,

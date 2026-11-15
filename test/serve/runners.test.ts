@@ -92,4 +92,44 @@ describe('buildRunners', () => {
     expect(error).toBeInstanceOf(StartupError);
     expect((error as StartupError).message).toContain('PUBLIC_BASE_URL');
   });
+
+  it('builds the runner of new-project over the history, with no receiver and no wait', async () => {
+    const context = await contextFor('new-project');
+    const built = await buildRunners(context);
+
+    expect(Object.keys(built.runners)).toEqual(['new-project']);
+    expect(built.beforeFirstRun).toEqual({});
+    expect(built.readiness).toEqual([]);
+    expect(built.receiverPort).toBeUndefined();
+
+    const result = await built.runners['new-project']?.({ runId: 'raaaaaaaaaaaaaaaa',
+      sequence: 1,
+      signal: new AbortController().signal });
+
+    expect(result).toMatchObject({ status: 'ok',
+      scenario: 'new-project',
+      runId: 'raaaaaaaaaaaaaaaa' });
+    expect(context.history.getKv('new-project:created')).toBeUndefined();
+  });
+
+  it('records the project in the history while the run is on', async () => {
+    const context = await contextFor('new-project');
+    const built = await buildRunners(context);
+    const seen: Array<string | undefined> = [];
+
+    if (hawk !== undefined) {
+      hawk.collector.knobs.holdReply = async () => {
+        seen.push(context.history.getKv('new-project:created'));
+
+        return Promise.resolve();
+      };
+    }
+
+    await built.runners['new-project']?.({ runId: 'raaaaaaaaaaaaaaab',
+      sequence: 1,
+      signal: new AbortController().signal });
+
+    expect(seen).toHaveLength(1);
+    expect(JSON.parse(seen[0] ?? 'null')).toHaveLength(1);
+  });
 });

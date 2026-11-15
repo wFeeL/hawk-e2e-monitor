@@ -439,3 +439,39 @@ describe('runCheckCommand: endpoints-probe', () => {
     expect(stderr).toContain('failed collector_availability collector_dependency_error:');
   });
 });
+
+describe('check new-project', () => {
+  it('creates and removes a project and prints the result', async () => {
+    const database = await tempDatabase();
+
+    try {
+      const { deps } = createTestDeps(hawk);
+      const config: Config = { ...deps.config,
+        monitoring: { ...deps.config.monitoring,
+          databasePath: database.path } };
+      const captured: Captured = { code: -1,
+        stdout: '',
+        stderr: '' };
+
+      captured.code = await runCheckCommand({ kind: 'check',
+        scenario: 'new-project',
+        sequence: 1,
+        repeat: false }, config, { stdout: (text) => {
+        captured.stdout += text;
+      },
+      stderr: (text) => {
+        captured.stderr += text;
+      } }, { pollScheduleMs: deps.pollScheduleMs });
+
+      const result = JSON.parse(captured.stdout) as RunResult;
+
+      expect(captured.code).toBe(0);
+      expect(result).toMatchObject({ scenario: 'new-project',
+        status: 'ok' });
+      expect(hawk.projects.inWorkspace('fake-workspace')).toHaveLength(1);
+      expect(captured.stderr).toContain('ok');
+    } finally {
+      await database.remove();
+    }
+  });
+});
