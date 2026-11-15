@@ -4,6 +4,7 @@ import type { Config } from '../config/load.js';
 import type { RouteHandler } from '../http/internal-server.js';
 import { sendJson, sendText } from '../http/respond.js';
 import type { MonitorMetrics } from '../metrics/metrics.js';
+import { manualRunHandler } from './manual-runs.js';
 import { SCENARIO_NAMES } from '../scenarios/names.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import { DEFAULT_LIST_LIMIT } from '../storage/history.js';
@@ -141,7 +142,7 @@ function metricsRoute(metrics: MonitorMetrics): RouteHandler {
 }
 
 /**
- * Builds the routes of the internal server: `/runs`, `/runs/<runId>`, `/stats` and, with metrics, `/metrics`, all `GET`.
+ * Builds the routes of the internal server: `GET /runs`, `/runs/<runId>`, `/stats` and, with metrics, `/metrics`, and `POST /runs/<scenario>` when a token is configured.
  * @param deps What the routes read.
  * @returns Routes for `createInternalServer`.
  */
@@ -151,6 +152,10 @@ export function createRoutes(deps: RouteDeps): Map<string, RouteHandler> {
     ['GET /runs/*', oneRun(deps)],
     ['GET /stats', stats(deps)],
   ]);
+
+  if (deps.config.monitoring.manual.token !== undefined) {
+    routes.set('POST /runs/*', manualRunHandler(deps));
+  }
 
   if (deps.metrics !== undefined) {
     routes.set('GET /metrics', metricsRoute(deps.metrics));

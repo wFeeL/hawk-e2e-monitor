@@ -132,6 +132,8 @@ interface LaunchOptions {
   wrapApi?: (api: HawkApi) => HawkApi;
   /** Address and interval of the heartbeat, set on the configuration directly so that the interval can be short. */
   heartbeat?: HeartbeatConfig;
+  /** Token of manual runs; the route exists only with one. */
+  runToken?: string;
 }
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -222,7 +224,9 @@ async function launch(options: LaunchOptions = {}, hawk?: FakeHawk): Promise<Har
       databasePath: database.path,
       alertNotifyUrl: bot.url,
       alertRetryMs: 1000,
-      ...options.heartbeat === undefined ? {} : { heartbeat: options.heartbeat } } };
+      ...options.heartbeat === undefined ? {} : { heartbeat: options.heartbeat },
+      manual: { ...options.runToken === undefined ? {} : { token: options.runToken },
+        minIntervalMs: 0 } } };
 
   if (options.seed !== undefined) {
     const history = createHistory(openDatabase(database.path));
@@ -663,6 +667,88 @@ describe('serve: heartbeat', () => {
       setTimeout(resolve, 3 * PING_MS);
     });
     expect(fake.pings).toBe(0);
+  });
+});
+
+describe('serve: manual runs', () => {
+  const RUN_TOKEN = 'serve-run-token-0123456789-0123456789';
+  const bearer = Object.fromEntries([['authorization', `Bearer ${RUN_TOKEN}`]]);
+
+  /**
+   * Posts to the manual run route.
+   * @param harness Running serve.
+   * @param path Path with the query.
+   * @param headers Request headers.
+   * @returns Response.
+   */
+  async function post(harness: Harness, path: string, headers: Record<string, string> = bearer): Promise<Response> {
+    return fetch(`http://127.0.0.1:${String(harness.handle.port)}${path}`, { method: 'POST',
+      headers });
+  }
+
+  it('has no route without a token', async () => {
+    const harness = await launch({ intervalMs: 600_000 });
+
+    expect((await post(harness, `/runs/${SEND}`)).status).toBe(404);
+    expect((await post(harness, `/runs/${SEND}`, {})).status).toBe(404);
+  });
+
+  it('refuses a request without the token and starts nothing', async () => {
+    const harness = await launch({ intervalMs: 600_000,
+      runToken: RUN_TOKEN });
+
+    await vi.waitFor(() => {
+      expect(finishedRows(harness)).toHaveLength(1);
+    }, WAIT);
+
+    const response = await post(harness, `/runs/${SEND}`, Object.fromEntries([['authorization', 'Bearer nope']]));
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get('www-authenticate')).toBe('Bearer');
+    expect(finishedRows(harness)).toHaveLength(1);
+  });
+
+  it('answers 409 while the scheduled run is going, then 202 and stores the run with the trigger manual and counts it', async () => {
+    const harness = await launch({ intervalMs: 600_000,
+      runToken: RUN_TOKEN });
+
+    expect((await post(harness, `/runs/${SEND}`)).status).toBe(409);
+    await vi.waitFor(() => {
+      expect(finishedRows(harness)).toHaveLength(1);
+    }, WAIT);
+
+    const accepted = await post(harness, `/runs/${SEND}`);
+    const { runId } = await accepted.json() as RunRow;
+
+    expect(accepted.status).toBe(202);
+    await vi.waitFor(() => {
+      expect(inspect(harness, history => history.get(runId))?.status).toBe('ok');
+    }, WAIT);
+    expect(inspect(harness, history => history.get(runId))?.trigger).toBe('manual');
+
+    const { samples } = parseMetrics(await (await get(harness, '/metrics')).text());
+
+    expect(samples.find(sample => sample.name === 'hawk_e2e_runs_total' && sample.labels.includes('status="ok",trigger="manual"'))?.value).toBe(1);
+    expect(samples.find(sample => sample.name === 'hawk_e2e_runs_total' && sample.labels.includes('status="ok",trigger="schedule"'))?.value).toBe(1);
+  });
+
+  it('with ?wait=true answers 200 with the finished run and its result', async () => {
+    const harness = await launch({ intervalMs: 600_000,
+      runToken: RUN_TOKEN });
+
+    await vi.waitFor(() => {
+      expect(finishedRows(harness)).toHaveLength(1);
+    }, WAIT);
+
+    const response = await post(harness, `/runs/${SEND}?wait=true`);
+    const body = await response.json() as RunWithResult;
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({ scenario: SEND,
+      trigger: 'manual',
+      status: 'ok' });
+    expect(body.result?.runId).toBe(body.runId);
+    expect(body.stages.length).toBeGreaterThan(0);
   });
 });
 
@@ -1129,5 +1215,36 @@ describe('serve: notifications', () => {
       }, WAIT);
       expect(proxy.hits()).toBeGreaterThanOrEqual(3);
     });
+  });
+  it('a manual run during the warmup of the rule cache answers 200 with the status skipped', async () => {
+    const hawk = await hawkFor();
+    const port = await freePort();
+    const { deps } = createTestDeps(hawk, { env: { RECEIVER_SECRET: TEST_RECEIVER_SECRET,
+      TUNNEL_METRICS_URL: 'http://127.0.0.1:9100' } });
+
+    await preProvision(hawk, deps.config, port);
+
+    const harness = await launch({ scenarios: [NOTIFY],
+      receiverPort: port,
+      intervalMs: 600_000,
+      runToken: 'serve-run-token-0123456789-0123456789',
+      env: { RULE_CACHE_WARMUP_MS: '65000' },
+      resolveAddress: async receiverPort => Promise.resolve(httpAddress(receiverPort)),
+      seed: (history) => {
+        history.setKv(MATCH_CHANGED_KEY, new Date(Date.now() - 10_000).toISOString());
+      } }, hawk);
+
+    await vi.waitFor(() => {
+      expect(finishedRows(harness, NOTIFY)).toHaveLength(1);
+    }, WAIT);
+
+    const response = await fetch(`http://127.0.0.1:${String(harness.handle.port)}/runs/${NOTIFY}?wait=true`, { method: 'POST',
+      headers: Object.fromEntries([['authorization', 'Bearer serve-run-token-0123456789-0123456789']]) });
+    const body = await response.json() as RunRow;
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({ status: 'skipped',
+      skipReason: 'rule_cache_warmup',
+      trigger: 'manual' });
   });
 });
