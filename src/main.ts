@@ -18,21 +18,23 @@ const STOP_SIGNALS = ['SIGTERM', 'SIGINT'] as const;
 
 /**
  * Starts the service and wires process-level error and signal handling.
- * Fatal error policy: see docs/architecture.md.
+ * An unhandled rejection or uncaught exception ends the process with code 1, so the container restarts it
+ * instead of running on in an unknown state.
  * @param config Validated configuration.
  * @param env Parsed variables for the startup summary.
+ * @returns Exit code for a failed startup, 0 once the service is running (it stops itself via `process.exit`).
  */
-async function serve(config: Config, env: ParsedEnv): Promise<void> {
+async function serve(config: Config, env: ParsedEnv): Promise<number> {
   const logger = createLogger({ level: config.logLevel });
 
   process.on('unhandledRejection', (reason: unknown) => {
     logger.error('unhandled rejection', { error: reason });
-    // eslint-disable-next-line n/no-process-exit -- fatal error policy, see docs/architecture.md
+    // eslint-disable-next-line n/no-process-exit -- a fatal error ends the process and the container restarts it
     process.exit(1);
   });
   process.on('uncaughtException', (error: Error) => {
     logger.error('uncaught exception', { error });
-    // eslint-disable-next-line n/no-process-exit -- fatal error policy, see docs/architecture.md
+    // eslint-disable-next-line n/no-process-exit -- a fatal error ends the process and the container restarts it
     process.exit(1);
   });
 
@@ -57,11 +59,11 @@ async function serve(config: Config, env: ParsedEnv): Promise<void> {
   const shutdown = (): void => {
     app?.stop().then(() => {
       logger.info('stopped');
-      // eslint-disable-next-line n/no-process-exit -- fatal error policy, see docs/architecture.md
+      // eslint-disable-next-line n/no-process-exit -- a fatal error ends the process and the container restarts it
       process.exit(0);
     }, (error: unknown) => {
       logger.error('stop failed', { error });
-      // eslint-disable-next-line n/no-process-exit -- fatal error policy, see docs/architecture.md
+      // eslint-disable-next-line n/no-process-exit -- a fatal error ends the process and the container restarts it
       process.exit(1);
     });
   };
@@ -90,9 +92,8 @@ async function serve(config: Config, env: ParsedEnv): Promise<void> {
     }
     process.stderr.write(`${error.message}\n`);
     logger.error('startup failed', { error });
-    process.exitCode = 1;
 
-    return;
+    return 1;
   }
 
   logger.info('listening', { host: config.internal.host,
@@ -103,47 +104,52 @@ async function serve(config: Config, env: ParsedEnv): Promise<void> {
       after: 'startup' });
     shutdown();
   }
+
+  return 0;
 }
 
-const command = parseCommand(process.argv.slice(2));
+const io = {
+  stdout: (text: string): void => {
+    process.stdout.write(text);
+  },
+  stderr: (text: string): void => {
+    process.stderr.write(text);
+  },
+};
 
-if (command.kind === 'usage') {
-  process.stderr.write(command.message);
-  process.exitCode = 2;
-} else {
-  const result = loadConfig(process.env);
+/**
+ * Parses the command line, loads the configuration and runs the command.
+ * @param argv Arguments after the script name.
+ * @param env Process environment.
+ * @returns Process exit code.
+ */
+async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<number> {
+  const command = parseCommand(argv);
+
+  if (command.kind === 'usage') {
+    process.stderr.write(command.message);
+
+    return 2;
+  }
+
+  const result = loadConfig(env);
 
   if (!result.ok) {
     process.stderr.write(formatConfigErrors(result.errors));
-    process.exitCode = 1;
-  } else if (command.kind === 'check') {
-    process.exitCode = await runCheckCommand(command, result.config, {
-      stdout: (text) => {
-        process.stdout.write(text);
-      },
-      stderr: (text) => {
-        process.stderr.write(text);
-      },
-    });
-  } else if (command.kind === 'provision') {
-    process.exitCode = await runProvisionCommand(command, result.config, {
-      stdout: (text) => {
-        process.stdout.write(text);
-      },
-      stderr: (text) => {
-        process.stderr.write(text);
-      },
-    });
-  } else if (command.kind === 'history') {
-    process.exitCode = runHistoryCommand(command, result.config, {
-      stdout: (text) => {
-        process.stdout.write(text);
-      },
-      stderr: (text) => {
-        process.stderr.write(text);
-      },
-    });
-  } else {
-    await serve(result.config, result.env);
+
+    return 1;
+  }
+
+  switch (command.kind) {
+    case 'check':
+      return runCheckCommand(command, result.config, io);
+    case 'provision':
+      return runProvisionCommand(command, result.config, io);
+    case 'history':
+      return runHistoryCommand(command, result.config, io);
+    default:
+      return serve(result.config, result.env);
   }
 }
+
+process.exitCode = await main(process.argv.slice(2), process.env);

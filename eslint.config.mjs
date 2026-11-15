@@ -57,7 +57,7 @@ export default [
     },
   },
   {
-    // node:sqlite is marked experimental in Node 24 but is the chosen store, see docs/architecture.md.
+    // node:sqlite is still flagged experimental by the plugin but is the chosen store.
     files: ['**/*.ts'],
     rules: {
       'n/no-unsupported-features/node-builtins': ['error', { ignores: ['sqlite'] }],
