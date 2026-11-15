@@ -20,6 +20,8 @@ export interface HawkConfig {
   collectorUrl: string | undefined;
   /** Integration token used to send test events. */
   integrationToken: string;
+  /** Origin of Garage, the front end of Hawk; absent turns its check off. */
+  garageUrl?: string;
   /** Id of the monitored project. */
   projectId: string;
   /** Login of the account that reads the project. */
@@ -42,6 +44,8 @@ export interface StageTimeouts {
   eventRepeated: number;
   /** Stage `cleanup`; counted outside `run`. */
   cleanup: number;
+  /** Stage `garage_availability` of the probe. */
+  garage: number;
   /** Stages 1-5 together. */
   run: number;
 }
@@ -76,6 +80,16 @@ export interface HeartbeatConfig {
   url?: string;
   /** Time between pings. */
   intervalMs: number;
+}
+
+/** Settings of the probe scenario. */
+export interface ProbeConfig {
+  /** Time between the starts of two probes. */
+  intervalMs: number;
+  /** Failed probes in a row that raise an alert. */
+  alertAfterFailures: number;
+  /** Days to keep finished probes. */
+  retentionDays: number;
 }
 
 /** Settings of runs started by hand. */
@@ -116,6 +130,8 @@ export interface MonitoringConfig {
   heartbeat: HeartbeatConfig;
   /** Runs started by hand over the internal port. */
   manual: ManualRunConfig;
+  /** The `endpoints-probe` scenario. */
+  probe: ProbeConfig;
 }
 
 /** Service configuration in the shape the rest of the code uses. */
@@ -250,6 +266,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): L
         apiUrl: values.HAWK_API_URL,
         collectorUrl: values.HAWK_COLLECTOR_URL,
         integrationToken: values.HAWK_INTEGRATION_TOKEN,
+        ...values.GARAGE_URL === undefined ? {} : { garageUrl: values.GARAGE_URL },
         projectId: values.HAWK_PROJECT_ID,
         email: values.HAWK_EMAIL,
         password: values.HAWK_PASSWORD,
@@ -267,6 +284,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): L
         eventVisible: values.EVENT_VISIBLE_TIMEOUT_MS,
         eventRepeated: values.EVENT_REPEATED_TIMEOUT_MS,
         cleanup: values.CLEANUP_TIMEOUT_MS,
+        garage: values.GARAGE_TIMEOUT_MS,
         run: values.RUN_TIMEOUT_MS,
       },
       notifications: {
@@ -298,6 +316,9 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): L
           intervalMs: values.HEARTBEAT_INTERVAL_MS },
         manual: { ...values.RUN_TOKEN === undefined ? {} : { token: values.RUN_TOKEN },
           minIntervalMs: values.MANUAL_MIN_INTERVAL_MS },
+        probe: { intervalMs: values.PROBE_INTERVAL_MS,
+          alertAfterFailures: values.PROBE_ALERT_AFTER_FAILURES,
+          retentionDays: values.PROBE_RETENTION_DAYS },
       },
     },
   };

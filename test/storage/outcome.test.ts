@@ -234,3 +234,36 @@ describe('isMonitorAbort', () => {
       errorClass: 'monitor_stopped' })).toBe(false);
   });
 });
+
+describe('the probe', () => {
+  it('does not change the projection of the events sent in 30 days', () => {
+    const config = testConfig();
+    const base = { ...config.monitoring,
+      intervalMs: 600_000 };
+    const without = testConfig({ monitoring: { ...base,
+      scenarios: ['send-and-receive-event'] } });
+    const withProbe = testConfig({ monitoring: { ...base,
+      scenarios: ['send-and-receive-event', 'endpoints-probe'] } });
+
+    expect(eventsSentPer30Days(withProbe)).toBe(eventsSentPer30Days(without));
+  });
+
+  it('is never degraded by the quota, because its API stage only reads it', () => {
+    const result = runResultFixture({ scenario: 'endpoints-probe',
+      stages: [stageFixture('api_availability', 'ok', 10, { details: { quotaLow: true } })] });
+
+    expect(outcomeOf(result, CONTEXT).degraded).toEqual([]);
+  });
+
+  it('is stored from a result that has no transport, catcher type or title', () => {
+    const { transport: _transport, catcherType: _catcher, title: _title, ...fields } = runResultFixture({ scenario: 'endpoints-probe' });
+    const outcome = outcomeOf(fields, CONTEXT);
+
+    expect(outcome.status).toBe('ok');
+    expect(rowOf({ runId: 'raaaaaaaaaaaaaaaa',
+      scenario: 'endpoints-probe',
+      sequence: 1,
+      trigger: 'schedule',
+      startedAt: '2026-03-10T10:00:00.000Z' }, outcome).status).toBe('ok');
+  });
+});

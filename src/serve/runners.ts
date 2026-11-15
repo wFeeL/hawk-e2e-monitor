@@ -1,7 +1,8 @@
 import type { ScenarioRunner } from '../scheduler/scheduler.js';
-import { CHECK_NOTIFICATION, SEND_AND_RECEIVE_EVENT } from '../scenarios/names.js';
+import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, SEND_AND_RECEIVE_EVENT } from '../scenarios/names.js';
 import type { ScenarioName } from '../scenarios/names.js';
 import { runSendAndReceive } from '../scenarios/send-and-receive/run.js';
+import { StartupError } from '../app.js';
 import type { Check } from '../http/internal-server.js';
 import { setupCheckNotification } from './notification-setup.js';
 import type { RunnerContext, ScenarioSetup, SetupScenario } from './scenario-setup.js';
@@ -39,10 +40,18 @@ const setupSendAndReceive: SetupScenario = async (context): Promise<ScenarioSetu
   });
 };
 
+/**
+ * Stands in for the probe until its runner exists.
+ * @returns Never; the probe cannot be started yet.
+ * @throws StartupError always.
+ */
+const setupProbe: SetupScenario = async (): Promise<ScenarioSetup> => Promise.reject(new StartupError(`${ENDPOINTS_PROBE} is not implemented yet`));
+
 /** One entry per scenario; a new scenario is added here. */
 const SETUPS: Readonly<Record<ScenarioName, SetupScenario>> = {
   [SEND_AND_RECEIVE_EVENT]: setupSendAndReceive,
   [CHECK_NOTIFICATION]: setupCheckNotification,
+  [ENDPOINTS_PROBE]: setupProbe,
 };
 
 /**

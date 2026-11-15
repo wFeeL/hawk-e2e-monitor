@@ -2,7 +2,17 @@ import type { Transport } from '../clients/collector.js';
 import type { Culprit, ErrorClass } from '../errors/taxonomy.js';
 
 /** Stages of a run, in execution order. */
-export const STAGE_NAMES = ['collector_availability', 'api_availability', 'notification_setup', 'collector_accept', 'event_visible', 'notification_formed', 'event_repeated', 'cleanup'] as const;
+export const STAGE_NAMES = [
+  'collector_availability',
+  'api_availability',
+  'notification_setup',
+  'collector_accept',
+  'event_visible',
+  'notification_formed',
+  'event_repeated',
+  'cleanup',
+  'garage_availability',
+] as const;
 
 /** One of `STAGE_NAMES`. */
 export type StageName = (typeof STAGE_NAMES)[number];
@@ -91,12 +101,12 @@ export interface RunResult {
   instanceId: string;
   /** Run number. */
   sequence: number;
-  /** Transport the event was sent over. */
-  transport: Transport;
-  /** Catcher type of the event. */
-  catcherType: string;
-  /** Title of the event. */
-  title: string;
+  /** Transport the event was sent over; absent for a scenario that sends none. */
+  transport?: Transport;
+  /** Catcher type of the event; absent for a scenario that sends none. */
+  catcherType?: string;
+  /** Title of the event; absent for a scenario that sends none. */
+  title?: string;
   /** Wall-clock start, ISO. */
   startedAt: string;
   /** Wall-clock end, ISO. */

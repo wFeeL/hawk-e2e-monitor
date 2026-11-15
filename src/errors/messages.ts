@@ -83,6 +83,8 @@ export function describeError(errorClass: ErrorClass, facts: MessageFacts): stri
   switch (errorClass) {
     case 'collector_unavailable':
       return join(`${where} did not respond`, [': ', what], [', ', waited], ['; cause: ', facts.cause]);
+    case 'garage_unavailable':
+      return join(`Garage${facts.url === undefined ? '' : ` at ${facts.url}`} did not serve ${facts.detail ?? 'its pages'}`, [': ', what ?? facts.cause]);
     case 'dns_error':
       return join(`Host ${facts.host ?? facts.url ?? 'of the request'} does not resolve`, [': ', facts.code]);
     case 'network_error':

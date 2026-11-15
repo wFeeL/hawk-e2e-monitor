@@ -25,6 +25,7 @@ describe('loadConfig', () => {
       eventVisible: 120_000,
       eventRepeated: 120_000,
       cleanup: 30_000,
+      garage: 15_000,
       run: 480_000,
     });
   });
@@ -83,6 +84,7 @@ describe('loadConfig', () => {
         eventVisible: 5000,
         eventRepeated: 6000,
         cleanup: 7000,
+        garage: 15_000,
         run: 30_000,
       },
       notifications: {
@@ -108,6 +110,9 @@ describe('loadConfig', () => {
         sweepIntervalMs: 3_600_000,
         sweepMinAgeMs: 900_000,
         heartbeat: { intervalMs: 60_000 },
+        probe: { intervalMs: 90_000,
+          alertAfterFailures: 3,
+          retentionDays: 7 },
         manual: { minIntervalMs: 60_000 },
       },
     });

@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import type { RunResult } from '../../src/engine/result.js';
 import { createMetrics } from '../../src/metrics/metrics.js';
 import type { MonitorMetrics } from '../../src/metrics/metrics.js';
 import { TRANSPORTS } from '../../src/clients/collector.js';
@@ -232,7 +231,7 @@ describe('onRunFinished', () => {
     const { metrics, families } = fixture();
     const { transport: _transport, ...result } = runResultFixture({ eventLatencyMs: 1500 });
 
-    metrics.onRunFinished(row(), result as RunResult);
+    metrics.onRunFinished(row(), result);
 
     const family = (await families()).find(item => item.name === 'hawk_e2e_event_latency_seconds');
 

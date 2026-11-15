@@ -57,6 +57,19 @@ describe('describeError', () => {
       waitedMs: 340 })).toBe('Collector http://c/ did not respond: TIMEOUT, waited 340 ms');
   });
 
+  it('garage_unavailable names the address, what was not served and why', () => {
+    expect(describeError('garage_unavailable', { url: 'http://g:8080',
+      detail: 'the index page',
+      code: 'ECONNREFUSED' })).toBe('Garage at http://g:8080 did not serve the index page: ECONNREFUSED');
+    expect(describeError('garage_unavailable', { url: 'http://g:8080',
+      detail: 'the index page',
+      status: 502 })).toBe('Garage at http://g:8080 did not serve the index page: HTTP 502');
+    expect(describeError('garage_unavailable', { url: 'http://g:8080',
+      detail: 'the app',
+      cause: 'index.html has no module script' })).toBe('Garage at http://g:8080 did not serve the app: index.html has no module script');
+    expect(describeError('garage_unavailable', {})).toBe('Garage did not serve its pages');
+  });
+
   it('collector_unavailable text', () => {
     expect(describeError('collector_unavailable', { url: 'http://c/',
       code: 'ECONNREFUSED',

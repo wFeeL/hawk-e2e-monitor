@@ -76,6 +76,13 @@ describe('classifyNetworkError', () => {
     expect(classifyNetworkError(fetchFailed('ENOTFOUND'), 'heartbeat').errorClass).toBe('dns_error');
   });
 
+  it('the garage target blames Garage for a refused or silent connection, and keeps DNS and TLS apart', () => {
+    expect(classifyNetworkError(fetchFailed('ECONNREFUSED'), 'garage').errorClass).toBe('garage_unavailable');
+    expect(classifyNetworkError(fetchFailed('ETIMEDOUT'), 'garage').errorClass).toBe('garage_unavailable');
+    expect(classifyNetworkError(fetchFailed('ENOTFOUND'), 'garage').errorClass).toBe('dns_error');
+    expect(classifyNetworkError(fetchFailed('CERT_HAS_EXPIRED'), 'garage').errorClass).toBe('tls_error');
+  });
+
   it('the notify target never blames Hawk: a refused or silent bot is a network error', () => {
     expect(classifyNetworkError(fetchFailed('ECONNREFUSED'), 'notify').errorClass).toBe('network_error');
     expect(classifyNetworkError(fetchFailed('ETIMEDOUT'), 'notify').errorClass).toBe('network_error');

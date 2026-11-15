@@ -3,7 +3,7 @@ import type { RunResult } from '../engine/result.js';
 import { CheckError } from '../errors/taxonomy.js';
 import type { ErrorClass, MessageFacts } from '../errors/taxonomy.js';
 import { scenarioSettings } from '../config/scenario.js';
-import { CHECK_NOTIFICATION, EVENT_SCENARIOS } from '../scenarios/names.js';
+import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, EVENT_SCENARIOS } from '../scenarios/names.js';
 import type { RunStart } from './history.js';
 import type { DegradedCode, RunOutcome, RunRow } from './types.js';
 import { MS_PER_DAY } from '../time/units.js';
@@ -33,7 +33,8 @@ function degradationOf(result: RunResult, context: OutcomeContext): DegradedCode
   }
 
   // The quota stage marks a nearly used event limit; the monitor's own events do not count, because cleanup removes them.
-  if (result.stages.find(stage => stage.name === 'api_availability')?.details?.quotaLow === true) {
+  // The probe only reads the quota, so a nearly used one is the business of the scenarios that send events.
+  if (result.scenario !== ENDPOINTS_PROBE && result.stages.find(stage => stage.name === 'api_availability')?.details?.quotaLow === true) {
     codes.push('quota_usage');
   }
 
