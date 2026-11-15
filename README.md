@@ -74,13 +74,52 @@ with `notification_timeout` for about a minute. The check takes the same
 `--sequence`, `--transport` and `--repeat` options. A run where only one of the two channels arrived passes
 with a warning.
 
+## More scenarios
+
+Every scenario that sends an event reads it back with the same queries Garage
+uses and compares the fields a user sees in the event card. A grouping pattern
+of the project that would catch the monitor's titles is reported as degraded
+(`grouping_pattern`).
+
+- **Threshold rule.** check-notification keeps a second notification rule for
+  the instance: Hawk sends it on the second event of the same error within an
+  hour. On repeat runs
+  (`REPEAT_EVERY_N_RUNS`) the stage `threshold_formed` waits for exactly one
+  threshold webhook after the repeat. A threshold webhook before the repeat
+  fails the run with `threshold_early`.
+- **sourcemaps**, hourly (`SOURCEMAPS_INTERVAL_MS`). Uploads a release
+  `e2e-<INSTANCE_ID>-<runId>` with a small source map to the collector, waits
+  until Hawk lists the file (`RELEASE_SAVE_TIMEOUT_MS`), sends a JavaScript
+  event of that release and checks that the frame points to the original file,
+  line and source lines. Hawk has no API to remove a release, so these releases
+  stay in the test project until Hawk's archiver removes old ones.
+- **sentry-envelope**, hourly (`SENTRY_ENVELOPE_INTERVAL_MS`). Sends an event
+  through the Sentry endpoint of the collector (`/api/0/envelope/`), the way a
+  Sentry SDK pointed at Hawk does, and checks the event in Hawk.
+- **new-project**, daily (`NEW_PROJECT_INTERVAL_MS`), off by default. Creates
+  a project in the workspace of `HAWK_PROJECT_ID`, waits until the collector
+  accepts its new token (`NEW_PROJECT_TOKEN_TIMEOUT_MS`, the collector reloads
+  tokens periodically), sends an event, finds it and removes the project. The
+  account must be an admin of the workspace. Run it only against a Hawk you
+  own. Hawk may post every created project to a team chat
+  (`TELEGRAM_MAIN_CHAT_URL` of the API). Projects left by an interrupted run
+  are removed by the sweep. The sweep only removes projects that the monitor
+  recorded in its history, that carry its name pattern, sit in the same
+  workspace and are older than `SWEEP_MIN_AGE_MS`.
+
+Without `SCENARIOS`, `serve` runs send-and-receive-event, check-notification,
+sourcemaps and sentry-envelope. check-notification then needs
+`RECEIVER_SECRET` and a public address, as above.
+
 ## Running continuously
 
 `serve` is the default command of the container image. With an empty history
 it starts the first scenario listed in `SCENARIOS` right away and each next one
-`SCENARIO_STAGGER_MS` later. After that every scenario runs again
-`CHECK_INTERVAL_MS` after the start of its previous run, also across restarts
-of the monitor, so the first run after a restart can take up to one interval.
+`SCENARIO_STAGGER_MS` later. After that every scenario runs again one interval
+after the start of its previous run, also across restarts of the monitor, so
+the first run after a restart can take up to one interval. The interval is
+`CHECK_INTERVAL_MS` for send-and-receive-event and check-notification, and the
+scenario's own variable for the others.
 check-notification first waits up to `TUNNEL_READY_TIMEOUT_MS` for the tunnel
 to report its address. A tick that comes while the previous run of the same scenario is
 still going is recorded as skipped.
@@ -147,8 +186,14 @@ With `ALERT_NOTIFY_URL` empty, alerts go to the log only.
 - A run cut short by a restart of the monitor is recorded as aborted with
   `monitor_restarted`, a run cut short by `docker compose stop` as
   `monitor_stopped`. Neither counts as a failure of Hawk.
-- A run that does not finish within `RUN_TIMEOUT_MS + CLEANUP_TIMEOUT_MS +
-  WATCHDOG_GRACE_MS` is cancelled and recorded as `run_hung`. After three such
+- A run of send-and-receive-event or check-notification that does not finish
+  within `RUN_TIMEOUT_MS + CLEANUP_TIMEOUT_MS + WATCHDOG_GRACE_MS` is cancelled
+  and recorded as `run_hung`. For the other scenarios the limit is the sum of
+  the timeouts of their own stages plus `CLEANUP_TIMEOUT_MS` and
+  `WATCHDOG_GRACE_MS`. `RUN_TIMEOUT_MS` must cover all stages of
+  check-notification, including the threshold stage
+  (`NOTIFICATION_TIMEOUT_MS + HTTP_TIMEOUT_MS`); the configuration check names
+  the sum when it does not. After three such
   runs of one scenario in a row the process exits and the container restart
   policy starts it again.
 - Restarts and deploys of Hawk show up as failed runs with the stage and the

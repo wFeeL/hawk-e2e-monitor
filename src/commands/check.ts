@@ -10,6 +10,13 @@ import type { MutableRedactor } from '../errors/redact.js';
 import { collectorEndpoints, decodeIntegrationToken } from '../hawk/token.js';
 import { createLogger } from '../log/logger.js';
 import { startReceiver } from '../receiver/server.js';
+import { runSentryEnvelope } from '../scenarios/sentry-envelope/run.js';
+import { runSourcemaps } from '../scenarios/sourcemaps/run.js';
+import { runNewProject } from '../scenarios/new-project/run.js';
+import { createdProjects } from '../storage/created-projects.js';
+import { openDatabase } from '../storage/database.js';
+import { createHistory } from '../storage/history.js';
+import { pendingProjects } from '../storage/pending-projects.js';
 import { runEndpointsProbe } from '../scenarios/endpoints-probe/run.js';
 import { runCheckNotification } from '../scenarios/check-notification/run.js';
 import type { NotificationDeps } from '../scenarios/check-notification/run.js';
@@ -19,7 +26,7 @@ import { systemClock } from '../time/clock.js';
 import { MS_PER_SECOND } from '../time/units.js';
 import { readMatchChange, recordMatchChange } from './match-change.js';
 import { refusalWhileServing } from './serving.js';
-import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, SEND_AND_RECEIVE_EVENT } from '../scenarios/names.js';
+import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, NEW_PROJECT, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS } from '../scenarios/names.js';
 import type { ScenarioName } from '../scenarios/names.js';
 
 /** Where the command writes. */
@@ -198,6 +205,79 @@ const runSendAndReceiveCommand: CheckScenario = async (command, config, io, deps
 };
 
 /**
+ * Runs `new-project` with the record of created projects in the history file, so a project left behind is found by the sweep.
+ * @param command Parsed `check` command.
+ * @param config Validated configuration.
+ * @param io Output streams.
+ * @param deps Replacements for the default dependencies, for tests.
+ * @param masking Redactor shared with the logger.
+ * @returns Exit code.
+ */
+const runNewProjectCommand: CheckScenario = async (command, config, io, deps, masking) => {
+  const { databasePath } = config.monitoring;
+  let history;
+
+  try {
+    history = createHistory(openDatabase(databasePath));
+  } catch (error) {
+    // Nothing is created in Hawk before the id of a project has a place to be recorded.
+    io.stderr(`cannot open ${databasePath} to record the project: ${error instanceof Error ? error.message : String(error)}\n`);
+
+    return 1;
+  }
+
+  try {
+    const result = await runNewProject({ ...defaultDeps(config, io, masking),
+      ...deps.pollScheduleMs === undefined ? {} : { pollScheduleMs: deps.pollScheduleMs },
+      addSecret: masking.add,
+      projects: createdProjects(history),
+      pending: pendingProjects(history) }, { sequence: command.sequence });
+
+    io.stdout(`${JSON.stringify(result)}\n`);
+
+    return summarize(result, io, masking);
+  } finally {
+    history.close();
+  }
+};
+
+/**
+ * Runs `sourcemaps` and prints the result.
+ * @param command Parsed `check` command.
+ * @param config Validated configuration.
+ * @param io Output streams.
+ * @param deps Replacements for the default dependencies, for tests.
+ * @param masking Redactor shared with the logger.
+ * @returns Exit code.
+ */
+const runSourcemapsCommand: CheckScenario = async (command, config, io, deps, masking) => {
+  const result = await runSourcemaps({ ...defaultDeps(config, io, masking),
+    ...deps.pollScheduleMs === undefined ? {} : { pollScheduleMs: deps.pollScheduleMs } }, { sequence: command.sequence });
+
+  io.stdout(`${JSON.stringify(result)}\n`);
+
+  return summarize(result, io, masking);
+};
+
+/**
+ * Runs `sentry-envelope` and prints the result.
+ * @param command Parsed `check` command.
+ * @param config Validated configuration.
+ * @param io Output streams.
+ * @param deps Replacements for the default dependencies, for tests.
+ * @param masking Redactor shared with the logger.
+ * @returns Exit code.
+ */
+const runSentryEnvelopeCommand: CheckScenario = async (command, config, io, deps, masking) => {
+  const result = await runSentryEnvelope({ ...defaultDeps(config, io, masking),
+    ...deps.pollScheduleMs === undefined ? {} : { pollScheduleMs: deps.pollScheduleMs } }, { sequence: command.sequence });
+
+  io.stdout(`${JSON.stringify(result)}\n`);
+
+  return summarize(result, io, masking);
+};
+
+/**
  * Runs `endpoints-probe` and prints the result.
  * @param command Parsed `check` command.
  * @param config Validated configuration.
@@ -219,6 +299,9 @@ const runProbeCommand: CheckScenario = async (command, config, io, deps, masking
 const CHECKS: Readonly<Record<ScenarioName, CheckScenario>> = {
   [SEND_AND_RECEIVE_EVENT]: runSendAndReceiveCommand,
   [CHECK_NOTIFICATION]: runNotificationCommand,
+  [NEW_PROJECT]: runNewProjectCommand,
+  [SOURCEMAPS]: runSourcemapsCommand,
+  [SENTRY_ENVELOPE]: runSentryEnvelopeCommand,
   [ENDPOINTS_PROBE]: runProbeCommand,
 };
 

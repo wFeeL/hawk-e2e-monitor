@@ -553,3 +553,132 @@ describe('runCheckCommand: endpoints-probe', () => {
     expect(stderr).toContain('failed collector_availability collector_dependency_error:');
   });
 });
+
+describe('check new-project and the database', () => {
+  /**
+   * Runs `check new-project` over a database path.
+   * @param databasePath Path the command opens.
+   * @returns Exit code and what it wrote.
+   */
+  async function run(databasePath: string): Promise<Captured> {
+    const { deps } = createTestDeps(hawk);
+    const config: Config = { ...deps.config,
+      monitoring: { ...deps.config.monitoring,
+        databasePath } };
+    const captured: Captured = { code: -1,
+      stdout: '',
+      stderr: '' };
+
+    captured.code = await runCheckCommand({ kind: 'check',
+      scenario: 'new-project',
+      sequence: 1,
+      repeat: false }, config, { stdout: (text) => {
+      captured.stdout += text;
+    },
+    stderr: (text) => {
+      captured.stderr += text;
+    } }, { pollScheduleMs: deps.pollScheduleMs });
+
+    return captured;
+  }
+
+  it('does not run, and creates no project, while a serve holds the database', async () => {
+    const database = await tempDatabase();
+
+    try {
+      seedLease(database.path, { pid: 4242,
+        hostname: 'box',
+        at: new Date().toISOString() });
+
+      const { code, stdout, stderr } = await run(database.path);
+
+      expect(code).toBe(1);
+      expect(stdout).toBe('');
+      expect(stderr).toContain('serve is running for');
+      expect(hawk.projects.inWorkspace('fake-workspace')).toHaveLength(1);
+    } finally {
+      await database.remove();
+    }
+  });
+
+  it('says which file it could not open and creates no project', async () => {
+    const database = await tempDatabase();
+
+    try {
+      // A file stands where the directory of the database should be.
+      await writeFile(database.path, 'not a directory');
+
+      const { code, stderr } = await run(`${database.path}/monitor.db`);
+
+      expect(code).toBe(1);
+      expect(stderr).toContain(`${database.path}/monitor.db`);
+      expect(hawk.projects.inWorkspace('fake-workspace')).toHaveLength(1);
+    } finally {
+      await database.remove();
+    }
+  });
+});
+
+describe('check new-project', () => {
+  it('creates and removes a project and prints the result', async () => {
+    const database = await tempDatabase();
+
+    try {
+      const { deps } = createTestDeps(hawk);
+      const config: Config = { ...deps.config,
+        monitoring: { ...deps.config.monitoring,
+          databasePath: database.path } };
+      const captured: Captured = { code: -1,
+        stdout: '',
+        stderr: '' };
+
+      captured.code = await runCheckCommand({ kind: 'check',
+        scenario: 'new-project',
+        sequence: 1,
+        repeat: false }, config, { stdout: (text) => {
+        captured.stdout += text;
+      },
+      stderr: (text) => {
+        captured.stderr += text;
+      } }, { pollScheduleMs: deps.pollScheduleMs });
+
+      const result = JSON.parse(captured.stdout) as RunResult;
+
+      expect(captured.code).toBe(0);
+      expect(result).toMatchObject({ scenario: 'new-project',
+        status: 'ok' });
+      expect(hawk.projects.inWorkspace('fake-workspace')).toHaveLength(1);
+      expect(captured.stderr).toContain('ok');
+    } finally {
+      await database.remove();
+    }
+  });
+});
+
+describe('check sourcemaps', () => {
+  it('prints the result of a run and exits 0', async () => {
+    const { stdout, code } = await runCommand({ kind: 'check',
+      scenario: 'sourcemaps',
+      sequence: 1,
+      repeat: false });
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({ scenario: 'sourcemaps',
+      status: 'ok',
+      catcherType: 'errors/javascript' });
+  });
+});
+
+describe('check sentry-envelope', () => {
+  it('prints the result of a run and exits 0', async () => {
+    const { stdout, code } = await runCommand({ kind: 'check',
+      scenario: 'sentry-envelope',
+      sequence: 1,
+      repeat: false });
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({ scenario: 'sentry-envelope',
+      status: 'ok',
+      catcherType: 'errors/default' });
+  });
+});

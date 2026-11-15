@@ -2,8 +2,10 @@ import type { FoundEvent, HawkApi } from '../clients/hawk-api.js';
 import type { Config } from '../config/load.js';
 import type { Logger } from '../log/logger.js';
 import { buildTitle } from '../scenarios/send-and-receive/plan.js';
-import { EVENT_SCENARIOS } from '../scenarios/names.js';
+import { EVENT_SCENARIOS, SENTRY_ENVELOPE } from '../scenarios/names.js';
+import { createdProjects } from '../storage/created-projects.js';
 import type { History } from '../storage/history.js';
+import { pendingProjects } from '../storage/pending-projects.js';
 import type { Clock } from '../time/clock.js';
 
 const PAGE_SIZE = 50;
@@ -11,6 +13,8 @@ const MAX_PAGES = 10;
 const TIMEOUT_FACTOR = 4;
 const FIRST_PASS_DELAY_MS = 300_000;
 const RUN_ID_PATTERN = /^[a-z]{16}$/u;
+// The collector puts the type of the exception in front of the value to make the title of an event that came as an envelope.
+const SENTRY_PREFIX = 'E2eMonitorCheck: ';
 
 /** What one pass of the sweep did. */
 export interface SweepReport {
@@ -24,7 +28,21 @@ export interface SweepReport {
   lateMarked: number;
   /** Searches made. */
   pages: number;
+  /** What the pass did about the projects of `new-project`; absent when none was recorded. */
+  projects?: ProjectsReport;
   /** Why the pass ended early. */
+  error?: string;
+}
+
+/** What a pass did about the projects `new-project` left behind. */
+export interface ProjectsReport {
+  /** Projects removed. */
+  removed: number;
+  /** Recorded projects that Hawk no longer has. */
+  gone: number;
+  /** Projects left alone: another workspace, another name, too young or still in use. */
+  skipped: number;
+  /** The first error that stopped the removal of one project; the pass went on with the others. */
   error?: string;
 }
 
@@ -78,24 +96,27 @@ export interface Sweeper {
 
 /**
  * Takes the run id out of the title of an event of this instance.
+ * The events of `sentry-envelope` have a second form of the title: the type of the exception and a colon in front.
  * @param instanceId Id of this monitor, which the title must carry.
  * @param title Title as the search returned it.
- * @returns The run id when the title is exactly what `buildTitle` makes for one of the scenarios.
+ * @returns The run id when the title is exactly what `buildTitle` makes for one of the scenarios, in the form that scenario uses.
  */
 function runIdOf(instanceId: string, title: string): string | undefined {
+  const viaSentry = title.startsWith(SENTRY_PREFIX);
+  const plain = viaSentry ? title.slice(SENTRY_PREFIX.length) : title;
   const prefix = `[e2e:${instanceId}] `;
 
-  if (!title.startsWith(prefix)) {
+  if (!plain.startsWith(prefix)) {
     return undefined;
   }
 
-  for (const scenario of EVENT_SCENARIOS) {
+  for (const scenario of EVENT_SCENARIOS.filter(name => (name === SENTRY_ENVELOPE) === viaSentry)) {
     const suffix = ` ${scenario}`;
 
-    if (title.endsWith(suffix)) {
-      const runId = title.slice(prefix.length, title.length - suffix.length);
+    if (plain.endsWith(suffix)) {
+      const runId = plain.slice(prefix.length, plain.length - suffix.length);
 
-      if (RUN_ID_PATTERN.test(runId) && buildTitle(instanceId, runId, scenario) === title) {
+      if (RUN_ID_PATTERN.test(runId) && buildTitle(instanceId, runId, scenario) === plain) {
         return runId;
       }
     }
@@ -105,14 +126,53 @@ function runIdOf(instanceId: string, title: string): string | undefined {
 }
 
 /**
- * Reads `context.instanceId` of an event.
+ * Builds the pattern of the name `new-project` gives its projects.
+ * @param instanceId Id of this monitor; its characters are matched literally.
+ * @returns Pattern with the run id as its first group.
+ */
+function projectNamePattern(instanceId: string): RegExp {
+  return new RegExp(`^\\[e2e:${instanceId.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`)}\\] new-project (r[a-z]{15})$`, 'u');
+}
+
+/**
+ * Reads the instance id an event names in its context: `context.instanceId`, or `context.e2e.instanceId` for an event that came as a Sentry envelope.
+ * @param context Context as Hawk returns it.
+ * @param title Title of the event, which tells the form.
+ * @returns The id, or undefined when the context has none.
+ */
+function contextInstance(context: unknown, title: string): unknown {
+  if (typeof context !== 'object' || context === null || Array.isArray(context)) {
+    return undefined;
+  }
+
+  const record = context as Record<string, unknown>;
+  const holder = title.startsWith(SENTRY_PREFIX) ? record.e2e : record;
+
+  return typeof holder === 'object' && holder !== null ? (holder as Record<string, unknown>).instanceId : undefined;
+}
+
+/**
+ * Reads `context.instanceId`, which an event of the Sentry path does not have unless another source wrote it.
  * @param context Context as Hawk returns it.
  * @returns The id, or undefined when the context has none.
  */
-function contextInstance(context: unknown): unknown {
-  return typeof context === 'object' && context !== null && !Array.isArray(context)
-    ? (context as Record<string, unknown>).instanceId
-    : undefined;
+function plainInstance(context: unknown): unknown {
+  return typeof context === 'object' && context !== null && !Array.isArray(context) ? (context as Record<string, unknown>).instanceId : undefined;
+}
+
+/**
+ * Tells whether the context of an event names this instance.
+ * An event in the form of the Sentry path may have lost its context, so a title of this instance is enough there
+ * unless the context names another instance.
+ * @param context Context as Hawk returns it.
+ * @param title Title of the event, which tells the form.
+ * @param instanceId Id of this monitor.
+ * @returns True when the event is of this instance as far as its context says.
+ */
+function inInstance(context: unknown, title: string, instanceId: string): boolean {
+  const named = contextInstance(context, title) ?? plainInstance(context);
+
+  return named === instanceId || (named === undefined && title.startsWith(SENTRY_PREFIX));
 }
 
 /**
@@ -148,7 +208,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
       lateMarked: false };
     const runId = runIdOf(config.instanceId, event.title);
 
-    if (runId === undefined || contextInstance(event.context) !== config.instanceId || deps.activeRunIds().has(runId)) {
+    if (runId === undefined || !inInstance(event.context, event.title, config.instanceId) || deps.activeRunIds().has(runId)) {
       return left;
     }
 
@@ -166,7 +226,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
     const card = await api.eventCard(projectId, event.originalEventId, signal);
 
     // The event may be gone already, or Hawk may show something other than the search did.
-    if (card === null || runIdOf(config.instanceId, card.title) !== runId || contextInstance(card.context) !== config.instanceId) {
+    if (card === null || runIdOf(config.instanceId, card.title) !== runId || !inInstance(card.context, card.title, config.instanceId)) {
       return left;
     }
 
@@ -185,6 +245,115 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
 
     return { removed: true,
       lateMarked: late === true };
+  };
+
+  /**
+   * Removes the recorded projects of `new-project` that a run left behind.
+   * Hawk checks no rights on `removeProject`, so a project goes only when every check says it is ours:
+   * it was recorded by this monitor, sits in the workspace of the monitored project, is not that project,
+   * carries the exact name of this instance, belongs to no running run and is old enough.
+   * A run whose project id was never learned is found by the exact name instead, under the same checks.
+   * @param signal Ends the pass.
+   * @returns What was done, undefined when nothing is recorded.
+   */
+  const sweepProjects = async (signal: AbortSignal): Promise<ProjectsReport | undefined> => {
+    const record = createdProjects(history);
+    const pending = pendingProjects(history);
+    const candidates = record.ids();
+    const nowMs = clock.wallTime().getTime();
+    const lookups = pending.list().filter(entry => !deps.activeRunIds().has(entry.runId) && nowMs - Date.parse(entry.at) >= sweepMinAgeMs);
+
+    if (candidates.length === 0 && lookups.length === 0) {
+      return undefined;
+    }
+
+    // A project without a known id can be found only in the full list.
+    const lists = await api.workspaceProjects(lookups.length > 0 ? [] : [projectId, ...candidates], signal);
+    const home = lists.find(list => list.projects.some(project => project.id === projectId));
+
+    if (home === undefined) {
+      throw new Error('the workspace of the monitored project was not found, so no project is removed');
+    }
+
+    const pattern = projectNamePattern(config.instanceId);
+    const report: ProjectsReport = { removed: 0,
+      gone: 0,
+      skipped: 0 };
+    // One project that cannot be removed must not keep the others from it.
+    const removing = async (remove: () => Promise<boolean>, runId: string): Promise<boolean> => {
+      try {
+        const done = await remove();
+
+        if (!done) {
+          logger.warn('sweep: Hawk did not remove a project', { runId });
+        }
+
+        return done;
+      } catch (error) {
+        signal.throwIfAborted();
+        report.error ??= describe(error);
+        logger.warn('sweep: a project could not be removed', { runId,
+          error: describe(error) });
+
+        return false;
+      }
+    };
+
+    for (const id of candidates) {
+      signal.throwIfAborted();
+
+      const holder = lists.find(list => list.projects.some(project => project.id === id));
+
+      if (holder === undefined) {
+        record.forget(id);
+        report.gone += 1;
+
+        continue;
+      }
+
+      const project = holder.projects.find(item => item.id === id);
+      const runId = project === undefined ? undefined : pattern.exec(project.name)?.[1];
+
+      if (project === undefined || holder.workspaceId !== home.workspaceId || id === projectId || runId === undefined
+        || deps.activeRunIds().has(runId) || clock.wallTime().getTime() - project.createdAtMs < sweepMinAgeMs) {
+        report.skipped += 1;
+
+        continue;
+      }
+
+      if (await removing(() => api.removeProject(id, signal), runId)) {
+        record.forget(id);
+        report.removed += 1;
+      } else {
+        report.skipped += 1;
+      }
+    }
+
+    for (const { runId } of lookups) {
+      signal.throwIfAborted();
+
+      const name = `[e2e:${config.instanceId}] new-project ${runId}`;
+      const project = home.projects.find(item => item.name === name);
+
+      if (project === undefined) {
+        pending.drop(runId);
+        report.gone += 1;
+      } else if (project.id === projectId) {
+        // Nothing here may ever remove it, so the entry has no use.
+        pending.drop(runId);
+        report.skipped += 1;
+      } else if (clock.wallTime().getTime() - project.createdAtMs < sweepMinAgeMs) {
+        report.skipped += 1;
+      } else if (await removing(() => api.removeProject(project.id, signal), runId)) {
+        record.forget(project.id);
+        pending.drop(runId);
+        report.removed += 1;
+      } else {
+        report.skipped += 1;
+      }
+    }
+
+    return report;
   };
 
   const sweepOnce = async (outer: AbortSignal): Promise<SweepReport> => {
@@ -225,6 +394,18 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
           break;
         }
       }
+
+      const projects = await sweepProjects(signal);
+
+      if (projects !== undefined) {
+        report.projects = projects;
+
+        if (projects.error !== undefined) {
+          report.error = projects.error;
+          failures += 1;
+          logger.warn('sweep failed', { ...report });
+        }
+      }
     } catch (error) {
       report.error = describe(error);
       failures += 1;
@@ -237,6 +418,10 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
     if (report.error === undefined && (report.removed > 0 || report.lateMarked > 0)) {
       logger.info('sweep removed leftover events', { removed: report.removed,
         lateMarked: report.lateMarked });
+    }
+
+    if (report.error === undefined && report.projects !== undefined && report.projects.removed + report.projects.gone > 0) {
+      logger.info('sweep dealt with leftover projects', { ...report.projects });
     }
 
     return report;

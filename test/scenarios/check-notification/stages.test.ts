@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FoundEvent } from '../../../src/clients/hawk-api.js';
 import { runStage } from '../../../src/engine/stages.js';
 import type { StageResult } from '../../../src/engine/result.js';
@@ -18,8 +18,8 @@ import { TEST_RECEIVER_SECRET } from '../../support/env.js';
 import { createNotificationTestScenario } from '../../support/scenario.js';
 import type { NotificationTestOptions, NotificationTestScenario } from '../../support/scenario.js';
 import { systemClock } from '../../../src/time/clock.js';
-import { collectorAcceptStage } from '../../../src/scenarios/send-and-receive/stages.js';
-import { checkNotificationAgainstEvent, notificationBeforeSend, notificationFormedStage, notificationSetupStage } from '../../../src/scenarios/check-notification/stages.js';
+import { collectorAcceptStage, eventRepeatedStage, eventVisibleStage } from '../../../src/scenarios/send-and-receive/stages.js';
+import { checkNotificationAgainstEvent, notificationBeforeSend, notificationFormedStage, notificationSetupStage, thresholdBeforeRepeat, thresholdFormedStage } from '../../../src/scenarios/check-notification/stages.js';
 import type { NotificationContext } from '../../../src/scenarios/check-notification/stages.js';
 
 const TIMEOUT_MS = 3000;
@@ -342,6 +342,7 @@ describe('notificationBeforeSend', () => {
 
     expect(parts.receiver.counts(parts.plan.runId)).toEqual({ webhook: [],
       loop: [],
+      threshold: [],
       unmatched: 0 });
     expect(parts.context.notification.warmup).toBe(false);
   });
@@ -643,6 +644,7 @@ describe('checkNotificationAgainstEvent', () => {
 
     return { webhook: webhook === undefined ? [] : [arrival('webhook', webhook)],
       loop: loop === undefined ? [] : [arrival('loop', loop)],
+      threshold: [],
       unmatched: 0 };
   }
 
@@ -681,5 +683,155 @@ describe('checkNotificationAgainstEvent', () => {
     const error = checkNotificationAgainstEvent(arrivals('{}', 'nothing'), event, 'p1');
 
     expect(error?.message).toContain('webhook.event.id');
+  });
+});
+
+/**
+ * Posts a body to the threshold path of the receiver the way Hawk would.
+ * @param parts Scenario with the receiver.
+ * @param body Raw body.
+ */
+async function postThreshold(parts: NotificationTestScenario, body: string): Promise<void> {
+  const response = await fetch(`${parts.address.baseUrl}/hooks/threshold/${TEST_RECEIVER_SECRET}`, { method: 'POST',
+    headers: Object.fromEntries([['user-agent', 'Hawk-Webhook/1.0'], ['x-hawk-notification', 'event']]),
+    body });
+
+  await response.arrayBuffer();
+}
+
+/**
+ * Builds a threshold webhook body for the run of a scenario.
+ * @param parts Scenario with the plan.
+ * @param repetitionId Id of the repetition, null for the first event.
+ * @returns JSON text of the body.
+ */
+function thresholdBody(parts: NotificationTestScenario, repetitionId: string | null): string {
+  return JSON.stringify({ type: 'event',
+    payload: { project: { id: parts.context.config.hawk.projectId },
+      events: [{ event: { id: 'e1',
+        title: parts.plan.title },
+      repetitionId }] } });
+}
+
+/**
+ * Runs the stages of a repeat run up to the threshold stage: send, search, notification, repeat.
+ * @param parts Scenario built with `repeat: true`.
+ * @returns Results of the repeat stage and the threshold stage.
+ */
+async function repeatAndThreshold(parts: NotificationTestScenario): Promise<[StageResult, StageResult]> {
+  const { context } = parts;
+
+  await sendEvent(context);
+  await run(eventVisibleStage(TIMEOUT_MS), context);
+  await run(notificationFormedStage(FORMED_TIMEOUT_MS), context);
+
+  const repeated = await run(eventRepeatedStage(TIMEOUT_MS, thresholdBeforeRepeat(context)), context);
+  const formed = await run(thresholdFormedStage(FORMED_TIMEOUT_MS), context);
+
+  return [repeated, formed];
+}
+
+describe('thresholdFormedStage', () => {
+  it('is ok when the repeat makes Hawk send the threshold notification, and times it from the repeat', async () => {
+    const parts = await scenario({ repeat: true });
+    const [repeated, formed] = await repeatAndThreshold(parts);
+
+    expect(repeated.status).toBe('ok');
+    expect(formed.status).toBe('ok');
+    expect(formed.details?.latencyMs).toBeTypeOf('number');
+    expect(parts.context.state.repeatAcceptedAtMs).toBeTypeOf('number');
+    expect(parts.receiver.counts(parts.plan.runId).threshold).toHaveLength(1);
+  });
+
+  it('is skipped when the run does not repeat', async () => {
+    const parts = await scenario({ repeat: false });
+
+    await sendEvent(parts.context);
+
+    expect(await run(thresholdFormedStage(FORMED_TIMEOUT_MS), parts.context)).toMatchObject({ status: 'skipped' });
+  });
+
+  it('is skipped while the rule cache may still hold the old rules', async () => {
+    const parts = await scenario({ repeat: true });
+
+    parts.context.notification.warmup = true;
+    parts.context.notification.ruleChangedAgoMs = 1000;
+
+    const result = await run(thresholdFormedStage(FORMED_TIMEOUT_MS), parts.context);
+
+    expect(result).toMatchObject({ status: 'skipped',
+      details: { reason: 'rule_cache_warmup' } });
+  });
+
+  it('fails with threshold_early when a threshold POST came before the repeat', async () => {
+    const parts = await scenario({ repeat: true });
+    const { context } = parts;
+
+    await sendEvent(context);
+    await run(eventVisibleStage(TIMEOUT_MS), context);
+    await postThreshold(parts, thresholdBody(parts, null));
+    await vi.waitFor(() => {
+      expect(parts.receiver.counts(parts.plan.runId).threshold).toHaveLength(1);
+    });
+    await run(eventRepeatedStage(TIMEOUT_MS, thresholdBeforeRepeat(context)), context);
+
+    const result = await run(thresholdFormedStage(FORMED_TIMEOUT_MS), context);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'threshold_early',
+      culprit: 'hawk' });
+  });
+
+  it('fails with threshold_early when the POST that comes after the repeat has no repetition id', async () => {
+    const parts = await scenario({ repeat: true });
+
+    hawk.rules.remove(hawk.projectId, hawk.rules.list(hawk.projectId).find(rule => rule.whatToReceive === 'SEEN_MORE' && rule.including.length === 1)?.id ?? '');
+
+    const { context } = parts;
+
+    await sendEvent(context);
+    await run(eventVisibleStage(TIMEOUT_MS), context);
+    await run(eventRepeatedStage(TIMEOUT_MS, thresholdBeforeRepeat(context)), context);
+    await postThreshold(parts, thresholdBody(parts, null));
+
+    expect(await run(thresholdFormedStage(FORMED_TIMEOUT_MS), context)).toMatchObject({ status: 'failed',
+      errorClass: 'threshold_early' });
+  });
+
+  it('fails with notification_timeout for the threshold channel when nothing arrives', async () => {
+    const parts = await scenario({ repeat: true,
+      env: { NOTIFICATION_TIMEOUT_MS: '300',
+        NOTIFICATION_PAIR_WAIT_MS: '100' } });
+
+    hawk.rules.remove(hawk.projectId, hawk.rules.list(hawk.projectId).find(rule => rule.whatToReceive === 'SEEN_MORE' && rule.including.length === 1)?.id ?? '');
+
+    const { context } = parts;
+
+    await sendEvent(context);
+    await run(eventVisibleStage(TIMEOUT_MS), context);
+    await run(eventRepeatedStage(TIMEOUT_MS, thresholdBeforeRepeat(context)), context);
+
+    const result = await run(thresholdFormedStage(FORMED_TIMEOUT_MS), context);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'notification_timeout',
+      culprit: 'hawk' });
+    expect(result.message).toContain('threshold');
+  });
+
+  it('fails with notification_mismatch for a body about another project', async () => {
+    const parts = await scenario({ repeat: true });
+
+    hawk.rules.remove(hawk.projectId, hawk.rules.list(hawk.projectId).find(rule => rule.whatToReceive === 'SEEN_MORE' && rule.including.length === 1)?.id ?? '');
+
+    const { context } = parts;
+
+    await sendEvent(context);
+    await run(eventVisibleStage(TIMEOUT_MS), context);
+    await run(eventRepeatedStage(TIMEOUT_MS, thresholdBeforeRepeat(context)), context);
+    await postThreshold(parts, thresholdBody(parts, 'rep1').replace(parts.context.config.hawk.projectId, 'other'));
+
+    expect(await run(thresholdFormedStage(FORMED_TIMEOUT_MS), context)).toMatchObject({ status: 'failed',
+      errorClass: 'notification_mismatch' });
   });
 });

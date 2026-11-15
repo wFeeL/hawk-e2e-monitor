@@ -95,6 +95,18 @@ describe('hawk api session', () => {
     expect(hawk.api.operations).toEqual(['Login', 'ProjectToken']);
   });
 
+  it('projectInfo returns the token and the grouping patterns in one request', async () => {
+    hawk.api.knobs.groupingPatterns = ['boom .*', 'x'];
+
+    expect(await apiFor().projectInfo(hawk.projectId, signal)).toEqual({ token: hawk.token,
+      groupingPatterns: ['boom .*', 'x'] });
+    expect(hawk.api.operations).toEqual(['Login', 'ProjectToken']);
+  });
+
+  it('projectInfo has no patterns by default and treats null as none', async () => {
+    expect((await apiFor().projectInfo(hawk.projectId, signal)).groupingPatterns).toEqual([]);
+  });
+
   it('wrong password is api_auth_failed', async () => {
     const error = await checkErrorOf(apiFor('wrong').ensureSession(signal));
 

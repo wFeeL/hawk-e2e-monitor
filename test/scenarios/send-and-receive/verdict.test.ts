@@ -160,4 +160,34 @@ describe('decideVerdict', () => {
     expect(verdict.failedStage).toBe('event_visible');
     expect(verdict.error?.errorClass).toBe('duplicate_event');
   });
+
+  describe('a release upload whose answer was lost', () => {
+    const uploaded = stage('release_uploaded', 'uncertain', { errorClass: 'collector_unavailable',
+      message: 'The collector answered 502' });
+    const notSaved = stage('release_saved', 'failed', { errorClass: 'release_not_saved',
+      message: 'Hawk does not know the release' });
+
+    it('blames the collector at release_uploaded with the cause of the upload, as it is', () => {
+      const verdict = decideVerdict([uploaded, notSaved], { sendMayHaveReached: false });
+
+      expect(verdict).toMatchObject({ status: 'failed',
+        failedStage: 'release_uploaded' });
+      expect(verdict.error?.errorClass).toBe('collector_unavailable');
+      expect(verdict.error?.message).toBe('The collector answered 502');
+    });
+
+    it('does not move the blame when the upload was accepted', () => {
+      const verdict = decideVerdict([stage('release_uploaded', 'ok'), notSaved], { sendMayHaveReached: false });
+
+      expect(verdict).toMatchObject({ failedStage: 'release_saved' });
+      expect(verdict.error?.errorClass).toBe('release_not_saved');
+    });
+
+    it('does not move the blame for another failure of release_saved', () => {
+      const verdict = decideVerdict([uploaded, stage('release_saved', 'failed', { errorClass: 'api_unavailable',
+        message: 'down' })], { sendMayHaveReached: false });
+
+      expect(verdict.failedStage).toBe('release_saved');
+    });
+  });
 });

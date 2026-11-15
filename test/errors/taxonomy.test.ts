@@ -2,6 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { CULPRITS, CULPRIT_OF, CheckError, ERROR_CLASSES, isCheckError } from '../../src/errors/taxonomy.js';
 import type { Culprit, ErrorClass } from '../../src/errors/taxonomy.js';
 
+/**
+ * Builds the text of a class.
+ * @param errorClass Class to describe.
+ * @param facts Facts the text may mention.
+ * @returns The message.
+ */
+function text(errorClass: ErrorClass, facts: object): string {
+  return new CheckError(errorClass, facts).message;
+}
+
 const EXPECTED_CULPRITS: readonly (readonly [ErrorClass, Culprit])[] = [
   ['network_error', 'network'],
   ['token_mismatch', 'config'],
@@ -23,13 +33,21 @@ const EXPECTED_CULPRITS: readonly (readonly [ErrorClass, Culprit])[] = [
   ['monitor_restarted', 'monitor'],
   ['monitor_stopped', 'monitor'],
   ['alert_rejected', 'config'],
+  ['api_garage_query_failed', 'hawk'],
+  ['field_not_masked', 'hawk'],
+  ['threshold_early', 'hawk'],
+  ['new_token_not_accepted', 'hawk'],
+  ['release_rejected', 'hawk'],
+  ['release_not_saved', 'hawk'],
+  ['sourcemap_not_applied', 'hawk'],
+  ['sentry_rejected', 'hawk'],
   ['garage_unavailable', 'hawk'],
   ['api_unexpected_response', 'hawk'],
 ];
 
 describe('taxonomy', () => {
   it('culprit table covers every class', () => {
-    expect(ERROR_CLASSES).toHaveLength(44);
+    expect(ERROR_CLASSES).toHaveLength(52);
 
     for (const errorClass of ERROR_CLASSES) {
       expect(CULPRIT_OF[errorClass]).toBeDefined();
@@ -57,6 +75,30 @@ describe('taxonomy', () => {
     const error = new CheckError('collector_unavailable', {}, { message: 'custom text' });
 
     expect(error.message).toBe('custom text');
+  });
+});
+
+describe('texts of the coverage classes', () => {
+  it('each new class names its facts', () => {
+    expect(text('api_garage_query_failed', { detail: 'boom' })).toContain('boom');
+    expect(text('field_not_masked', { field: 'context.password' })).toContain('context.password');
+    expect(text('threshold_early', { detail: 'before the repeat' })).toContain('before the repeat');
+    expect(text('new_token_not_accepted', { waitedMs: 180_000 })).toContain('3m 0s');
+    expect(text('release_rejected', { status: 400,
+      detail: 'bad' })).toContain('400');
+    expect(text('release_not_saved', { waitedMs: 60_000 })).toContain('1m 0s');
+    expect(text('sourcemap_not_applied', { field: 'backtrace[0].file',
+      actual: 'x.min.js' })).toContain('backtrace[0].file');
+    expect(text('sentry_rejected', { status: 400,
+      detail: 'bad' })).toContain('400');
+  });
+
+  it('the threshold timeout names the threshold channel', () => {
+    const message = text('notification_timeout', { channel: 'threshold',
+      waitedMs: 120_000 });
+
+    expect(message).toContain('threshold');
+    expect(message).not.toContain('Neither channel');
   });
 });
 

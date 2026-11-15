@@ -1,5 +1,5 @@
 import { StartupError } from '../app.js';
-import { notificationSettings } from '../config/load.js';
+import { ConfigFailure, formatConfigErrors, notificationSettings } from '../config/load.js';
 import type { Config } from '../config/load.js';
 import type { MutableRedactor } from '../errors/redact.js';
 import type { Logger } from '../log/logger.js';
@@ -40,6 +40,24 @@ function receiverError(error: unknown, config: Config): StartupError {
     : `Cannot listen on ${receiverHost}:${String(receiverPort)}: ${error instanceof Error ? error.message : 'unknown error'}`;
 
   return new StartupError(reason, { cause: error });
+}
+
+/**
+ * Reads the notification settings, which only a chosen check-notification needs.
+ * @param config Configuration to read.
+ * @returns The settings with the secret present.
+ * @throws StartupError naming the missing variables.
+ */
+function settingsOrStartupError(config: Config): ReturnType<typeof notificationSettings> {
+  try {
+    return notificationSettings(config);
+  } catch (error) {
+    if (error instanceof ConfigFailure) {
+      throw new StartupError(formatConfigErrors(error.errors).trimEnd(), { cause: error });
+    }
+
+    throw error;
+  }
 }
 
 /** What the wait for the tunnel needs. */
@@ -121,7 +139,7 @@ async function waitForTunnel(wait: TunnelWait): Promise<void> {
  */
 export const setupCheckNotification: SetupScenario = async (context): Promise<ScenarioSetup> => {
   const { config, history, clock, logger, masking, api, collector, overrides } = context;
-  const settings = notificationSettings(config);
+  const settings = settingsOrStartupError(config);
   let receiver: Receiver;
 
   try {
@@ -133,11 +151,12 @@ export const setupCheckNotification: SetupScenario = async (context): Promise<Sc
       onUnmatched: (channel, rawBody) => {
         const found = LATE_RUN_ID(config.instanceId).exec(rawBody);
         const runId = found?.[1];
-        const outcome = runId === undefined ? undefined : history.markLateNotification(runId, channel, clock.wallTime().toISOString());
+        // The history keeps a late notification of the two channels of the rules; a late threshold POST is only logged.
+        const outcome = runId === undefined || channel === 'threshold' ? undefined : history.markLateNotification(runId, channel, clock.wallTime().toISOString());
 
         logger.info('late notification', { channel,
           runId,
-          result: outcome ?? (runId === undefined ? 'not of this instance' : 'unknown run or already counted') });
+          result: outcome ?? (runId === undefined ? 'not of this instance' : channel === 'threshold' ? 'threshold POST is not recorded' : 'unknown run or already counted') });
       } });
   } catch (error) {
     throw receiverError(error, config);

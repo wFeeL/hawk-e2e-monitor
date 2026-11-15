@@ -10,6 +10,12 @@
 #   workspace.ts  Query.workspaces, Workspace
 #   plans.ts      Plan.eventsLimit
 #   resolvers/encodedJSON.ts, typeDefs/index.ts  scalar EncodedJSON
+
+scalar DateTime
+
+scalar JSONObject
+
+scalar Upload
 #   notifications.ts  NotificationsChannelSettings (:11), NotificationsChannels (:31)
 #                 without webPush and desktopPush
 #   notificationsInput.ts  NotificationsChannelSettingsInput (:7),
@@ -20,6 +26,18 @@
 #                 ProjectNotificationRulePointer (:102), Mutation.createProjectNotificationsRule (:118),
 #                 updateProjectNotificationsRule (:126), deleteProjectNotificationsRule (:134)
 #   project.ts    Project.notifications (:389)
+#   projectEventGroupingPattern.ts  ProjectEventGroupingPattern; project.ts Project.eventGroupingPatterns
+#   project.ts    Project.name, Project.creationDate, Mutation.createProject, Mutation.removeProject
+#   typeDefs/index.ts  scalar Upload
+#   project.ts    Project.releaseDetails, ProjectReleaseDetails, SourceMapDataExtended
+# The fragment of the Garage event documents (hawk.garage, src/api/fragments.ts) needs more:
+#   event.ts      SourceCodeLine, Commit, Release, EventBacktraceFrame, EventUser,
+#                 Breadcrumb, EventMarks, the full Event and EventPayload
+#   user.ts       User (id, email, name, image)
+#   eventTaskManagerItem.ts  TaskManagerItem
+#   project.ts    DailyEvent (affectedUsers, groupingTimestamp), DailyEventsPortion.nextCursor,
+#                 DailyEventsCursor
+#   typeDefs/index.ts  scalars DateTime and JSONObject
 # The Hawk default `sort: EventsSortOrder = lastRepetitionTime` is not an
 # EventsSortOrder value in Hawk itself, so it is left out here.
 
@@ -52,9 +70,81 @@ type Plan {
   eventsLimit: Int!
 }
 
+type User {
+  id: ID!
+  email: String
+  name: String
+  image: String
+}
+
+type SourceCodeLine {
+  line: Int
+  content: String
+}
+
+type Commit {
+  hash: String!
+  author: String!
+  title: String!
+  date: DateTime!
+}
+
+type Release {
+  releaseName: String!
+  commits: [Commit!]
+}
+
+type EventBacktraceFrame {
+  file: String
+  line: Int
+  column: Int
+  sourceCode: [SourceCodeLine]
+  function: String
+  arguments: [String]
+}
+
+type EventUser {
+  id: ID
+  name: String
+  url: String
+  photo: String
+}
+
+type Breadcrumb {
+  timestamp: Float!
+  type: String
+  category: String
+  message: String
+  level: String
+  data: JSONObject
+}
+
+type EventMarks {
+  resolved: Boolean!
+  starred: Boolean!
+  ignored: Boolean!
+}
+
+type TaskManagerItem {
+  type: String!
+  number: Int!
+  url: String!
+  title: String!
+  createdBy: String!
+  createdAt: DateTime!
+  assignee: String
+}
+
 type EventPayload {
   title: String!
+  type: String
+  backtrace: [EventBacktraceFrame]
+  get: JSONObject
+  release: String
+  user: EventUser
   context: EncodedJSON
+  addons: EncodedJSON
+  breadcrumbs: [Breadcrumb!]
 }
 
 type Event {
@@ -62,24 +152,69 @@ type Event {
   catcherType: String!
   groupHash: String!
   totalCount: Int!
+  assignee: User
   payload: EventPayload!
-  originalEventId: ID!
   timestamp: Float!
+  originalTimestamp: Float!
+  originalEventId: ID!
+  release: Release
+  firstSeenInRelease: String
+  isNew: Boolean!
+  resolvedInRelease: String
+  regressionInRelease: String
+  visitedBy: [User!]
+  marks: EventMarks!
+  usersAffected: Int
+  taskManagerItem: TaskManagerItem
 }
 
 type DailyEvent {
   id: ID!
   count: Int!
+  affectedUsers: Int!
+  groupingTimestamp: Int!
   event: Event!
 }
 
+type DailyEventsCursor {
+  groupingTimestampBoundary: Int!
+  sortValueBoundary: Int!
+  idBoundary: ID!
+}
+
 type DailyEventsPortion {
+  nextCursor: DailyEventsCursor
   dailyEvents: [DailyEvent]
+}
+
+type SourceMapDataExtended {
+  mapFileName: String!
+  originFileName: String!
+  length: Int
+  uploadDate: DateTime
+}
+
+type ProjectReleaseDetails {
+  release: String!
+  commitsCount: Int!
+  filesCount: Int!
+  timestamp: Float!
+  commits: [Commit!]
+  files: [SourceMapDataExtended!]
+}
+
+type ProjectEventGroupingPattern {
+  id: ID!
+  pattern: String!
 }
 
 type Project {
   id: ID!
   token: String!
+  name: String!
+  creationDate: DateTime!
+  eventGroupingPatterns: [ProjectEventGroupingPattern]
+  releaseDetails(release: String!): ProjectReleaseDetails!
   notifications: [ProjectNotificationsRule]
   event(eventId: ID!, originalEventId: ID!): Event
   dailyEventsPortion(
@@ -182,6 +317,8 @@ type Mutation {
   login(email: String!, password: String!): Tokens!
   refreshTokens(refreshToken: String!): Tokens!
   removeEvent(projectId: ID!, eventId: ID!): Boolean!
+  createProject(workspaceId: ID!, name: String!, image: Upload): Project!
+  removeProject(projectId: ID!): Boolean!
   createProjectNotificationsRule(input: CreateProjectNotificationsRuleInput!): ProjectNotificationsRule
   updateProjectNotificationsRule(input: UpdateProjectNotificationsRuleInput!): ProjectNotificationsRule
   deleteProjectNotificationsRule(input: ProjectNotificationRulePointer!): ProjectNotificationsRule

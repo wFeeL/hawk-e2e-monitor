@@ -22,7 +22,7 @@ import type { NotificationDeps } from '../../../src/scenarios/check-notification
 
 const SECOND_SUBMISSION = 2;
 const RUN_ID = `r${'a'.repeat(15)}`;
-const NOTIFIED: StageName[] = ['collector_availability', 'api_availability', 'notification_setup', 'collector_accept', 'event_visible', 'notification_formed', 'event_repeated', 'cleanup'];
+const NOTIFIED: StageName[] = ['collector_availability', 'api_availability', 'notification_setup', 'collector_accept', 'event_visible', 'notification_formed', 'event_repeated', 'threshold_formed', 'cleanup'];
 const QUOTA_REFUSAL: CollectorReplyOverride = { status: 402,
   body: JSON.stringify({ code: 402,
     error: true,
@@ -176,7 +176,7 @@ describe('a healthy fake Hawk', () => {
     expect(result.scenario).toBe('check-notification');
     expect(result.title).toBe(`[e2e:fake] ${RUN_ID} check-notification`);
     expect(result.stages.map(stage => stage.name)).toEqual(NOTIFIED);
-    expect(result.stages.map(stage => stage.status)).toEqual(['ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'skipped', 'ok']);
+    expect(result.stages.map(stage => stage.status)).toEqual(['ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'skipped', 'skipped', 'ok']);
     expect(result.warnings).toEqual([]);
     expect(result.notification?.webhook?.latencyMs).toBeTypeOf('number');
     expect(result.notification?.loop?.latencyMs).toBeTypeOf('number');
@@ -189,6 +189,7 @@ describe('a healthy fake Hawk', () => {
     expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
     expect(parts.receiver.counts(RUN_ID)).toEqual({ webhook: [],
       loop: [],
+      threshold: [],
       unmatched: 0 });
   });
 
@@ -435,6 +436,56 @@ describe('a notification that does not fit the event', () => {
       errorClass: 'duplicate_notification' });
     expect(result.message).toBe('The webhook notification arrived 2 times');
     expect(stageOf(result, 'notification_formed').status).toBe('ok');
+  });
+});
+
+describe('a run without a repeat', () => {
+  it('fails with threshold_early when the threshold rule fires on the first event', async () => {
+    const parts = await start();
+
+    hawk.notifier.knobs.fireThresholdOnFirst = true;
+
+    const result = await go(parts, {}, { sequence: 1,
+      repeat: false });
+
+    expect(result).toMatchObject({ status: 'failed',
+      failedStage: 'threshold_formed',
+      errorClass: 'threshold_early' });
+  });
+});
+
+describe('a repeat run', () => {
+  it('is ok with the threshold notification timed from the repeat', async () => {
+    const parts = await start();
+    const result = await go(parts, {}, { sequence: 1,
+      repeat: true });
+
+    expect(result.status).toBe('ok');
+    expect(result.stages.map(stage => stage.status)).toEqual(['ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok']);
+    expect(result.notification?.threshold?.latencyMs).toBeTypeOf('number');
+    expect(result.notification?.unmatched).toBe(0);
+    expect(result.event?.totalCount).toBe(2);
+  });
+
+  it('a threshold rule that is gone makes the run fail with notification_timeout of the threshold channel', async () => {
+    const parts = await start({ env: IMPATIENT });
+    const threshold = hawk.rules.list(hawk.projectId).find(rule => rule.whatToReceive === 'SEEN_MORE' && rule.including.length === 1);
+
+    hawk.rules.remove(hawk.projectId, threshold?.id ?? '');
+
+    // A provisioner that sees no change keeps the run out of the warmup skip.
+    const result = await go(parts, { provisioner: { provision: async () => Promise.resolve({ action: 'none',
+      deleted: 0,
+      matchChanged: false,
+      ruleId: 'x',
+      thresholdRuleId: 'y' }),
+    warmupRemainingMs: () => 0 } }, { sequence: 1,
+      repeat: true });
+
+    expect(result).toMatchObject({ status: 'failed',
+      failedStage: 'threshold_formed',
+      errorClass: 'notification_timeout' });
+    expect(result.message).toContain('threshold');
   });
 });
 

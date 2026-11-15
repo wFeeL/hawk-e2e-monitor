@@ -19,6 +19,10 @@ export interface CollectorEndpoints {
   healthUrl: string;
   /** WebSocket address. */
   wsUrl: string;
+  /** Where releases with their source maps are uploaded. */
+  releaseUrl: string;
+  /** Where Sentry envelopes are posted. */
+  envelopeUrl: string;
 }
 
 /**
@@ -76,5 +80,7 @@ export function collectorEndpoints(token: IntegrationToken, collectorUrl: string
 
   return { postUrl: base.href,
     healthUrl: new URL('health', base).href,
-    wsUrl: ws.href };
+    wsUrl: ws.href,
+    releaseUrl: new URL('release', base).href,
+    envelopeUrl: new URL('api/0/envelope/', base).href };
 }

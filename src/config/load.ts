@@ -134,6 +134,29 @@ export interface MonitoringConfig {
   probe: ProbeConfig;
 }
 
+/** Settings of the scenarios that have their own interval or time limit. */
+export interface ScenariosConfig {
+  /** Scenario `new-project`. */
+  newProject: {
+    /** Time between the starts of two runs. */
+    intervalMs: number;
+    /** Time the new token may take to be accepted. */
+    tokenTimeoutMs: number;
+  };
+  /** Scenario `sourcemaps`. */
+  sourcemaps: {
+    /** Time between the starts of two runs. */
+    intervalMs: number;
+    /** Time Hawk may take to save the uploaded release. */
+    releaseSaveTimeoutMs: number;
+  };
+  /** Scenario `sentry-envelope`. */
+  sentryEnvelope: {
+    /** Time between the starts of two runs. */
+    intervalMs: number;
+  };
+}
+
 /** Service configuration in the shape the rest of the code uses. */
 export interface Config {
   /** Id of this monitor instance. */
@@ -164,6 +187,8 @@ export interface Config {
   notifications: NotificationConfig;
   /** Schedule, history, alerts and cleanup. */
   monitoring: MonitoringConfig;
+  /** Own interval and time limits of the newer scenarios. */
+  scenarios: ScenariosConfig;
 }
 
 /** Validated configuration together with the parsed environment. */
@@ -319,6 +344,13 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): L
         probe: { intervalMs: values.PROBE_INTERVAL_MS,
           alertAfterFailures: values.PROBE_ALERT_AFTER_FAILURES,
           retentionDays: values.PROBE_RETENTION_DAYS },
+      },
+      scenarios: {
+        newProject: { intervalMs: values.NEW_PROJECT_INTERVAL_MS,
+          tokenTimeoutMs: values.NEW_PROJECT_TOKEN_TIMEOUT_MS },
+        sourcemaps: { intervalMs: values.SOURCEMAPS_INTERVAL_MS,
+          releaseSaveTimeoutMs: values.RELEASE_SAVE_TIMEOUT_MS },
+        sentryEnvelope: { intervalMs: values.SENTRY_ENVELOPE_INTERVAL_MS },
       },
     },
   };

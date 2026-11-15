@@ -66,7 +66,7 @@ interface Setup {
   /** Rows reported through `onRunFinished`. */
   finished: FinishedRow[];
   /** Fake runners by scenario. */
-  runners: Record<typeof NOTIFY | typeof PROBE | typeof SEND, FakeRunner>;
+  runners: Pick<Record<ScenarioName, FakeRunner>, typeof NOTIFY | typeof PROBE | typeof SEND>;
   /** The `exit` spy. */
   exit: ReturnType<typeof vi.fn<(code: number) => void>>;
   /** Configuration used. */

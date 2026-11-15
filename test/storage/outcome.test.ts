@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { Config } from '../../src/config/load.js';
 import { testConfig } from '../support/config.js';
 import { runResultFixture, stageFixture } from '../support/run-result.js';
 import type { RunResult } from '../../src/engine/result.js';
@@ -77,6 +78,23 @@ describe('outcomeOf', () => {
 
     expect(outcomeOf(result, { loopEnabled: true }).degraded).toEqual(['single_channel']);
     expect(outcomeOf(result, { loopEnabled: false }).degraded).toEqual([]);
+  });
+
+  it('takes the codes a stage reports in details.degraded, each once', () => {
+    const result = runResultFixture({ stages: [
+      stageFixture('api_availability', 'ok', 0, { details: { degraded: ['grouping_pattern'] } }),
+      stageFixture('event_visible', 'ok', 0, { details: { degraded: ['js_worker_not_seen', 'grouping_pattern'] } }),
+    ] });
+
+    expect(outcomeOf(result, CONTEXT).degraded).toEqual(['js_worker_not_seen', 'grouping_pattern']);
+  });
+
+  it('ignores a code that is not a degradation code and reports nothing for a failed run', () => {
+    const odd = runResultFixture({ stages: [stageFixture('event_visible', 'ok', 0, { details: { degraded: ['nope', 7] } })] });
+
+    expect(outcomeOf(odd, CONTEXT).degraded).toEqual([]);
+    expect(outcomeOf({ ...odd,
+      status: 'failed' }, CONTEXT).degraded).toEqual([]);
   });
 
   it('accept_uncertain: the collector did not confirm the event', () => {
@@ -209,6 +227,17 @@ describe('projection', () => {
       scenarios: ['check-notification'] } });
 
     expect(eventsSentPer30Days(only)).toBeCloseTo(DAY_RUNS * 30 * (1 + 1 / 12));
+  });
+
+  it('applies the repeat share to the two scenarios that repeat and not to the others', () => {
+    const config = testConfig();
+    const monitoring = (scenarios: Config['monitoring']['scenarios']): Config['monitoring'] => ({ ...config.monitoring,
+      scenarios });
+
+    // Every other scenario runs once an hour by default: 24 runs a day, 720 in 30 days.
+    expect(eventsSentPer30Days(testConfig({ monitoring: monitoring(['sourcemaps']) }))).toBeCloseTo(720);
+    expect(eventsSentPer30Days(testConfig({ monitoring: monitoring(['sentry-envelope']) }))).toBeCloseTo(720);
+    expect(eventsSentPer30Days(testConfig({ monitoring: monitoring(['new-project']) }))).toBeCloseTo(30);
   });
 
   it('projects 144 runs a day per scenario at a 600000 ms interval', () => {

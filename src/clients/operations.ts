@@ -14,10 +14,10 @@ export const REFRESH_TOKENS: GraphqlOperation = {
   idempotent: true,
 };
 
-/** Integration token of a project. */
+/** Integration token of a project and the patterns that group its events. */
 export const PROJECT_TOKEN: GraphqlOperation = {
   name: 'ProjectToken',
-  document: 'query ProjectToken($projectId: ID!) { project(projectId: $projectId) { token } }',
+  document: 'query ProjectToken($projectId: ID!) { project(projectId: $projectId) { token eventGroupingPatterns { pattern } } }',
   idempotent: true,
 };
 
@@ -28,28 +28,162 @@ export const WORKSPACE_QUOTA: GraphqlOperation = {
   idempotent: true,
 };
 
-/** Events of a project found by a search string. */
-export const FIND_EVENTS: GraphqlOperation = {
-  name: 'FindEvents',
-  document: `query FindEvents($projectId: ID!, $search: String!) {
-  project(projectId: $projectId) {
-    dailyEventsPortion(limit: 50, search: $search) {
-      dailyEvents { id count event { id originalEventId groupHash totalCount catcherType timestamp payload { title context } } }
+// The three fragments and the two queries below are the ones of the Garage web client (hawk.garage, src/api/fragments.ts and src/api/events/queries.ts), word for word.
+const USER_FRAGMENT = `
+  fragment User on User {
+    id
+    email
+    name
+    image
+  }
+`;
+
+const EVENT_BACKTRACE = `
+  fragment eventBacktrace on EventBacktraceFrame {
+    file
+    line
+    column
+    sourceCode {
+      line
+      content
+    }
+    function
+    arguments
+  }
+`;
+
+const EVENT_FRAGMENT = `
+  fragment Event on Event {
+    id
+    catcherType
+    totalCount
+    assignee {
+      id
+      name
+      email
+      image
+    }
+    groupHash
+    visitedBy {
+      ...User
+    }
+    marks {
+      resolved
+      starred
+      ignored
+    }
+    timestamp
+    originalTimestamp
+    originalEventId
+    firstSeenInRelease
+    isNew
+    resolvedInRelease
+    regressionInRelease
+    payload {
+      title
+      type
+      release
+      context
+      user {
+        id
+        name
+        url
+        photo
+      }
+      get
+      backtrace {
+        ...eventBacktrace
+      }
+      addons
+      breadcrumbs {
+        timestamp
+        type
+        category
+        message
+        level
+        data
+      }
+    }
+    usersAffected
+    release {
+      releaseName
+      commits{
+        hash
+        author
+        title
+        date
+      }
+    }
+    taskManagerItem {
+      type
+      number
+      url
+      title
+      createdBy
+      createdAt
+      assignee
     }
   }
-}`,
+
+  ${USER_FRAGMENT}
+  ${EVENT_BACKTRACE}
+`;
+
+/** Events of a project found by a search string, as the event list of Garage asks for them. */
+export const PROJECT_DAILY_EVENTS: GraphqlOperation = {
+  name: 'ProjectDailyEvents',
+  document: `
+  query ProjectDailyEvents(
+    $projectId: ID!
+    $cursor: DailyEventsCursorInput
+    $sort: EventsSortOrder
+    $filters: EventsFiltersInput
+    $search: String
+    $release: String
+    $assignee: ID
+  ) {
+    project(projectId: $projectId) {
+      dailyEventsPortion(sort: $sort, filters: $filters, search: $search, release: $release, assignee: $assignee, nextCursor: $cursor) {
+        nextCursor {
+          groupingTimestampBoundary
+          sortValueBoundary
+          idBoundary
+        }
+        dailyEvents {
+          id
+          count
+          affectedUsers
+          groupingTimestamp
+          event {
+            ...Event
+          }
+        }
+      }
+    }
+  }
+
+  ${EVENT_FRAGMENT}
+`,
   idempotent: true,
+  garage: true,
 };
 
-/** Card of one event by the id of its original event. */
-export const EVENT_CARD: GraphqlOperation = {
-  name: 'EventCard',
-  document: `query EventCard($projectId: ID!, $eventId: ID!) {
-  project(projectId: $projectId) {
-    event(eventId: $eventId, originalEventId: $eventId) { id originalEventId groupHash totalCount catcherType timestamp payload { title context } }
+/** Card of one event as the event page of Garage asks for it. */
+export const EVENT: GraphqlOperation = {
+  name: 'Event',
+  document: `
+  query Event($projectId: ID!, $eventId: ID!, $originalEventId: ID!) {
+    project(projectId: $projectId) {
+      event(eventId: $eventId, originalEventId: $originalEventId) {
+        ...Event
+      }
+    }
   }
-}`,
+
+  ${EVENT_FRAGMENT}
+`,
   idempotent: true,
+  garage: true,
 };
 
 /** Deletes an event; repeating it after an unknown outcome is decided by the caller. */
@@ -95,5 +229,33 @@ export const DELETE_NOTIFICATION_RULE: GraphqlOperation = {
   idempotent: true,
 };
 
+/** Creates a project in a workspace; repeating it would create a second project, so no blind retries. */
+export const CREATE_PROJECT: GraphqlOperation = {
+  name: 'CreateProject',
+  document: 'mutation CreateProject($workspaceId: ID!, $name: String!) { createProject(workspaceId: $workspaceId, name: $name) { id name token } }',
+  idempotent: false,
+};
+
+/** Removes a project; once it is gone a second request fails, so no blind retries. */
+export const REMOVE_PROJECT: GraphqlOperation = {
+  name: 'RemoveProject',
+  document: 'mutation RemoveProject($projectId: ID!) { removeProject(projectId: $projectId) }',
+  idempotent: false,
+};
+
+/** Projects of each workspace of the account, all of them or only the listed ones. */
+export const WORKSPACE_PROJECTS: GraphqlOperation = {
+  name: 'WorkspaceProjects',
+  document: 'query WorkspaceProjects($ids: [ID!]) { workspaces { id projects(ids: $ids) { id name creationDate } } }',
+  idempotent: true,
+};
+
+/** Release of a project with the source map files saved for it; Hawk answers an error while the release is unknown. */
+export const RELEASE_DETAILS: GraphqlOperation = {
+  name: 'ReleaseDetails',
+  document: 'query ReleaseDetails($projectId: ID!, $release: String!) { project(projectId: $projectId) { releaseDetails(release: $release) { release filesCount files { mapFileName originFileName } } } }',
+  idempotent: true,
+};
+
 /** Every operation the monitor sends. */
-export const ALL_OPERATIONS: readonly GraphqlOperation[] = [LOGIN, REFRESH_TOKENS, PROJECT_TOKEN, WORKSPACE_QUOTA, FIND_EVENTS, EVENT_CARD, REMOVE_EVENT, NOTIFICATION_RULES, CREATE_NOTIFICATION_RULE, UPDATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE];
+export const ALL_OPERATIONS: readonly GraphqlOperation[] = [LOGIN, REFRESH_TOKENS, PROJECT_TOKEN, WORKSPACE_QUOTA, PROJECT_DAILY_EVENTS, EVENT, REMOVE_EVENT, NOTIFICATION_RULES, CREATE_NOTIFICATION_RULE, UPDATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE, CREATE_PROJECT, REMOVE_PROJECT, WORKSPACE_PROJECTS, RELEASE_DETAILS];

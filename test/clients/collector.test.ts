@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createServer as createNetServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CheckError } from '../../src/errors/taxonomy.js';
 import type { ErrorClass } from '../../src/errors/taxonomy.js';
 import { collectorEndpoints, decodeIntegrationToken } from '../../src/hawk/token.js';
@@ -506,5 +506,222 @@ describe('probeInvalidToken', () => {
 
     expect(error.errorClass).toBe('collector_unavailable');
     expect(error.facts.code).toBe('TIMEOUT');
+  });
+});
+
+const MAP_FILE = { name: 'e2e-rabc.min.js.map',
+  content: JSON.stringify({ version: 3,
+    file: 'e2e-rabc.min.js',
+    sources: ['e2e-source.js'],
+    sourcesContent: ['x'],
+    names: [],
+    mappings: 'AAKA' }) };
+
+describe('uploadRelease', () => {
+  it('sends the release and the file with the token as a bearer, and the collector keeps them', async () => {
+    const outcome = accepted(await clientFor().uploadRelease(VALID_TOKEN, 'rel-1', MAP_FILE, signal));
+
+    expect(outcome.attempts).toBe(1);
+    expect(collector.releasePosts).toBe(1);
+    await vi.waitFor(() => {
+      expect(store.releases.find(PROJECT_ID, 'rel-1')?.files.map(file => file.mapFileName)).toEqual(['e2e-rabc.min.js.map']);
+    });
+    expect(store.releases.find(PROJECT_ID, 'rel-1')?.files[0]?.originFileName).toBe('e2e-rabc.min.js');
+  });
+
+  it('posts to the release path of the root, not to the event path', async () => {
+    await clientFor().uploadRelease(VALID_TOKEN, 'rel-1', MAP_FILE, signal);
+
+    expect(collector.posts).toBe(0);
+    expect(collector.releasePosts).toBe(1);
+  });
+
+  it('an unknown token is auth_invalid_token', async () => {
+    const other = encodeToken(randomUUID(), randomUUID());
+    const outcome = rejected(await clientFor().uploadRelease(other, 'rel-1', MAP_FILE, signal));
+
+    expect(outcome.error.errorClass).toBe('auth_invalid_token');
+    expect(outcome.error.message).not.toContain(decodeTokenKey(other) ?? 'unreachable');
+  });
+
+  it.each([
+    ['a refusal of the release', 400, '{"code":400,"error":true,"message":"provide `release` form value"}', 'release_rejected'],
+    ['a plain 400 of a proxy', 400, 'Bad gateway', 'release_rejected'],
+    ['the plain 400 of a collector handler that panicked', 400, 'Bad request', 'collector_unexpected_response'],
+    ['the event limit', 402, '{"code":402,"error":true,"message":"Project has exceeded the events limit"}', 'quota_exhausted'],
+    ['an unexpected status', 404, 'Not found', 'release_rejected'],
+    ['an answer of 200 that says error', 200, '{"code":200,"error":true,"message":"x"}', 'release_rejected'],
+  ] as const)('%s is %s', async (_name, status, body, expected) => {
+    collector.knobs.releaseReply = { status,
+      body };
+
+    const outcome = rejected(await clientFor().uploadRelease(VALID_TOKEN, 'rel-1', MAP_FILE, signal));
+
+    expect(outcome.error.errorClass).toBe(expected);
+
+    if (expected === 'release_rejected') {
+      expect(outcome.error.facts.status).toBe(status);
+    }
+  });
+
+  it('reads a flat line of an HTML refusal, not the page', async () => {
+    collector.knobs.releaseReply = { status: 404,
+      body: '<html>\n<body>\n<h1>Not   found</h1>\n</body>\n</html>',
+      contentType: 'text/html' };
+
+    const outcome = rejected(await clientFor().uploadRelease(VALID_TOKEN, 'rel-1', MAP_FILE, signal));
+
+    expect(outcome.error.facts.detail).toBe('HTTP 404 Not found');
+  });
+
+  it('stops reading an endless answer at the limit and calls it a refusal', async () => {
+    const endless = await startEndlessServer();
+
+    try {
+      const outcome = rejected(await clientFor(1000, endless.url).uploadRelease(VALID_TOKEN, 'rel-1', MAP_FILE, signal));
+
+      expect(outcome.error.errorClass).toBe('release_rejected');
+    } finally {
+      await endless.close();
+    }
+  });
+
+  it('a 5xx answer is uncertain, because the release may have been published', async () => {
+    collector.knobs.releaseReply = { status: 503,
+      body: 'down' };
+
+    const outcome = uncertain(await clientFor().uploadRelease(VALID_TOKEN, 'rel-1', MAP_FILE, signal));
+
+    expect(outcome.cause.errorClass).toBe('collector_unavailable');
+    expect(collector.releasePosts).toBe(1);
+  });
+
+  it('a collector that is not there is rejected before the send, after the attempts', async () => {
+    const url = await closeCollector();
+    const outcome = rejected(await clientFor(1000, url).uploadRelease(VALID_TOKEN, 'rel-1', MAP_FILE, signal));
+
+    expect(outcome.error.errorClass).toBe('collector_unavailable');
+    expect(outcome.attempts).toBe(3);
+  });
+
+  it('a request that times out after the send is uncertain and not repeated', async () => {
+    collector.knobs.replyDelayMs = 400;
+
+    const outcome = uncertain(await clientFor(100).uploadRelease(VALID_TOKEN, 'rel-1', MAP_FILE, signal));
+
+    expect(outcome.attempts).toBe(1);
+  });
+});
+
+const SENT_AT_LINE = JSON.stringify(Object.fromEntries([['sent_at', '2026-11-15T12:00:00.000Z']]));
+const ENVELOPE = [
+  SENT_AT_LINE,
+  JSON.stringify({ type: 'event' }),
+  JSON.stringify({ exception: { values: [{ type: 'E2eMonitorCheck',
+    value: '[e2e:t] rabc sentry-envelope' }] },
+  level: 'error',
+  sdk: { name: 'sentry.python',
+    version: '1.0.0' },
+  contexts: { e2e: { runId: 'rabc',
+    instanceId: 't' } } }),
+  '',
+].join('\n');
+const KEY = decodeTokenKey(VALID_TOKEN) ?? '';
+
+describe('sendEnvelope', () => {
+  it('posts the envelope to the Sentry path with the key in the query, and the event arrives with a title of type and value', async () => {
+    const outcome = accepted(await clientFor().sendEnvelope(KEY, ENVELOPE, signal));
+    const [event] = store.all(PROJECT_ID);
+
+    expect(outcome.attempts).toBe(1);
+    expect(collector.envelopePosts).toBe(1);
+    expect(collector.posts).toBe(0);
+    expect(event).toMatchObject({ catcherType: 'errors/default' });
+    expect(event?.payload).toMatchObject({ title: 'E2eMonitorCheck: [e2e:t] rabc sentry-envelope',
+      type: 'error',
+      context: { e2e: { runId: 'rabc',
+        instanceId: 't' } } });
+  });
+
+  it('an envelope with no event is answered 200 and stores nothing', async () => {
+    const outcome = accepted(await clientFor().sendEnvelope(KEY, `${SENT_AT_LINE}\n${JSON.stringify({ type: 'client_report' })}\n{}\n`, signal));
+
+    expect(outcome.attempts).toBe(1);
+    expect(store.all(PROJECT_ID)).toHaveLength(0);
+  });
+
+  it('an unknown key is auth_invalid_token, without the key in the text', async () => {
+    const other = decodeTokenKey(encodeToken(randomUUID(), randomUUID())) ?? '';
+    const outcome = rejected(await clientFor().sendEnvelope(other, ENVELOPE, signal));
+
+    expect(outcome.error.errorClass).toBe('auth_invalid_token');
+    expect(outcome.error.message).not.toContain(other);
+  });
+
+  it('keeps the key out of the facts of every failure', async () => {
+    collector.knobs.envelopeReply = { status: 400,
+      body: '{"code":400,"error":true,"message":"Failed to process Sentry envelope"}' };
+
+    const outcome = rejected(await clientFor().sendEnvelope(KEY, ENVELOPE, signal));
+
+    expect(JSON.stringify(outcome.error.facts)).not.toContain(KEY);
+    expect(JSON.stringify(outcome.error.facts)).not.toContain('sentry_key');
+  });
+
+  it.each([
+    ['a refusal of the envelope', 400, '{"code":400,"error":true,"message":"Failed to process Sentry envelope"}', 'sentry_rejected'],
+    ['a plain 400 of a proxy', 400, 'Bad gateway', 'sentry_rejected'],
+    ['the plain 400 of a collector handler that panicked', 400, 'Bad request', 'collector_unexpected_response'],
+    ['the event limit', 402, '{"code":402,"error":true,"message":"Project has exceeded the events limit"}', 'quota_exhausted'],
+    ['an unexpected status', 404, 'Not found', 'sentry_rejected'],
+    ['a 200 that says error', 200, '{"code":200,"error":true,"message":"x"}', 'sentry_rejected'],
+  ] as const)('%s is %s', async (_name, status, body, expected) => {
+    collector.knobs.envelopeReply = { status,
+      body };
+
+    const outcome = rejected(await clientFor().sendEnvelope(KEY, ENVELOPE, signal));
+
+    expect(outcome.error.errorClass).toBe(expected);
+
+    if (expected === 'sentry_rejected') {
+      expect(outcome.error.facts.status).toBe(status);
+    }
+  });
+
+  it('reads a flat line of an HTML refusal, not the page', async () => {
+    collector.knobs.envelopeReply = { status: 404,
+      body: '<html>\n<body>\n<h1>Not   found</h1>\n</body>\n</html>',
+      contentType: 'text/html' };
+
+    const outcome = rejected(await clientFor().sendEnvelope(KEY, ENVELOPE, signal));
+
+    expect(outcome.error.facts.detail).toBe('HTTP 404 Not found');
+  });
+
+  it('stops reading an endless answer at the limit and calls it a refusal', async () => {
+    const endless = await startEndlessServer();
+
+    try {
+      const outcome = rejected(await clientFor(1000, endless.url).sendEnvelope(KEY, ENVELOPE, signal));
+
+      expect(outcome.error.errorClass).toBe('sentry_rejected');
+    } finally {
+      await endless.close();
+    }
+  });
+
+  it('a 5xx answer is uncertain', async () => {
+    collector.knobs.envelopeReply = { status: 503,
+      body: 'down' };
+
+    expect(uncertain(await clientFor().sendEnvelope(KEY, ENVELOPE, signal)).cause.errorClass).toBe('collector_unavailable');
+  });
+
+  it('a collector that is not there is rejected before the send', async () => {
+    const url = await closeCollector();
+    const outcome = rejected(await clientFor(1000, url).sendEnvelope(KEY, ENVELOPE, signal));
+
+    expect(outcome.error.errorClass).toBe('collector_unavailable');
+    expect(outcome.attempts).toBe(3);
   });
 });

@@ -5,7 +5,7 @@ import { redactDeep } from '../../errors/redact.js';
 import type { CheckError } from '../../errors/taxonomy.js';
 import { ENDPOINTS_PROBE } from '../names.js';
 import { createRunId } from '../send-and-receive/plan.js';
-import { followOutsideSignal } from '../send-and-receive/run.js';
+import { followOutsideSignal } from '../run-steps.js';
 import type { ScenarioDeps } from '../send-and-receive/run.js';
 import { apiAvailabilityStage, collectorAvailabilityStage } from '../send-and-receive/stages.js';
 import { errorOf } from '../send-and-receive/verdict.js';

@@ -16,7 +16,13 @@ export const RUN_TRIGGERS = ['manual', 'schedule'] as const;
 export type RunTrigger = (typeof RUN_TRIGGERS)[number];
 
 /** Conditions under which an `ok` run still deserves a warning. */
-export const DEGRADED_CODES = ['quota_usage', 'single_channel', 'accept_uncertain'] as const;
+export const DEGRADED_CODES = [
+  'quota_usage',
+  'single_channel',
+  'accept_uncertain',
+  'js_worker_not_seen',
+  'grouping_pattern',
+] as const;
 
 /** One of `DEGRADED_CODES`. */
 export type DegradedCode = (typeof DEGRADED_CODES)[number];

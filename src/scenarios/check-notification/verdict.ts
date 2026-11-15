@@ -6,6 +6,7 @@ import type { NotificationChannel } from '../../notifications/types.js';
 import type { ScenarioState } from '../send-and-receive/stages.js';
 import { decideVerdict } from '../send-and-receive/verdict.js';
 import type { Verdict } from '../send-and-receive/verdict.js';
+import { stageWarnings } from '../run-steps.js';
 import { checkLoop, checkNotificationAgainstEvent, checkWebhook } from './stages.js';
 import type { NotificationState } from './stages.js';
 
@@ -57,22 +58,6 @@ function anyArrived(arrivals: Arrivals | undefined): boolean {
 }
 
 /**
- * Collects the warnings the stages wrote.
- * @param stages Recorded stages.
- * @returns Texts in stage order, a single `warning` before a `warnings` list.
- */
-function stageWarnings(stages: readonly StageResult[]): string[] {
-  return stages.flatMap((stage) => {
-    const { warning, warnings } = stage.details ?? {};
-
-    return [
-      ...typeof warning === 'string' ? [warning] : [],
-      ...Array.isArray(warnings) ? warnings.filter((item): item is string => typeof item === 'string') : [],
-    ];
-  });
-}
-
-/**
  * Builds the warnings, replacing «only one channel arrived» by a late-arrival note when the other came after cleanup.
  * @param stages Recorded stages.
  * @param state Run state with the acceptance time.
@@ -110,6 +95,8 @@ function summarize(state: ScenarioState, finalArrivals: Arrivals): RunNotificati
   const [webhook] = finalArrivals.webhook;
   const [loop] = finalArrivals.loop;
   const accepted = state.acceptedAtMs;
+  const [threshold] = finalArrivals.threshold;
+  const repeated = state.repeatAcceptedAtMs;
 
   if (webhook !== undefined && accepted !== undefined) {
     summary.webhook = { latencyMs: Math.round(webhook.atMs - accepted) };
@@ -127,6 +114,10 @@ function summarize(state: ScenarioState, finalArrivals: Arrivals): RunNotificati
 
   if (loop !== undefined && accepted !== undefined) {
     summary.loop = { latencyMs: Math.round(loop.atMs - accepted) };
+  }
+
+  if (threshold !== undefined && repeated !== undefined) {
+    summary.threshold = { latencyMs: Math.round(threshold.atMs - repeated) };
   }
 
   return summary;
@@ -155,9 +146,10 @@ function lateMismatch(notification: NotificationState, title: string, projectId:
  * @param state Run state of the scenario.
  * @param notification State of the notification stages.
  * @param projectId Project of the monitor, for the link in the loop message.
+ * @param repeat Whether the run sent the event a second time; without it no threshold notification may come.
  * @returns Verdict, warnings and the notification summary.
  */
-export function decideNotificationVerdict(stages: readonly StageResult[], state: ScenarioState, notification: NotificationState, projectId: string): NotificationVerdict {
+export function decideNotificationVerdict(stages: readonly StageResult[], state: ScenarioState, notification: NotificationState, projectId: string, repeat: boolean): NotificationVerdict {
   const rest = {
     warnings: buildWarnings(stages, state, notification),
     ...notification.finalArrivals === undefined ? {} : { notification: summarize(state, notification.finalArrivals) },
@@ -200,6 +192,25 @@ export function decideNotificationVerdict(stages: readonly StageResult[], state:
           count }) },
       ...rest };
     }
+  }
+
+  // The threshold is 2, so a POST in a run that sent one event means the rule fired on the first.
+  if (!repeat && finalArrivals.threshold.length > 0) {
+    return { verdict: { status: 'failed',
+      failedStage: 'threshold_formed',
+      error: new CheckError('threshold_early', { detail: 'a threshold POST arrived in a run that sent no repeat' }) },
+    ...rest };
+  }
+
+  const thresholdStage = stages.find(stage => stage.name === 'threshold_formed');
+  const thresholdCount = finalArrivals.threshold.length;
+
+  if (thresholdStage?.status === 'ok' && thresholdCount > 1) {
+    return { verdict: { status: 'failed',
+      failedStage: 'threshold_formed',
+      error: new CheckError('duplicate_notification', { channel: 'threshold',
+        count: thresholdCount }) },
+    ...rest };
   }
 
   return { verdict: base,

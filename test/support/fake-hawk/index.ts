@@ -5,6 +5,8 @@ import { startFakeCollector } from './collector.js';
 import type { FakeCollector } from './collector.js';
 import { startFakeNotifier } from './notifier.js';
 import type { FakeNotifier } from './notifier.js';
+import { createFakeProjects } from './projects.js';
+import type { FakeProjects } from './projects.js';
 import { createFakeRules } from './rules.js';
 import type { FakeRules } from './rules.js';
 import { createFakeStore, objectIdLike } from './store.js';
@@ -14,6 +16,7 @@ import { decodeTokenKey, encodeToken } from './token.js';
 export * from './api.js';
 export * from './collector.js';
 export * from './notifier.js';
+export * from './projects.js';
 export * from './rules.js';
 export * from './store.js';
 export * from './token.js';
@@ -28,6 +31,8 @@ export interface FakeHawk {
   store: FakeStore;
   /** Notification rules shared by the API and the notifier. */
   rules: FakeRules;
+  /** Workspaces and projects shared by the API and the collector. */
+  projects: FakeProjects;
   /** Notifier with the webhook and loop senders. */
   notifier: FakeNotifier;
   /** 24 hex project id. */
@@ -55,10 +60,20 @@ export async function startFakeHawk(): Promise<FakeHawk> {
   const token = encodeToken(randomUUID(), randomUUID());
   const email = 'monitor@example.com';
   const password = randomUUID();
+  const projects = createFakeProjects();
+
+  projects.addWorkspace('foreign-workspace');
+  projects.addWorkspace('fake-workspace');
+  projects.add({ id: projectId,
+    name: 'fake-project',
+    workspaceId: 'fake-workspace',
+    token });
+
   const collector = await startFakeCollector({ store,
     projectId,
     validTokenKey: decodeTokenKey(token) ?? '',
-    blocked: () => false });
+    blocked: () => false,
+    projects });
   // The switches live in the API's knobs, which exist only after it starts, so they are read lazily.
   let fakeApi: FakeApi | undefined;
   const rules = createFakeRules({ allowPrivateWebhook: () => fakeApi?.knobs.allowPrivateWebhook ?? true,
@@ -68,7 +83,8 @@ export async function startFakeHawk(): Promise<FakeHawk> {
     email,
     password,
     token,
-    rules });
+    rules,
+    projects });
 
   fakeApi = api;
 
@@ -84,6 +100,7 @@ export async function startFakeHawk(): Promise<FakeHawk> {
     api,
     store,
     rules,
+    projects,
     notifier,
     projectId,
     email,
@@ -103,6 +120,7 @@ export async function startFakeHawk(): Promise<FakeHawk> {
 export function fakeHawkEnv(hawk: FakeHawk): Record<string, string> {
   return {
     INSTANCE_ID: 'fake',
+    SCENARIOS: 'send-and-receive-event',
     HAWK_API_URL: hawk.api.url,
     HAWK_COLLECTOR_URL: hawk.collector.url,
     HAWK_INTEGRATION_TOKEN: hawk.token,

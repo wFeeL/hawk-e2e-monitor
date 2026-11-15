@@ -106,7 +106,8 @@ describe('runProvisionCommand', () => {
     expect(JSON.parse(captured.stdout.trim())).toMatchObject({ action: 'created',
       deleted: 0,
       matchChanged: true });
-    expect(hawk.rules.list(hawk.projectId)).toHaveLength(2);
+    // The default rule of the project and the two of the monitor.
+    expect(hawk.rules.list(hawk.projectId)).toHaveLength(3);
   });
 
   it('--no-wait does not wait', async () => {

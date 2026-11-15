@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
+import { Kind, buildSchema, parse, validate } from 'graphql';
 import { createServer } from 'node:http';
 import type { Server, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { buildSchema, parse, validate } from 'graphql';
 import type { OperationDefinitionNode } from 'graphql';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { isCheckError } from '../../src/errors/taxonomy.js';
@@ -13,10 +13,10 @@ import type { FakeApiError, FakeHawk } from '../support/fake-hawk/index.js';
 import { systemClock } from '../../src/time/clock.js';
 import { GraphqlFailure, createGraphqlTransport } from '../../src/clients/graphql.js';
 import type { GraphqlOperation, GraphqlTransport } from '../../src/clients/graphql.js';
-import { ALL_OPERATIONS, CREATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE, EVENT_CARD, FIND_EVENTS, LOGIN, NOTIFICATION_RULES, PROJECT_TOKEN, REFRESH_TOKENS, REMOVE_EVENT, UPDATE_NOTIFICATION_RULE, WORKSPACE_QUOTA } from '../../src/clients/operations.js';
+import { ALL_OPERATIONS, CREATE_NOTIFICATION_RULE, CREATE_PROJECT, RELEASE_DETAILS, REMOVE_PROJECT, WORKSPACE_PROJECTS, DELETE_NOTIFICATION_RULE, EVENT, PROJECT_DAILY_EVENTS, LOGIN, NOTIFICATION_RULES, PROJECT_TOKEN, REFRESH_TOKENS, REMOVE_EVENT, UPDATE_NOTIFICATION_RULE, WORKSPACE_QUOTA } from '../../src/clients/operations.js';
 
 const FIXTURE = new URL('../fixtures/hawk-api.graphql', import.meta.url);
-const OPERATION_COUNT = 11;
+const OPERATION_COUNT = 15;
 
 /** What the Login mutation returns inside `data`. */
 interface LoginData {
@@ -126,22 +126,35 @@ afterEach(async () => {
 describe('operations', () => {
   const schema = buildSchema(readFileSync(FIXTURE, 'utf8'));
 
-  it('lists all eleven operations', () => {
+  it('lists all the operations', () => {
     expect(ALL_OPERATIONS).toHaveLength(OPERATION_COUNT);
-    expect(ALL_OPERATIONS).toEqual([LOGIN, REFRESH_TOKENS, PROJECT_TOKEN, WORKSPACE_QUOTA, FIND_EVENTS, EVENT_CARD, REMOVE_EVENT, NOTIFICATION_RULES, CREATE_NOTIFICATION_RULE, UPDATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE]);
+    expect(ALL_OPERATIONS).toEqual([LOGIN, REFRESH_TOKENS, PROJECT_TOKEN, WORKSPACE_QUOTA, PROJECT_DAILY_EVENTS, EVENT, REMOVE_EVENT, NOTIFICATION_RULES, CREATE_NOTIFICATION_RULE, UPDATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE, CREATE_PROJECT, REMOVE_PROJECT, WORKSPACE_PROJECTS, RELEASE_DETAILS]);
   });
 
   it.each(ALL_OPERATIONS.map(operation => [operation.name, operation] as const))(
     'every operation validates against the Hawk schema fixture: %s',
     (_name, operation) => {
       const document = parse(operation.document);
-      const definition = document.definitions[0] as OperationDefinitionNode;
+      const operations = document.definitions.filter((definition): definition is OperationDefinitionNode => definition.kind === Kind.OPERATION_DEFINITION);
 
       expect(validate(schema, document)).toEqual([]);
-      expect(document.definitions).toHaveLength(1);
-      expect(definition.name?.value).toBe(operation.name);
+      expect(operations).toHaveLength(1);
+      expect(operations[0]?.name?.value).toBe(operation.name);
     }
   );
+
+  it('reads events with the documents of Garage, fragment included', () => {
+    for (const operation of [PROJECT_DAILY_EVENTS, EVENT]) {
+      expect(operation.document).toContain('fragment Event on Event');
+      expect(operation.document).toContain('fragment eventBacktrace on EventBacktraceFrame');
+      expect(operation.document).toContain('...Event');
+      expect(operation.idempotent).toBe(true);
+    }
+
+    expect(parse(EVENT.document).definitions.filter(definition => definition.kind === Kind.FRAGMENT_DEFINITION)).toHaveLength(3);
+    expect(EVENT.document).toContain('query Event($projectId: ID!, $eventId: ID!, $originalEventId: ID!)');
+    expect(PROJECT_DAILY_EVENTS.document).toContain('dailyEventsPortion(sort: $sort, filters: $filters, search: $search, release: $release, assignee: $assignee, nextCursor: $cursor)');
+  });
 
   it('a typo is caught', () => {
     const typo = PROJECT_TOKEN.document.replace('token', 'toke');
@@ -151,9 +164,11 @@ describe('operations', () => {
     expect(errors[0]?.message).toContain('toke');
   });
 
-  it('only CreateNotificationRule and RemoveEvent are not idempotent', () => {
+  it('only the operations that change something and cannot be repeated blindly are not idempotent', () => {
     expect(ALL_OPERATIONS.filter(operation => !operation.idempotent).map(operation => operation.name))
-      .toEqual(['RemoveEvent', 'CreateNotificationRule']);
+      .toEqual(['RemoveEvent', 'CreateNotificationRule', 'CreateProject', 'RemoveProject']);
+    expect(WORKSPACE_PROJECTS.idempotent).toBe(true);
+    expect(RELEASE_DETAILS.idempotent).toBe(true);
   });
 
   it('CreateNotificationRule is not idempotent', () => {
@@ -330,14 +345,71 @@ describe('graphql transport', () => {
     }
   });
 
-  it('INTERNAL_SERVER_ERROR is api_error', async () => {
-    hawk.api.knobs.errors = injected('EventCard', 'INTERNAL_SERVER_ERROR', 'boom');
+  it('INTERNAL_SERVER_ERROR is api_error on an operation of the monitor', async () => {
+    hawk.api.knobs.errors = injected('RemoveEvent', 'INTERNAL_SERVER_ERROR', 'boom');
 
     const token = await login(transportFor());
-    const error = checkError(await failureOf(transportFor().request(EVENT_CARD, { projectId: hawk.projectId,
+    const error = checkError(await failureOf(transportFor().request(REMOVE_EVENT, { projectId: hawk.projectId,
       eventId: 'a'.repeat(24) }, token, signal)), 'api_error');
 
     expect(error.facts.detail).toBe('boom');
+  });
+
+  it.each([EVENT, PROJECT_DAILY_EVENTS])('errors[] on the Garage document $name is api_garage_query_failed', async (operation) => {
+    const token = await login(transportFor());
+
+    for (const code of ['INTERNAL_SERVER_ERROR', 'BAD_USER_INPUT', 'GRAPHQL_VALIDATION_FAILED']) {
+      hawk.api.knobs.errors = injected(operation.name, code, 'boom');
+
+      const error = checkError(await failureOf(transportFor().request(operation, { projectId: hawk.projectId,
+        eventId: 'a'.repeat(24),
+        originalEventId: 'a'.repeat(24),
+        search: 'x' }, token, signal)), 'api_garage_query_failed');
+
+      expect(error.facts.detail).toBe('boom');
+      expect(error.culprit).toBe('hawk');
+    }
+  });
+
+  it('errors[] on a Garage document answered with HTTP 400 is read as errors[]', async () => {
+    const token = await login(transportFor());
+
+    hawk.api.knobs.errors = Object.fromEntries([['Event', { code: 'GRAPHQL_VALIDATION_FAILED',
+      message: 'Cannot query field "x" on type "Event".',
+      status: 400 }]]);
+
+    const error = checkError(await failureOf(transportFor().request(EVENT, { projectId: hawk.projectId,
+      eventId: 'a'.repeat(24),
+      originalEventId: 'a'.repeat(24) }, token, signal)), 'api_garage_query_failed');
+
+    expect(error.facts).toMatchObject({ status: 400,
+      detail: 'Cannot query field "x" on type "Event".' });
+  });
+
+  it('HTTP 400 on an operation of the monitor stays api_query_rejected', async () => {
+    hawk.api.knobs.errors = Object.fromEntries([['ProjectToken', { code: 'GRAPHQL_VALIDATION_FAILED',
+      message: 'bad',
+      status: 400 }]]);
+
+    checkError(await failureOf(transportFor().request(PROJECT_TOKEN, { projectId: hawk.projectId }, 'x', signal)), 'api_query_rejected');
+  });
+
+  it('FORBIDDEN and the sign-in codes keep their own path on a Garage document', async () => {
+    const token = await login(transportFor());
+
+    checkError(await failureOf(transportFor().request(EVENT, { projectId: 'c'.repeat(24),
+      eventId: 'a'.repeat(24),
+      originalEventId: 'a'.repeat(24) }, token, signal)), 'api_forbidden');
+
+    hawk.api.knobs.errors = injected('Event', 'UNAUTHENTICATED', 'nope');
+
+    expect(await failureOf(transportFor().request(EVENT, { projectId: hawk.projectId,
+      eventId: 'a'.repeat(24),
+      originalEventId: 'a'.repeat(24) }, token, signal))).toBeInstanceOf(GraphqlFailure);
+  });
+
+  it('only the two Garage documents carry the garage flag', () => {
+    expect(ALL_OPERATIONS.filter(operation => operation.garage === true)).toEqual([PROJECT_DAILY_EVENTS, EVENT]);
   });
 
   it.each(['UNAUTHENTICATED', 'ACCESS_TOKEN_EXPIRED_ERROR', 'SSO_REQUIRED'])('%s is GraphqlFailure', async (code) => {

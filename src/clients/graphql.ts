@@ -23,6 +23,8 @@ export interface GraphqlOperation {
   document: string;
   /** True when sending it twice does no harm. */
   idempotent: boolean;
+  /** The document is one of the Garage web client; Hawk refusing it means Garage is broken for users. */
+  garage?: boolean;
 }
 
 /** An error code the layer above decides on, such as an expired token. */
@@ -199,7 +201,8 @@ export function createGraphqlTransport(options: GraphqlTransportOptions): Graphq
       const message = typeof first?.message === 'string' ? first.message : '';
       const code = typeof first?.extensions?.code === 'string' ? first.extensions.code : '';
 
-      if (response.status === HttpStatus.badRequest) {
+      // Apollo answers a document that fails validation with HTTP 400 and `errors[]`; for Garage documents the list says what is wrong.
+      if (response.status === HttpStatus.badRequest && !(operation.garage === true && first)) {
         throw new CheckError('api_query_rejected', { url,
           status: response.status,
           detail: message || undefined });
@@ -216,6 +219,12 @@ export function createGraphqlTransport(options: GraphqlTransportOptions): Graphq
           throw new CheckError('api_forbidden', { url,
             status: response.status,
             ...typeof projectId === 'string' ? { projectId } : {},
+            detail: message });
+        }
+
+        if (operation.garage === true) {
+          throw new CheckError('api_garage_query_failed', { url,
+            status: response.status,
             detail: message });
         }
 

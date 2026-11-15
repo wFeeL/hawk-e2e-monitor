@@ -10,11 +10,11 @@ import type { Provisioner } from '../../notifications/provisioning.js';
 import type { Receiver } from '../../receiver/server.js';
 import { planRun } from '../send-and-receive/plan.js';
 import type { PlanOptions } from '../send-and-receive/plan.js';
-import { abortedStage, followOutsideSignal, toCleanupResult } from '../send-and-receive/run.js';
+import { abortedStage, followOutsideSignal, toCleanupResult } from '../run-steps.js';
 import type { ScenarioDeps } from '../send-and-receive/run.js';
 import { apiAvailabilityStage, cleanupStage, collectorAcceptStage, collectorAvailabilityStage, eventRepeatedStage, eventVisibleStage } from '../send-and-receive/stages.js';
 import type { ScenarioState } from '../send-and-receive/stages.js';
-import { notificationBeforeSend, notificationFormedStage, notificationSetupStage } from './stages.js';
+import { notificationBeforeSend, notificationFormedStage, notificationSetupStage, thresholdBeforeRepeat, thresholdFormedStage } from './stages.js';
 import type { LastHostname, NotificationContext, NotificationState } from './stages.js';
 import { decideNotificationVerdict } from './verdict.js';
 import { CHECK_NOTIFICATION } from '../names.js';
@@ -92,11 +92,12 @@ export async function runCheckNotification(deps: NotificationDeps, options: Plan
 
   const steps: Step[] = [
     [collectorAvailabilityStage(timeouts.collectorAvailability)],
-    [apiAvailabilityStage(timeouts.apiAvailability)],
+    [apiAvailabilityStage(timeouts.apiAvailability, { title: plan.title })],
     [notificationSetupStage(settings.setupTimeoutMs)],
     [collectorAcceptStage(timeouts.collectorAccept, notificationBeforeSend(context))],
     [eventVisibleStage(timeouts.eventVisible), notificationFormedStage(settings.timeoutMs + config.httpTimeoutMs)],
-    [eventRepeatedStage(timeouts.eventRepeated)],
+    [eventRepeatedStage(timeouts.eventRepeated, thresholdBeforeRepeat(context))],
+    [thresholdFormedStage(settings.timeoutMs + config.httpTimeoutMs)],
   ];
   const stages: StageResult[] = [];
 
@@ -140,7 +141,7 @@ export async function runCheckNotification(deps: NotificationDeps, options: Plan
     receiver.release(plan.runId);
   }
 
-  const decided = decideNotificationVerdict(stages, state, notification, config.hawk.projectId);
+  const decided = decideNotificationVerdict(stages, state, notification, config.hawk.projectId, plan.repeat);
   const { verdict } = decided;
   const cleanupStageResult = stages.at(-1);
   const result: RunResult = {

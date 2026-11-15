@@ -1,5 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { MS_PER_SECOND } from '../../../src/time/units.js';
+import { groom } from './grouper.js';
+import { createFakeReleases } from './releases.js';
+import type { FakeReleases } from './releases.js';
+import type { GrouperKnobs } from './grouper.js';
 
 const SEARCH_LIMIT = 50;
 
@@ -21,6 +25,8 @@ export interface StoredEvent {
   lastRepetitionId: string | undefined;
   /** Time the group first arrived, in Unix seconds as Hawk reports it. */
   timestamp: number;
+  /** Distinct `user.id` values seen in the group. */
+  usersAffected: number;
 }
 
 /** Called after an event was stored or repeated. */
@@ -28,6 +34,10 @@ export type StoreListener = (projectId: string, event: StoredEvent, isNew: boole
 
 /** In-memory events with the grouping behavior of the Hawk grouper worker. */
 export interface FakeStore {
+  /** Mutable switches of the transformations the grouper does. */
+  readonly knobs: GrouperKnobs;
+  /** Releases with source maps, which the JavaScript worker reads. */
+  readonly releases: FakeReleases;
   /**
    * Stores an event or counts a repetition of an existing group.
    * @param projectId Project the event belongs to.
@@ -106,6 +116,22 @@ export function createFakeStore(newId: () => string = objectIdLike): FakeStore {
   // Map by project, then by original event id; Map keeps insertion order.
   const projects = new Map<string, Map<string, StoredEvent>>();
   const listeners = new Set<StoreListener>();
+  const knobs: GrouperKnobs = {};
+  const releases = createFakeReleases();
+  const users = new Map<string, Set<string>>();
+
+  const noteUser = (event: StoredEvent, payload: Record<string, unknown>): void => {
+    const { user } = payload;
+    const id = typeof user === 'object' && user !== null ? (user as Record<string, unknown>).id : undefined;
+
+    if (typeof id === 'string') {
+      const seen = users.get(event.id) ?? new Set<string>();
+
+      seen.add(id);
+      users.set(event.id, seen);
+      event.usersAffected = seen.size;
+    }
+  };
 
   const announce = (projectId: string, event: StoredEvent, isNew: boolean): void => {
     for (const listener of listeners) {
@@ -128,7 +154,8 @@ export function createFakeStore(newId: () => string = objectIdLike): FakeStore {
     return events;
   };
 
-  const ingest: FakeStore['ingest'] = (projectId, catcherType, payload) => {
+  const ingest: FakeStore['ingest'] = (projectId, catcherType, received) => {
+    const payload = groom(catcherType, received, knobs, release => releases.find(projectId, release));
     const events = eventsOf(projectId);
     const groupHash = createHash('sha256').update(catcherType + titleOf(payload))
       .digest('hex');
@@ -140,6 +167,7 @@ export function createFakeStore(newId: () => string = objectIdLike): FakeStore {
       existing.totalCount += 1;
       existing.repetitionIds.push(repetitionId);
       existing.lastRepetitionId = repetitionId;
+      noteUser(existing, payload);
       announce(projectId, existing, false);
 
       return existing;
@@ -154,8 +182,10 @@ export function createFakeStore(newId: () => string = objectIdLike): FakeStore {
       repetitionIds: [],
       lastRepetitionId: undefined,
       timestamp: Math.floor(Date.now() / MS_PER_SECOND),
+      usersAffected: 0,
     };
 
+    noteUser(created, payload);
     events.set(created.id, created);
     announce(projectId, created, true);
 
@@ -198,6 +228,8 @@ export function createFakeStore(newId: () => string = objectIdLike): FakeStore {
   };
 
   return {
+    knobs,
+    releases,
     ingest,
     search,
     setTimestamp,

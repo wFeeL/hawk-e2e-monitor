@@ -5,10 +5,14 @@ import type { AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import type { FakeStore, StoredEvent } from './store.js';
+import type { FakeProjects } from './projects.js';
+import type { FakeReleaseFile } from './releases.js';
 import { decodeTokenKey } from './token.js';
 import { PLAIN_TYPE } from './content-types.js';
 
 const MAX_BODY_BYTES = 1_000_000;
+// The `Bearer ` prefix of the Authorization header.
+const BEARER_LENGTH = 7;
 const JSON_TYPE = 'text/json; charset=utf8';
 
 /** A canned collector answer. */
@@ -62,7 +66,15 @@ export interface FakeCollectorKnobs {
   duplicateOnAccept?: boolean;
   /** Delay before the event reaches the store (real timers). */
   processingDelayMs?: number;
-  /** Rewrites the payload before it is stored. */
+  /** Replaces the answer of `/release`; the release is NOT taken. */
+  releaseReply?: CollectorReplyOverride;
+  /** Replaces the answer of the envelope path; the envelope is NOT taken. */
+  envelopeReply?: CollectorReplyOverride;
+  /** Time the release worker takes to save a release after the collector said 200, ms (real timers). */
+  releaseSaveDelayMs?: number;
+  /** The collector says 200 to a release and the worker never saves it. */
+  dropReleases?: boolean;
+  /** Rewrites the payload before it is stored, also for the events of an envelope. */
   mutatePayload?: (payload: Record<string, unknown>) => Record<string, unknown>;
   /**
    * Awaited before the answer of an accepted event, after its (possibly delayed) `ingest`.
@@ -83,6 +95,10 @@ export interface FakeCollector {
   readonly posts: number;
   /** Number of WebSocket messages received. */
   readonly wsMessages: number;
+  /** Number of `POST /release` requests of any outcome. */
+  readonly releasePosts: number;
+  /** Number of `POST /api/0/envelope/` requests of any outcome. */
+  readonly envelopePosts: number;
   /**
    * Counts open WebSocket connections.
    * @returns Size of the server's client set.
@@ -105,6 +121,8 @@ export interface FakeCollectorOptions {
   validTokenKey: string;
   /** Answers 402 when it returns true. */
   blocked?: () => boolean;
+  /** Projects whose tokens the collector knows besides the valid one; their events go to their own project. */
+  projects?: FakeProjects;
   /** Port to listen on, to come back at the address of a collector that was closed; random by default. */
   port?: number;
 }
@@ -136,6 +154,90 @@ function jsonAnswer(code: number, message: string): Answer {
     delayMs: 0 };
 }
 
+/** An event the collector made of an envelope. */
+interface EnvelopeEvent {
+  /** Worker that takes the event. */
+  catcherType: string;
+  /** Hawk payload. */
+  payload: Record<string, unknown>;
+}
+
+/** The exception of a Sentry event. */
+interface SentryException {
+  /** Exceptions, the first one gives the title. */
+  values?: Array<Record<string, unknown>>;
+}
+
+/** The SDK of a Sentry event. */
+interface SentrySdk {
+  /** Name of the SDK. */
+  name?: string;
+}
+
+const JAVASCRIPT_SDKS = ['browser', 'react', 'vue', 'angular', 'capacirtor', 'electron'];
+
+/**
+ * Makes a Hawk event of a Sentry one: the title is the type and the value, `contexts` become `context`, `level` becomes `type`.
+ * @param event Sentry event.
+ * @returns Worker and payload.
+ */
+function toEvent(event: Record<string, unknown>): EnvelopeEvent {
+  const exception = ((event.exception as SentryException | undefined)?.values ?? [])[0];
+  const sdk = (event.sdk as SentrySdk | undefined)?.name ?? '';
+  const title = exception === undefined
+    ? typeof event.message === 'string' ? event.message : 'Unknown: '
+    : `${typeof exception.type === 'string' && exception.type !== '' ? exception.type : 'Unknown'}: ${typeof exception.value === 'string' ? exception.value : ''}`;
+
+  return { catcherType: JAVASCRIPT_SDKS.some(name => sdk.includes(name)) ? 'errors/javascript' : 'errors/default',
+    payload: { title,
+      type: typeof event.level === 'string' && event.level !== '' ? event.level : 'error',
+      ...event.contexts === undefined ? {} : { context: event.contexts },
+      ...typeof event.release === 'string' ? { release: event.release } : {} } };
+}
+
+/**
+ * Turns an envelope into Hawk events the way the converter of the collector does.
+ * @param raw Envelope text: a header, then item headers each followed by its payload, one JSON per line.
+ * @returns The events, or undefined when the envelope cannot be read.
+ */
+function parseEnvelope(raw: string): EnvelopeEvent[] | undefined {
+  const lines = raw.split('\n').filter(line => line.trim() !== '');
+  const events: EnvelopeEvent[] = [];
+
+  try {
+    JSON.parse(lines[0] ?? '');
+
+    for (let index = 1; index < lines.length; index += 2) {
+      const header = JSON.parse(lines[index] ?? '') as Record<string, unknown>;
+      const body = JSON.parse(lines[index + 1] ?? '') as Record<string, unknown>;
+
+      if (header.type === 'event') {
+        events.push(toEvent(body));
+      }
+    }
+  } catch {
+    return undefined;
+  }
+
+  return events;
+}
+
+/**
+ * Finds the bundle a map describes, as the release worker does.
+ * @param mapName Name of the map file.
+ * @param content Text of the map.
+ * @returns The `file` of the map, or the map name without `.map`.
+ */
+function originOf(mapName: string, content: string): string {
+  try {
+    const { file } = JSON.parse(content) as Record<string, unknown>;
+
+    return typeof file === 'string' ? file : mapName.replace(/\.map$/u, '');
+  } catch {
+    return mapName.replace(/\.map$/u, '');
+  }
+}
+
 /**
  * Reads a string field that must be a string when present.
  * @param record Parsed body.
@@ -164,6 +266,8 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
   const wss = new WebSocketServer({ noServer: true });
   let posts = 0;
   let wsMessages = 0;
+  let releasePosts = 0;
+  let envelopePosts = 0;
   let submissions = 0;
 
   const later = (action: () => void, delayMs: number): void => {
@@ -175,16 +279,17 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
     timers.add(timer);
   };
 
-  const ingest = (catcherType: string, payload: Record<string, unknown>): StoredEvent => store.ingest(projectId, catcherType, payload);
+  const ingest = (target: string, catcherType: string, payload: Record<string, unknown>): StoredEvent => store.ingest(target, catcherType, payload);
 
   /**
    * Stores the event.
    * @param submission Number of the submission.
+   * @param target Project the event goes to.
    * @param catcherType Catcher type of the message.
    * @param payload Event payload.
    * @returns The stored event once stored, `'dropped'` when the knob drops it, undefined when the ingest is delayed and nobody holds the answer.
    */
-  const accept = async (submission: number, catcherType: string, payload: Record<string, unknown>): Promise<StoredEvent | 'dropped' | undefined> => {
+  const accept = async (submission: number, target: string, catcherType: string, payload: Record<string, unknown>): Promise<StoredEvent | 'dropped' | undefined> => {
     const drop = typeof knobs.dropEvents === 'function' ? knobs.dropEvents(submission) : knobs.dropEvents === true;
 
     if (drop) {
@@ -197,7 +302,7 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
       let last: StoredEvent | undefined;
 
       for (let copy = 0; copy < copies; copy += 1) {
-        last = ingest(catcherType, structuredClone(stored));
+        last = ingest(target, catcherType, structuredClone(stored));
       }
 
       return last;
@@ -268,7 +373,9 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
       return jsonAnswer(400, 'Token decoding error');
     }
 
-    if (key !== validTokenKey) {
+    const target = key === validTokenKey ? projectId : options.projects?.byTokenKey(key)?.id;
+
+    if (target === undefined) {
       return jsonAnswer(400, `Integration token invalid: ${key}`);
     }
 
@@ -282,7 +389,7 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
       return jsonAnswer(400, 'Invalid payload JSON format');
     }
 
-    const stored = await accept(submission, catcherType, payload as Record<string, unknown>);
+    const stored = await accept(submission, target, catcherType, payload as Record<string, unknown>);
 
     if (stored !== 'dropped' && knobs.holdReply) {
       await knobs.holdReply(stored);
@@ -335,6 +442,120 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
       delayMs: 0 });
   };
 
+  /**
+   * Answers a release upload the way the release handler of the collector does, then saves it as the release worker would.
+   * @param raw Request body.
+   * @param headers Request headers.
+   * @returns Answer to send.
+   */
+  const handleRelease = async (raw: Buffer, headers: IncomingMessage['headers']): Promise<Answer> => {
+    const auth = headers.authorization ?? '';
+
+    if (auth.length < BEARER_LENGTH) {
+      return jsonAnswer(400, 'Provide Authorization header');
+    }
+
+    let form: FormData;
+
+    try {
+      form = await new Response(new Uint8Array(raw), { headers: new Headers([['content-type', headers['content-type'] ?? '']]) }).formData();
+    } catch {
+      return jsonAnswer(400, 'Multipart form is not provided');
+    }
+
+    const key = decodeTokenKey(auth.slice(BEARER_LENGTH));
+
+    if (key === undefined) {
+      return jsonAnswer(400, 'Token decoding error');
+    }
+
+    const releases = form.getAll('release');
+
+    if (releases.length !== 1 || typeof releases[0] !== 'string') {
+      return jsonAnswer(400, releases.length === 0 ? 'provide `release` form value' : 'provide single `release` form value');
+    }
+
+    const target = key === validTokenKey ? projectId : options.projects?.byTokenKey(key)?.id;
+
+    if (target === undefined) {
+      return jsonAnswer(400, `Integration token invalid: ${key}`);
+    }
+
+    if (options.blocked?.() === true) {
+      return jsonAnswer(402, 'Project has exceeded the events limit');
+    }
+
+    const files: FakeReleaseFile[] = [];
+
+    for (const [, value] of form.entries()) {
+      if (typeof value !== 'string') {
+        const content = await value.text();
+
+        if (content.trim() !== '') {
+          files.push({ mapFileName: value.name,
+            originFileName: originOf(value.name, content),
+            content });
+        }
+      }
+    }
+
+    if (knobs.dropReleases !== true) {
+      const save = (): void => {
+        store.releases.save(target, releases[0] as string, files);
+      };
+
+      if (knobs.releaseSaveDelayMs === undefined || knobs.releaseSaveDelayMs <= 0) {
+        save();
+      } else {
+        later(save, knobs.releaseSaveDelayMs);
+      }
+    }
+
+    return { ...jsonAnswer(200, 'OK'),
+      delayMs: knobs.replyDelayMs ?? 0 };
+  };
+
+  /**
+   * Answers a Sentry envelope the way the Sentry handler of the collector does: events are made into Hawk events, other items are skipped.
+   * @param raw Request body.
+   * @param url Address of the request, whose query may carry the key.
+   * @param headers Request headers, which may carry the key.
+   * @returns Answer to send.
+   */
+  const handleEnvelope = (raw: string, url: URL, headers: IncomingMessage['headers']): Answer => {
+    const authKey = /sentry_key=([^,\s]+)/u.exec(String(headers['x-sentry-auth'] ?? ''))?.[1];
+    const key = url.searchParams.get('sentry_key') ?? authKey;
+
+    if (key === undefined) {
+      return jsonAnswer(400, 'X-Sentry-Auth header is missing');
+    }
+
+    const target = key === validTokenKey ? projectId : options.projects?.byTokenKey(key)?.id;
+
+    if (target === undefined) {
+      return jsonAnswer(400, `Integration token invalid: ${key}`);
+    }
+
+    const events = parseEnvelope(raw);
+
+    if (events === undefined) {
+      return jsonAnswer(400, 'Failed to process Sentry envelope');
+    }
+
+    if (options.blocked?.() === true && events.length > 0) {
+      return jsonAnswer(402, 'Project has exceeded the events limit');
+    }
+
+    if (knobs.dropEvents !== true) {
+      for (const event of events) {
+        ingest(target, event.catcherType, knobs.mutatePayload ? knobs.mutatePayload(structuredClone(event.payload)) : event.payload);
+      }
+    }
+
+    return { ...jsonAnswer(200, 'OK'),
+      delayMs: knobs.replyDelayMs ?? 0 };
+  };
+
   const notFound = (response: ServerResponse): void => {
     send(response, { status: 404,
       body: 'Not found',
@@ -356,6 +577,57 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
 
     if (pathname === '/health') {
       health(response);
+
+      return;
+    }
+
+    if (pathname === '/release' && request.method === 'POST') {
+      releasePosts += 1;
+
+      const parts: Buffer[] = [];
+
+      request.on('data', (chunk: Buffer) => parts.push(chunk));
+      request.on('end', () => {
+        const override = knobs.releaseReply;
+
+        if (override) {
+          send(response, { status: override.status,
+            body: override.body,
+            contentType: override.contentType ?? JSON_TYPE,
+            delayMs: 0 });
+
+          return;
+        }
+
+        handleRelease(Buffer.concat(parts), request.headers).then((answer) => {
+          send(response, answer);
+        }, () => {
+          send(response, { status: 500,
+            body: 'Internal error',
+            contentType: PLAIN_TYPE,
+            delayMs: 0 });
+        });
+      });
+
+      return;
+    }
+
+    if (pathname === '/api/0/envelope/' && request.method === 'POST') {
+      envelopePosts += 1;
+
+      const parts: Buffer[] = [];
+
+      request.on('data', (chunk: Buffer) => parts.push(chunk));
+      request.on('end', () => {
+        const override = knobs.envelopeReply;
+
+        send(response, override
+          ? { status: override.status,
+              body: override.body,
+              contentType: override.contentType ?? JSON_TYPE,
+              delayMs: 0 }
+          : handleEnvelope(Buffer.concat(parts).toString('utf8'), new URL(request.url ?? '/', 'http://127.0.0.1'), request.headers));
+      });
 
       return;
     }
@@ -464,6 +736,12 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
     },
     get wsMessages() {
       return wsMessages;
+    },
+    get releasePosts() {
+      return releasePosts;
+    },
+    get envelopePosts() {
+      return envelopePosts;
     },
     wsClients: () => wss.clients.size,
     async close() {

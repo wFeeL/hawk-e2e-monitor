@@ -4,6 +4,12 @@ export const CHANNELS = ['webhook', 'loop'] as const;
 /** One of `CHANNELS`. */
 export type NotificationChannel = (typeof CHANNELS)[number];
 
+/** Paths the receiver answers on: the channels of the rules and the threshold webhook, which is a rule of its own. */
+export const ARRIVAL_KINDS = [...CHANNELS, 'threshold'] as const;
+
+/** One of `ARRIVAL_KINDS`. */
+export type ArrivalKind = (typeof ARRIVAL_KINDS)[number];
+
 /** Settings of one channel of a rule. */
 export interface ChannelSettings {
   /** Whether the channel receives notifications. */
@@ -54,14 +60,18 @@ export interface NotificationRuleInput {
   projectId: string;
   /** Whether the rule is on. */
   isEnabled: boolean;
-  /** Only new events. */
-  whatToReceive: 'ONLY_NEW';
+  /** Only new events, or every event once the threshold is reached. */
+  whatToReceive: 'ONLY_NEW' | 'SEEN_MORE';
   /** Words of which at least one must be in the title. */
   including: string[];
   /** Words that keep an event out. */
   excluding: string[];
   /** Channels; Hawk needs all of them but the webhook, and the monitor sets the webhook. */
   channels: NotificationRuleInputChannels;
+  /** Events of one group in the period that trigger a `SEEN_MORE` rule. */
+  threshold?: number | null;
+  /** Period of a `SEEN_MORE` rule, ms. */
+  thresholdPeriod?: number | null;
 }
 
 /** Channels of a rule input: the webhook is always set. */

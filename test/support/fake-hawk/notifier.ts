@@ -24,6 +24,8 @@ export interface FakeNotifierKnobs {
   webhookRawBody?: string;
   /** Replaces all headers of the webhook. */
   webhookHeaders?: Record<string, string>;
+  /** A rule that counts also sends on the first event of a group, as a notifier that ignores the threshold would. */
+  fireThresholdOnFirst?: boolean;
   /** How long the notifier keeps the rules it read, counted from the read; 0 reads them every time. */
   ruleCacheMs?: number;
 }
@@ -104,6 +106,14 @@ interface CachedRules {
   filledAt: number;
 }
 
+/** Events of one group counted for one rule in the current period. */
+interface Counter {
+  /** Time the period started, ms. */
+  startedAt: number;
+  /** Events counted so far. */
+  count: number;
+}
+
 /** Holder of a timer that its own callback has to clear. */
 interface TimerHandle {
   /** The running timer. */
@@ -177,6 +187,7 @@ export function startFakeNotifier(options: FakeNotifierOptions): FakeNotifier {
   const sent: SentRecord[] = [];
   const cache = new Map<string, CachedRules>();
   const deliveries = new Map<string, Deferred>();
+  const counters = new Map<string, Counter>();
   const sleepers = new Set<() => void>();
   const idleWaiters: Array<() => void> = [];
   const stop = new AbortController();
@@ -264,7 +275,28 @@ export function startFakeNotifier(options: FakeNotifierOptions): FakeNotifier {
     }
   };
 
-  const sendWebhook = async (url: string, event: StoredEvent): Promise<void> => {
+  /**
+   * Counts an event for a rule the way the notifier does: per rule, group and period, restarting when the period is over.
+   * @param rule Rule with a threshold period.
+   * @param event Event that was stored.
+   * @returns Events of the group counted in the period, this one included.
+   */
+  const countFor = (rule: NotificationRule, event: StoredEvent): number => {
+    const key = `${rule.id}:${event.groupHash}:${String(rule.thresholdPeriod)}`;
+    const at = now();
+    const known = counters.get(key);
+    const counter: Counter = known === undefined || at >= known.startedAt + (rule.thresholdPeriod ?? 0)
+      ? { startedAt: at,
+          count: 0 }
+      : known;
+
+    counter.count += 1;
+    counters.set(key, counter);
+
+    return counter.count;
+  };
+
+  const sendWebhook = async (url: string, event: StoredEvent, repetitionId: string | null): Promise<void> => {
     const { payload } = event;
     let body: string;
     let headers: Record<string, string> = Object.fromEntries([
@@ -297,7 +329,7 @@ export function startFakeNotifier(options: FakeNotifierOptions): FakeNotifier {
             newCount: 1,
             daysRepeated: 1,
             usersAffected: null,
-            repetitionId: null,
+            repetitionId,
           }],
           period: WEBHOOK_PERIOD,
         },
@@ -315,7 +347,7 @@ export function startFakeNotifier(options: FakeNotifierOptions): FakeNotifier {
     await post('webhook', url, headers, body);
   };
 
-  const sendLoop = async (url: string, event: StoredEvent): Promise<void> => {
+  const sendLoop = async (url: string, event: StoredEvent, _repetitionId: string | null): Promise<void> => {
     const frames = framesOf(event);
 
     // The loop template reads the backtrace without a check and fails, so the sender sends nothing.
@@ -339,8 +371,9 @@ export function startFakeNotifier(options: FakeNotifierOptions): FakeNotifier {
    * @param channel Sender to run.
    * @param ruleId Rule the job came from.
    * @param eventId Original event id.
+   * @param repetitionId Id of the repetition that caused the job, null for a new event.
    */
-  const perform = async (channel: NotificationChannel, ruleId: string, eventId: string): Promise<void> => {
+  const perform = async (channel: NotificationChannel, ruleId: string, eventId: string, repetitionId: string | null): Promise<void> => {
     const { delayMs } = knobs;
     const pause = typeof delayMs === 'object' ? delayMs[channel] : delayMs;
 
@@ -366,7 +399,7 @@ export function startFakeNotifier(options: FakeNotifierOptions): FakeNotifier {
 
     const send = channel === 'webhook' ? sendWebhook : sendLoop;
 
-    await send(settings.endpoint, event);
+    await send(settings.endpoint, event, repetitionId);
 
     if (channel === 'webhook') {
       deliveryOf(eventId).resolve();
@@ -376,7 +409,7 @@ export function startFakeNotifier(options: FakeNotifierOptions): FakeNotifier {
       await knobs.duplicate.after?.();
 
       if (!closed) {
-        await send(settings.endpoint, event);
+        await send(settings.endpoint, event, repetitionId);
       }
     }
   };
@@ -391,7 +424,18 @@ export function startFakeNotifier(options: FakeNotifierOptions): FakeNotifier {
     const title = titleOf(event);
     let webhookJobs = 0;
 
+    const repetitionId = isNew ? null : event.lastRepetitionId ?? null;
+
     for (const rule of rulesOfProject().filter(candidate => matches(candidate, title, isNew))) {
+      // A rule that counts sends on the event that makes the count equal its threshold, and on no other.
+      if (rule.whatToReceive === 'SEEN_MORE') {
+        const count = countFor(rule, event);
+
+        if (count !== rule.threshold && !(knobs.fireThresholdOnFirst === true && count === 1)) {
+          continue;
+        }
+      }
+
       for (const channel of CHANNELS) {
         const switchedOff = channel === 'webhook' ? knobs.webhookOff === true : knobs.loopOff === true;
 
@@ -401,7 +445,7 @@ export function startFakeNotifier(options: FakeNotifierOptions): FakeNotifier {
 
         webhookJobs += channel === 'webhook' ? 1 : 0;
         begin();
-        perform(channel, rule.id, event.id).catch(() => undefined)
+        perform(channel, rule.id, event.id, repetitionId).catch(() => undefined)
           .finally(end);
       }
     }

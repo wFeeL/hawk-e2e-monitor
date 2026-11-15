@@ -3,12 +3,15 @@ import type { RunResult } from '../engine/result.js';
 import { CheckError } from '../errors/taxonomy.js';
 import type { ErrorClass, MessageFacts } from '../errors/taxonomy.js';
 import { scenarioSettings } from '../config/scenario.js';
-import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, EVENT_SCENARIOS } from '../scenarios/names.js';
+import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, EVENT_SCENARIOS, SEND_AND_RECEIVE_EVENT } from '../scenarios/names.js';
 import type { RunStart } from './history.js';
+import { DEGRADED_CODES } from './types.js';
 import type { DegradedCode, RunOutcome, RunRow } from './types.js';
 import { MS_PER_DAY } from '../time/units.js';
 
 const DAYS_PER_PERIOD = 30;
+// The other scenarios send one event per run.
+const REPEATING: readonly string[] = [SEND_AND_RECEIVE_EVENT, CHECK_NOTIFICATION];
 const MONITOR_ABORTS: readonly ErrorClass[] = ['monitor_stopped', 'monitor_restarted'];
 
 /** What `outcomeOf` needs to know besides the result. */
@@ -44,6 +47,15 @@ function degradationOf(result: RunResult, context: OutcomeContext): DegradedCode
 
   if (unconfirmed) {
     codes.push('accept_uncertain');
+  }
+
+  // Stages name the other degradations themselves, in `details.degraded`.
+  const reported = new Set(result.stages.flatMap(stage => Array.isArray(stage.details?.degraded) ? stage.details.degraded as unknown[] : []));
+
+  for (const code of DEGRADED_CODES) {
+    if (reported.has(code) && !codes.includes(code)) {
+      codes.push(code);
+    }
   }
 
   return codes;
@@ -172,7 +184,7 @@ export function isVerdict(row: VerdictFields, options: VerdictOptions = {}): boo
 }
 
 /**
- * Counts the events a run sends on average; both scenarios repeat the event by the same rule.
+ * Counts the events a run sends on average when it repeats the event: `send-and-receive-event` and `check-notification` follow the same rule.
  * @param config Configuration with the transport mode and the repeat period.
  * @returns 1 plus the share of runs that repeat the event.
  */
@@ -193,9 +205,9 @@ export function eventsPerRun(config: Config): number {
  * @returns Events per run times runs in 30 days, summed over the scenarios.
  */
 export function eventsSentPer30Days(config: Config): number {
-  const events = eventsPerRun(config);
+  const repeated = eventsPerRun(config);
 
   return config.monitoring.scenarios
     .filter(scenario => EVENT_SCENARIOS.includes(scenario))
-    .reduce((sum, scenario) => sum + events * DAYS_PER_PERIOD * MS_PER_DAY / scenarioSettings(config, scenario).intervalMs, 0);
+    .reduce((sum, scenario) => sum + (REPEATING.includes(scenario) ? repeated : 1) * DAYS_PER_PERIOD * MS_PER_DAY / scenarioSettings(config, scenario).intervalMs, 0);
 }

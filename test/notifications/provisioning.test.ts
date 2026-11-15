@@ -9,7 +9,7 @@ import { startFakeHawk } from '../support/fake-hawk/index.js';
 import type { FakeHawk } from '../support/fake-hawk/index.js';
 import { systemClock } from '../../src/time/clock.js';
 import type { PublicAddress } from '../../src/notifications/address.js';
-import { createProvisioner, desiredRule, ruleProjection } from '../../src/notifications/provisioning.js';
+import { createProvisioner, desiredRule, desiredRules, ruleProjection } from '../../src/notifications/provisioning.js';
 import type { Provisioner, ProvisionerDeps } from '../../src/notifications/provisioning.js';
 import type { NotificationRule } from '../../src/notifications/types.js';
 
@@ -77,11 +77,27 @@ function provisioner(overrides: Partial<ProvisionerDeps> = {}): Provisioner {
 }
 
 /**
- * Lists the rules that belong to the instance.
+ * Lists the rules that belong to the instance, both kinds.
  * @returns Our rules in the fake.
  */
-function ours(): NotificationRule[] {
+function allOurs(): NotificationRule[] {
   return hawk.rules.list(hawk.projectId).filter(rule => rule.including.join() === `[e2e:${INSTANCE}]`);
+}
+
+/**
+ * Lists the rules of the instance that tell about new events.
+ * @returns Our ONLY_NEW rules in the fake.
+ */
+function ours(): NotificationRule[] {
+  return allOurs().filter(rule => rule.whatToReceive === 'ONLY_NEW');
+}
+
+/**
+ * Lists the rules of the instance that count repetitions.
+ * @returns Our SEEN_MORE rules in the fake.
+ */
+function thresholdRules(): NotificationRule[] {
+  return allOurs().filter(rule => rule.whatToReceive === 'SEEN_MORE');
 }
 
 /**
@@ -121,6 +137,40 @@ afterEach(async () => {
   await hawk.close();
 });
 
+describe('desiredRules', () => {
+  it('wants the new-events rule and a threshold rule of two events in an hour', () => {
+    const { newEvents, threshold } = desiredRules(depsOf(), address());
+
+    expect(newEvents).toEqual(desiredRule(depsOf(), address()));
+    expect(threshold).toMatchObject({ projectId: hawk.projectId,
+      isEnabled: true,
+      whatToReceive: 'SEEN_MORE',
+      including: [`[e2e:${INSTANCE}]`],
+      threshold: 2,
+      thresholdPeriod: 3_600_000 });
+    expect(threshold.channels.webhook).toEqual({ isEnabled: true,
+      endpoint: `https://one.example.com/hooks/threshold/${SECRET}` });
+    expect(threshold.channels.loop.isEnabled).toBe(false);
+    expect(threshold.channels.email.isEnabled).toBe(false);
+  });
+
+  it('keeps both rules off the scenarios that do not check notifications', () => {
+    const { newEvents, threshold } = desiredRules(depsOf(), address());
+    const names = ['send-and-receive-event', 'new-project', 'sourcemaps', 'sentry-envelope'];
+
+    expect(newEvents.excluding).toEqual(names);
+    expect(threshold.excluding).toEqual(names);
+    expect(newEvents.excluding).not.toContain('check-notification');
+  });
+
+  it('the new-events rule carries no threshold', () => {
+    const { newEvents } = desiredRules(depsOf(), address());
+
+    expect(newEvents.threshold ?? null).toBeNull();
+    expect(newEvents.thresholdPeriod ?? null).toBeNull();
+  });
+});
+
 describe('desiredRule', () => {
   it('has the expected fields and no secret outside the endpoints', () => {
     const rule = desiredRule(depsOf(), address());
@@ -129,7 +179,7 @@ describe('desiredRule', () => {
       isEnabled: true,
       whatToReceive: 'ONLY_NEW',
       including: [`[e2e:${INSTANCE}]`],
-      excluding: ['send-and-receive-event'] });
+      excluding: ['send-and-receive-event', 'new-project', 'sourcemaps', 'sentry-envelope'] });
     expect(rule.channels.webhook).toEqual({ isEnabled: true,
       endpoint: `https://one.example.com/hooks/webhook/${SECRET}` });
     expect(rule.channels.loop).toEqual({ isEnabled: true,
@@ -160,8 +210,108 @@ describe('ruleProjection', () => {
     expect(ruleProjection(stored)).toBe(ruleProjection(desired));
   });
 
+  it('compares the threshold and its period, and reads null as absent', () => {
+    const { newEvents, threshold } = desiredRules(depsOf(), address());
+    const stored = (rule: typeof newEvents, extra: Partial<NotificationRule>): NotificationRule => ({ ...rule,
+      id: 'x',
+      ...extra });
+
+    expect(ruleProjection(stored(newEvents, { threshold: null,
+      thresholdPeriod: null }))).toBe(ruleProjection(newEvents));
+    expect(ruleProjection(stored(threshold, { threshold: 3 }))).not.toBe(ruleProjection(threshold));
+    expect(ruleProjection(stored(threshold, { thresholdPeriod: 60_000 }))).not.toBe(ruleProjection(threshold));
+    expect(ruleProjection(stored(threshold, {}))).toBe(ruleProjection(threshold));
+  });
+
   it('differs when an address differs', () => {
     expect(ruleProjection(desiredRule(depsOf(), address('a.example.com')))).not.toBe(ruleProjection(desiredRule(depsOf(), address('b.example.com'))));
+  });
+});
+
+describe('provision of the threshold rule', () => {
+  it('creates both rules and reports both ids', async () => {
+    const result = await provisioner().provision(address(), signal);
+
+    expect(result).toMatchObject({ action: 'created',
+      deleted: 0,
+      matchChanged: true });
+    expect(ours()).toHaveLength(1);
+    expect(thresholdRules()).toHaveLength(1);
+    expect(result.ruleId).toBe(ours()[0]?.id);
+    expect(result.thresholdRuleId).toBe(thresholdRules()[0]?.id);
+    expect(thresholdRules()[0]).toMatchObject({ threshold: 2,
+      thresholdPeriod: 3_600_000 });
+    expect(thresholdRules()[0]?.channels.webhook?.endpoint).toBe(`https://one.example.com/hooks/threshold/${SECRET}`);
+  });
+
+  it('a second run changes nothing', async () => {
+    const same = provisioner();
+
+    await same.provision(address(), signal);
+
+    const before = mutations().length;
+    const result = await same.provision(address(), signal);
+
+    expect(result).toMatchObject({ action: 'none',
+      deleted: 0,
+      matchChanged: false });
+    expect(mutations()).toHaveLength(before);
+  });
+
+  it('puts a threshold that someone changed back, as a match change', async () => {
+    await provisioner().provision(address(), signal);
+
+    const [rule] = thresholdRules();
+
+    hawk.rules.update(hawk.projectId, { ...rule,
+      ruleId: rule?.id,
+      projectId: hawk.projectId,
+      threshold: 5 });
+
+    const result = await provisioner().provision(address(), signal);
+
+    expect(result).toMatchObject({ action: 'updated',
+      matchChanged: true });
+    expect(thresholdRules()[0]?.threshold).toBe(2);
+  });
+
+  it('creates only the rule that is missing', async () => {
+    await provisioner().provision(address(), signal);
+    hawk.rules.remove(hawk.projectId, thresholdRules()[0]?.id ?? '');
+
+    const before = mutations().length;
+    const result = await provisioner().provision(address(), signal);
+
+    expect(result).toMatchObject({ action: 'created',
+      matchChanged: true });
+    expect(mutations().slice(before)).toEqual(['CreateNotificationRule']);
+    expect(thresholdRules()).toHaveLength(1);
+    expect(ours()).toHaveLength(1);
+  });
+
+  it('deletes a second rule of the same kind and keeps the other kind', async () => {
+    await provisioner().provision(address(), signal);
+    hawk.rules.seed(hawk.projectId, { ...thresholdRules()[0] as NotificationRule,
+      id: 'f'.repeat(24) });
+
+    const result = await provisioner().provision(address(), signal);
+
+    expect(result).toMatchObject({ action: 'none',
+      deleted: 1,
+      matchChanged: false });
+    expect(thresholdRules()).toHaveLength(1);
+    expect(ours()).toHaveLength(1);
+  });
+
+  it('a rule with another marker is not ours', async () => {
+    hawk.rules.seed(hawk.projectId, { ...hawk.rules.list(hawk.projectId)[0] as NotificationRule,
+      id: 'd'.repeat(24),
+      whatToReceive: 'SEEN_MORE',
+      including: ['payments'] });
+
+    await provisioner().provision(address(), signal);
+
+    expect(hawk.rules.list(hawk.projectId).some(rule => rule.id === 'd'.repeat(24))).toBe(true);
   });
 });
 
@@ -263,10 +413,12 @@ describe('provision', () => {
     const same = provisioner({ api: apiFor(100) });
     const result = await same.provision(address(), signal);
 
-    expect(result).toMatchObject({ action: 'none',
+    // The new-events rule was made by the create that timed out; the threshold rule is made after it.
+    expect(result).toMatchObject({ action: 'created',
       matchChanged: true });
     expect(ours()).toHaveLength(1);
-    expect(hawk.api.operations.filter(name => name === 'CreateNotificationRule')).toHaveLength(1);
+    expect(thresholdRules()).toHaveLength(1);
+    expect(hawk.api.operations.filter(name => name === 'CreateNotificationRule')).toHaveLength(2);
     expect(same.warmupRemainingMs()).toBe(WARMUP_MS);
   });
 
@@ -393,8 +545,9 @@ describe('provision', () => {
         return calls === 1 ? Promise.resolve(null) : api.updateNotificationRule(input, abort);
       } } }).provision(address('two.example.com'), signal);
 
+    // The first update answers null and is made again; the threshold rule is updated after both.
     expect(result.action).toBe('updated');
-    expect(calls).toBe(2);
+    expect(calls).toBe(3);
   });
 
   it('cannot resolve via tunnel is tunnel_unavailable', async () => {

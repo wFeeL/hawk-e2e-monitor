@@ -47,12 +47,27 @@ describe('integration token', () => {
       postUrl: 'http://localhost:3000/',
       healthUrl: 'http://localhost:3000/health',
       wsUrl: 'ws://localhost:3000/ws',
+      releaseUrl: 'http://localhost:3000/release',
+      envelopeUrl: 'http://localhost:3000/api/0/envelope/',
     });
     expect(collectorEndpoints(token, 'https://host.test/prefix/')).toEqual({
       postUrl: 'https://host.test/prefix/',
       healthUrl: 'https://host.test/prefix/health',
       wsUrl: 'wss://host.test/ws',
+      releaseUrl: 'https://host.test/prefix/release',
+      envelopeUrl: 'https://host.test/prefix/api/0/envelope/',
     });
+  });
+
+  it('collectorEndpoints keeps the path prefix for the release and envelope addresses, with or without a closing slash', () => {
+    const token = { integrationId: 'abc',
+      secret: 's' };
+
+    for (const base of ['https://host/collector/', 'https://host/collector']) {
+      expect(collectorEndpoints(token, base)).toMatchObject({ postUrl: 'https://host/collector/',
+        releaseUrl: 'https://host/collector/release',
+        envelopeUrl: 'https://host/collector/api/0/envelope/' });
+    }
   });
 
   it('collectorEndpoints derives the host from the token', () => {
@@ -61,6 +76,8 @@ describe('integration token', () => {
       postUrl: 'https://abc.k1.hawk.so/',
       healthUrl: 'https://abc.k1.hawk.so/health',
       wsUrl: 'wss://abc.k1.hawk.so/ws',
+      releaseUrl: 'https://abc.k1.hawk.so/release',
+      envelopeUrl: 'https://abc.k1.hawk.so/api/0/envelope/',
     });
   });
 

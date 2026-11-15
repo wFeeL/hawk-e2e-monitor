@@ -54,6 +54,15 @@ describe('buildTitle', () => {
 describe('planRun', () => {
   const letters = (count: number): string => 'a'.repeat(count);
 
+  it('a forced catcher type replaces the one of the transport', () => {
+    const plan = planRun(testConfig({ instanceId: 'mon' }), { sequence: 1,
+      transport: 'http',
+      catcherType: 'errors/javascript' }, 'sourcemaps', letters);
+
+    expect(plan).toMatchObject({ transport: 'http',
+      catcherType: 'errors/javascript' });
+  });
+
   it('http run: nodejs catcher, context and title', () => {
     const plan = planRun(testConfig({ instanceId: 'mon' }), { sequence: 3 }, 'send-and-receive-event', letters);
 

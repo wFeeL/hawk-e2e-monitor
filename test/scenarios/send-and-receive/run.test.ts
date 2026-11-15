@@ -763,3 +763,25 @@ describe('cancelling from outside', () => {
     expect(stageOf(result, 'cleanup').status).toBe('skipped');
   });
 });
+
+describe('degradations of a run', () => {
+  it('a pattern that catches the title is an ok run with the pattern in the warnings', async () => {
+    hawk.api.knobs.groupingPatterns = ['send-and-receive-event'];
+
+    const result = await run();
+
+    expect(result.status).toBe('ok');
+    expect(result.warnings.join(' ')).toContain('send-and-receive-event');
+    expect(stageOf(result, 'api_availability').details?.degraded).toEqual(['grouping_pattern']);
+  });
+
+  it('no JavaScript worker is an ok run with its warning', async () => {
+    hawk.store.knobs.noJsWorker = true;
+
+    const result = await run({ sequence: 1,
+      transport: 'ws' });
+
+    expect(result.status).toBe('ok');
+    expect(result.warnings.join(' ')).toContain('beautifiedUserAgent');
+  });
+});

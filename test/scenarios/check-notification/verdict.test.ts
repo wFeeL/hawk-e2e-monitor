@@ -87,6 +87,7 @@ function arrival(channel: 'webhook' | 'loop', atMs: number, body?: string, heade
 function arrivals(webhook: Arrival[], loop: Arrival[], unmatched = 0): Arrivals {
   return { webhook,
     loop,
+    threshold: [],
     unmatched };
 }
 
@@ -130,7 +131,7 @@ function notification(stageArrivals: Arrivals | undefined, finalArrivals: Arriva
 
 describe('decideNotificationVerdict', () => {
   it('passes a healthy run and reports latency and the event id', () => {
-    const result = decideNotificationVerdict(stages(), STATE, notification(BOTH, BOTH), PROJECT);
+    const result = decideNotificationVerdict(stages(), STATE, notification(BOTH, BOTH), PROJECT, true);
 
     expect(result.verdict).toEqual({ status: 'ok' });
     expect(result.warnings).toEqual([]);
@@ -141,13 +142,13 @@ describe('decideNotificationVerdict', () => {
   });
 
   it('collects warnings of the stages in order, one text and a list', () => {
-    const result = decideNotificationVerdict(stages(stage('api_availability', 'ok', { details: { warning: 'quota' } }), stage('notification_formed', 'ok', { details: { warnings: ['one', 'two'] } })), STATE, notification(BOTH, BOTH), PROJECT);
+    const result = decideNotificationVerdict(stages(stage('api_availability', 'ok', { details: { warning: 'quota' } }), stage('notification_formed', 'ok', { details: { warnings: ['one', 'two'] } })), STATE, notification(BOTH, BOTH), PROJECT, true);
 
     expect(result.warnings).toEqual(['quota', 'one', 'two']);
   });
 
   it('has no notification section when nothing was read', () => {
-    expect(decideNotificationVerdict(stages(), STATE, notification(undefined, undefined), PROJECT).notification).toBeUndefined();
+    expect(decideNotificationVerdict(stages(), STATE, notification(undefined, undefined), PROJECT, true).notification).toBeUndefined();
   });
 
   describe('collector blame', () => {
@@ -159,7 +160,7 @@ describe('decideNotificationVerdict', () => {
 
     it('goes to the collector without a notification, as in send-and-receive-event', () => {
       const result = decideNotificationVerdict(stages(uncertain, notFound), { ...STATE,
-        event: undefined }, notification(arrivals([], []), arrivals([], [])), PROJECT);
+        event: undefined }, notification(arrivals([], []), arrivals([], [])), PROJECT, true);
 
       expect(result.verdict).toMatchObject({ status: 'failed',
         failedStage: 'collector_accept' });
@@ -167,7 +168,7 @@ describe('decideNotificationVerdict', () => {
 
     it('stays on event_visible with a note when a notification arrived', () => {
       const result = decideNotificationVerdict(stages(uncertain, notFound), { ...STATE,
-        event: undefined }, notification(arrivals([arrival('webhook', 1300)], []), arrivals([arrival('webhook', 1300)], [])), PROJECT);
+        event: undefined }, notification(arrivals([arrival('webhook', 1300)], []), arrivals([arrival('webhook', 1300)], [])), PROJECT, true);
 
       expect(result.verdict.status).toBe('failed');
       expect(result.verdict.failedStage).toBe('event_visible');
@@ -179,7 +180,7 @@ describe('decideNotificationVerdict', () => {
       const wrong = arrivals([arrival('webhook', 1300, 'junk')], []);
       const result = decideNotificationVerdict(stages(uncertain, notFound, stage('notification_formed', 'failed', { errorClass: 'notification_mismatch',
         message: 'bad' })), { ...STATE,
-        event: undefined }, notification(wrong, wrong), PROJECT);
+        event: undefined }, notification(wrong, wrong), PROJECT, true);
 
       expect(result.verdict.failedStage).toBe('event_visible');
     });
@@ -187,7 +188,7 @@ describe('decideNotificationVerdict', () => {
 
   it('reports the failure of a stage as it is', () => {
     const result = decideNotificationVerdict(stages(stage('notification_formed', 'failed', { errorClass: 'notification_timeout',
-      message: 'Neither channel arrived' })), STATE, notification(arrivals([], []), arrivals([], [])), PROJECT);
+      message: 'Neither channel arrived' })), STATE, notification(arrivals([], []), arrivals([], [])), PROJECT, true);
 
     expect(result.verdict).toMatchObject({ status: 'failed',
       failedStage: 'notification_formed' });
@@ -197,7 +198,7 @@ describe('decideNotificationVerdict', () => {
   it('fails with duplicate_event of send-and-receive-event before it looks at the notifications', () => {
     const late = stage('cleanup', 'ok', { details: { lateTotalCount: 2 } });
     const twice = arrivals([arrival('webhook', 1300), arrival('webhook', 1400)], [arrival('loop', 1500)]);
-    const result = decideNotificationVerdict(stages(late), STATE, notification(BOTH, twice), PROJECT);
+    const result = decideNotificationVerdict(stages(late), STATE, notification(BOTH, twice), PROJECT, true);
 
     expect(result.verdict.error?.errorClass).toBe('duplicate_event');
   });
@@ -205,7 +206,7 @@ describe('decideNotificationVerdict', () => {
   describe('against the event', () => {
     it('webhook with another event id is notification_mismatch on notification_formed', () => {
       const wrong = arrivals([arrival('webhook', 1300, webhookBody({ id: 'other' }))], [arrival('loop', 1500)]);
-      const result = decideNotificationVerdict(stages(), STATE, notification(wrong, wrong), PROJECT);
+      const result = decideNotificationVerdict(stages(), STATE, notification(wrong, wrong), PROJECT, true);
 
       expect(result.verdict).toMatchObject({ status: 'failed',
         failedStage: 'notification_formed' });
@@ -215,7 +216,7 @@ describe('decideNotificationVerdict', () => {
 
     it('a loop link to another event is notification_mismatch', () => {
       const wrong = arrivals([arrival('webhook', 1300)], [arrival('loop', 1500, '[Details](https://garage/project/p1/event/other/)')]);
-      const result = decideNotificationVerdict(stages(), STATE, notification(wrong, wrong), PROJECT);
+      const result = decideNotificationVerdict(stages(), STATE, notification(wrong, wrong), PROJECT, true);
 
       expect(result.verdict.error?.message).toContain('loop.link');
     });
@@ -223,14 +224,14 @@ describe('decideNotificationVerdict', () => {
     it('is not checked without the event', () => {
       const wrong = arrivals([arrival('webhook', 1300, 'junk')], []);
       const result = decideNotificationVerdict(stages(), { ...STATE,
-        event: undefined }, notification(wrong, wrong), PROJECT);
+        event: undefined }, notification(wrong, wrong), PROJECT, true);
 
       expect(result.verdict.status).toBe('ok');
     });
 
     it('is not checked when notification_formed was skipped', () => {
       const wrong = arrivals([arrival('webhook', 1300, 'junk')], []);
-      const result = decideNotificationVerdict(stages(stage('notification_formed', 'skipped')), STATE, notification(undefined, wrong, { warmup: true }), PROJECT);
+      const result = decideNotificationVerdict(stages(stage('notification_formed', 'skipped')), STATE, notification(undefined, wrong, { warmup: true }), PROJECT, true);
 
       expect(result.verdict.status).toBe('ok');
     });
@@ -241,7 +242,7 @@ describe('decideNotificationVerdict', () => {
       const twice = channel === 'webhook'
         ? arrivals([arrival('webhook', 1300), arrival('webhook', 1700)], [arrival('loop', 1500)])
         : arrivals([arrival('webhook', 1300)], [arrival('loop', 1500), arrival('loop', 1700)]);
-      const result = decideNotificationVerdict(stages(), STATE, notification(BOTH, twice), PROJECT);
+      const result = decideNotificationVerdict(stages(), STATE, notification(BOTH, twice), PROJECT, true);
 
       expect(result.verdict).toMatchObject({ status: 'failed',
         failedStage: 'notification_formed' });
@@ -251,7 +252,7 @@ describe('decideNotificationVerdict', () => {
 
     it('a mismatch wins over a repeat', () => {
       const both = arrivals([arrival('webhook', 1300, webhookBody({ id: 'other' })), arrival('webhook', 1700)], [arrival('loop', 1500)]);
-      const result = decideNotificationVerdict(stages(), STATE, notification(both, both), PROJECT);
+      const result = decideNotificationVerdict(stages(), STATE, notification(both, both), PROJECT, true);
 
       expect(result.verdict.error?.errorClass).toBe('notification_mismatch');
     });
@@ -259,7 +260,7 @@ describe('decideNotificationVerdict', () => {
     it('a failed cleanup is reported before a repeat', () => {
       const twice = arrivals([arrival('webhook', 1300), arrival('webhook', 1400)], [arrival('loop', 1500)]);
       const result = decideNotificationVerdict(stages(stage('cleanup', 'failed', { errorClass: 'cleanup_failed',
-        message: 'x' })), STATE, notification(BOTH, twice), PROJECT);
+        message: 'x' })), STATE, notification(BOTH, twice), PROJECT, true);
 
       expect(result.verdict.failedStage).toBe('cleanup');
     });
@@ -270,7 +271,7 @@ describe('decideNotificationVerdict', () => {
     const early = arrivals([arrival('webhook', 1300)], []);
 
     it('replaces the warning and reports its latency', () => {
-      const result = decideNotificationVerdict(stages(formed), STATE, notification(early, arrivals([arrival('webhook', 1300)], [arrival('loop', 1800)])), PROJECT);
+      const result = decideNotificationVerdict(stages(formed), STATE, notification(early, arrivals([arrival('webhook', 1300)], [arrival('loop', 1800)])), PROJECT, true);
 
       expect(result.verdict.status).toBe('ok');
       expect(result.warnings).toEqual(['The loop notification arrived after the pair wait, 800 ms after the send']);
@@ -278,7 +279,7 @@ describe('decideNotificationVerdict', () => {
     });
 
     it('keeps the warning when the channel never came', () => {
-      const result = decideNotificationVerdict(stages(formed), STATE, notification(early, early), PROJECT);
+      const result = decideNotificationVerdict(stages(formed), STATE, notification(early, early), PROJECT, true);
 
       expect(result.warnings).toEqual([formed.details?.warning]);
       expect(result.notification?.loop).toBeUndefined();
@@ -293,7 +294,7 @@ describe('decideNotificationVerdict', () => {
     ])('a webhook that came late gets the full check: %s', (field, late) => {
       const onlyLoop = arrivals([], [arrival('loop', 1300)]);
       const warned = stage('notification_formed', 'ok', { details: { warning: 'Only the loop notification arrived; the webhook sender did not deliver within 200 ms' } });
-      const result = decideNotificationVerdict(stages(warned), STATE, notification(onlyLoop, arrivals([late], onlyLoop.loop)), PROJECT);
+      const result = decideNotificationVerdict(stages(warned), STATE, notification(onlyLoop, arrivals([late], onlyLoop.loop)), PROJECT, true);
 
       expect(result.verdict).toMatchObject({ status: 'failed',
         failedStage: 'notification_formed' });
@@ -302,27 +303,89 @@ describe('decideNotificationVerdict', () => {
     });
 
     it('a loop that came late without the title is notification_mismatch', () => {
-      const result = decideNotificationVerdict(stages(formed), STATE, notification(early, arrivals(early.webhook, [arrival('loop', 1800, loopBody('another title'))])), PROJECT);
+      const result = decideNotificationVerdict(stages(formed), STATE, notification(early, arrivals(early.webhook, [arrival('loop', 1800, loopBody('another title'))])), PROJECT, true);
 
       expect(result.verdict.error?.errorClass).toBe('notification_mismatch');
       expect(result.verdict.error?.message).toContain('loop.title');
     });
 
     it('a late channel that fits is accepted', () => {
-      const result = decideNotificationVerdict(stages(formed), STATE, notification(early, arrivals(early.webhook, [arrival('loop', 1800)])), PROJECT);
+      const result = decideNotificationVerdict(stages(formed), STATE, notification(early, arrivals(early.webhook, [arrival('loop', 1800)])), PROJECT, true);
 
       expect(result.verdict.status).toBe('ok');
     });
 
     it('is a repeat when it came twice', () => {
-      const result = decideNotificationVerdict(stages(formed), STATE, notification(early, arrivals([arrival('webhook', 1300)], [arrival('loop', 1800), arrival('loop', 1900)])), PROJECT);
+      const result = decideNotificationVerdict(stages(formed), STATE, notification(early, arrivals([arrival('webhook', 1300)], [arrival('loop', 1800), arrival('loop', 1900)])), PROJECT, true);
 
       expect(result.verdict.error?.errorClass).toBe('duplicate_notification');
     });
   });
 
+  describe('threshold', () => {
+    const post = (atMs: number): Arrival => ({ channel: 'threshold',
+      atMs,
+      headers: GOOD_HEADERS,
+      rawBody: webhookBody() });
+    const withThreshold = (...posts: Arrival[]): Arrivals => ({ ...BOTH,
+      threshold: posts });
+
+    it('two threshold posts are duplicate_notification of the threshold channel', () => {
+      const result = decideNotificationVerdict([...stages(), stage('threshold_formed')], STATE, notification(BOTH, withThreshold(post(2000), post(2100))), PROJECT, true);
+
+      expect(result.verdict).toMatchObject({ status: 'failed',
+        failedStage: 'threshold_formed' });
+      expect(result.verdict.error?.message).toBe('The threshold notification arrived 2 times');
+    });
+
+    it('one threshold post is fine and its latency counts from the repeat', () => {
+      const result = decideNotificationVerdict([...stages(), stage('threshold_formed')], { ...STATE,
+        repeatAcceptedAtMs: 1800 }, notification(BOTH, withThreshold(post(2000))), PROJECT, true);
+
+      expect(result.verdict.status).toBe('ok');
+      expect(result.notification?.threshold).toEqual({ latencyMs: 200 });
+    });
+
+    it('a failed threshold stage is the failure of the run', () => {
+      const failed = stage('threshold_formed', 'failed', { errorClass: 'threshold_early',
+        culprit: 'hawk',
+        message: 'early' });
+      const result = decideNotificationVerdict([...stages(), failed], STATE, notification(BOTH, BOTH), PROJECT, true);
+
+      expect(result.verdict).toMatchObject({ status: 'failed',
+        failedStage: 'threshold_formed' });
+      expect(result.verdict.error?.errorClass).toBe('threshold_early');
+    });
+
+    it('a threshold post in a run without a repeat is threshold_early on threshold_formed', () => {
+      const result = decideNotificationVerdict([...stages(), stage('threshold_formed', 'skipped')], STATE, notification(BOTH, withThreshold(post(2000))), PROJECT, false);
+
+      expect(result.verdict).toMatchObject({ status: 'failed',
+        failedStage: 'threshold_formed' });
+      expect(result.verdict.error?.errorClass).toBe('threshold_early');
+      expect(result.verdict.error?.message).toContain('a threshold POST arrived in a run that sent no repeat');
+    });
+
+    it('a failed base verdict wins over an early threshold post', () => {
+      const failed = stage('cleanup', 'failed', { errorClass: 'cleanup_failed',
+        culprit: 'hawk',
+        message: 'no' });
+      const result = decideNotificationVerdict(stages(failed), STATE, notification(BOTH, withThreshold(post(2000))), PROJECT, false);
+
+      expect(result.verdict.failedStage).toBe('cleanup');
+    });
+
+    it('no threshold post in a run without a repeat is fine', () => {
+      expect(decideNotificationVerdict([...stages(), stage('threshold_formed', 'skipped')], STATE, notification(BOTH, BOTH), PROJECT, false).verdict.status).toBe('ok');
+    });
+
+    it('has no threshold in the summary without a post', () => {
+      expect(decideNotificationVerdict(stages(), STATE, notification(BOTH, BOTH), PROJECT, true).notification?.threshold).toBeUndefined();
+    });
+  });
+
   it('reports unmatched posts from the final counts', () => {
-    const result = decideNotificationVerdict(stages(), STATE, notification(BOTH, arrivals(BOTH.webhook, BOTH.loop, 2)), PROJECT);
+    const result = decideNotificationVerdict(stages(), STATE, notification(BOTH, arrivals(BOTH.webhook, BOTH.loop, 2)), PROJECT, true);
 
     expect(result.notification?.unmatched).toBe(2);
   });

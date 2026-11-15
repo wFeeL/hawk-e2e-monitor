@@ -3,6 +3,21 @@ import { STAGE_NAMES } from '../../src/engine/result.js';
 
 describe('STAGE_NAMES', () => {
   it('lists the stages in execution order', () => {
-    expect(STAGE_NAMES).toEqual(['collector_availability', 'api_availability', 'notification_setup', 'collector_accept', 'event_visible', 'notification_formed', 'event_repeated', 'cleanup', 'garage_availability']);
+    expect(STAGE_NAMES).toEqual([
+      'collector_availability',
+      'api_availability',
+      'notification_setup',
+      'project_created',
+      'token_accepted',
+      'release_uploaded',
+      'release_saved',
+      'collector_accept',
+      'event_visible',
+      'notification_formed',
+      'event_repeated',
+      'threshold_formed',
+      'cleanup',
+      'garage_availability',
+    ]);
   });
 });

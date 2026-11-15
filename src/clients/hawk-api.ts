@@ -5,7 +5,7 @@ import type { Clock } from '../time/clock.js';
 import { ACCESS_EXPIRED, GraphqlFailure, UNAUTHENTICATED } from './graphql.js';
 import type { GraphqlOperation, GraphqlTransport } from './graphql.js';
 import type { ChannelSettings, NotificationRule, NotificationRuleInput, NotificationRuleUpdate } from '../notifications/types.js';
-import { CREATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE, EVENT_CARD, FIND_EVENTS, LOGIN, NOTIFICATION_RULES, PROJECT_TOKEN, REFRESH_TOKENS, REMOVE_EVENT, UPDATE_NOTIFICATION_RULE, WORKSPACE_QUOTA } from './operations.js';
+import { CREATE_NOTIFICATION_RULE, CREATE_PROJECT, DELETE_NOTIFICATION_RULE, EVENT, PROJECT_DAILY_EVENTS, LOGIN, NOTIFICATION_RULES, PROJECT_TOKEN, REFRESH_TOKENS, RELEASE_DETAILS, REMOVE_EVENT, REMOVE_PROJECT, UPDATE_NOTIFICATION_RULE, WORKSPACE_PROJECTS, WORKSPACE_QUOTA } from './operations.js';
 import { MS_PER_SECOND } from '../time/units.js';
 
 const NOT_FOUND_PREFIX = 'Event not found for eventId';
@@ -43,8 +43,75 @@ export interface FoundEvent {
   timestamp?: number;
 }
 
-/** Event card; the same shape as a search row. */
-export type EventCard = FoundEvent;
+/** Event card as the page of an event in Garage reads it: a search row and the fields of the payload. */
+export interface EventCard extends FoundEvent {
+  /** Event type, such as the error class. */
+  type?: string | null;
+  /** Release the event was sent with. */
+  release?: string | null;
+  /** User the event happened to. */
+  user?: unknown;
+  /** Query parameters of the request. */
+  get?: unknown;
+  /** Stack frames. */
+  backtrace?: unknown;
+  /** Extra data of the catcher. */
+  addons?: unknown;
+  /** Trail of events before the error. */
+  breadcrumbs?: unknown;
+  /** Number of users the event happened to. */
+  usersAffected?: number | null;
+}
+
+/** What the monitor reads of a project besides its events. */
+export interface ProjectInfo {
+  /** Integration token as Hawk stores it. */
+  token: string;
+  /** Patterns that glue events with matching titles into one group. */
+  groupingPatterns: string[];
+}
+
+/** A project Hawk has just created. */
+export interface CreatedProject {
+  /** 24-character hex id of the project. */
+  id: string;
+  /** Integration token of the project. */
+  token: string;
+}
+
+/** A project in the list of a workspace. */
+export interface WorkspaceProject {
+  /** 24-character hex id of the project. */
+  id: string;
+  /** Name of the project. */
+  name: string;
+  /** When the project was created, in milliseconds. */
+  createdAtMs: number;
+}
+
+/** The projects of one workspace. */
+export interface WorkspaceProjects {
+  /** Id of the workspace. */
+  workspaceId: string;
+  /** Projects that were asked for, or all of them. */
+  projects: WorkspaceProject[];
+}
+
+/** A map file of a release. */
+export interface ReleaseFileInfo {
+  /** Name the map was uploaded under. */
+  mapFileName: string;
+  /** Name of the bundle the map describes. */
+  originFileName: string;
+}
+
+/** A release as Hawk shows it. */
+export interface ReleaseDetails {
+  /** Release name. */
+  release: string;
+  /** Map files saved for it. */
+  files: ReleaseFileInfo[];
+}
 
 /** Accounts and waits the client needs. */
 export interface HawkApiOptions {
@@ -77,6 +144,13 @@ export interface HawkApi {
    */
   projectToken(projectId: string, signal: AbortSignal): Promise<string>;
   /**
+   * Reads the integration token and the event grouping patterns of a project in one request.
+   * @param projectId 24-character hex id of the project.
+   * @param signal Deadline of the caller.
+   * @returns Token and the text of each pattern.
+   */
+  projectInfo(projectId: string, signal: AbortSignal): Promise<ProjectInfo>;
+  /**
    * Finds the workspace that holds the project.
    * @param projectId 24-character hex id of the project.
    * @param signal Deadline of the caller.
@@ -100,6 +174,38 @@ export interface HawkApi {
    * @returns The event, or null when it does not exist.
    */
   eventCard(projectId: string, eventId: string, signal: AbortSignal): Promise<EventCard | null>;
+  /**
+   * Creates a project. Not repeated, because a repeat would create a second project.
+   * @param workspaceId Workspace to create it in; the account must be its admin.
+   * @param name Name of the project.
+   * @param signal Deadline of the caller.
+   * @returns Id and integration token of the new project.
+   * @throws CheckError `api_error` when Hawk answers without a project.
+   */
+  createProject(workspaceId: string, name: string, signal: AbortSignal): Promise<CreatedProject>;
+  /**
+   * Removes a project. Not repeated, because once it is gone a second request fails.
+   * @param projectId 24-character hex id of the project.
+   * @param signal Deadline of the caller.
+   * @returns False when Hawk answered that nothing was removed.
+   */
+  removeProject(projectId: string, signal: AbortSignal): Promise<boolean>;
+  /**
+   * Lists the projects of every workspace of the account.
+   * @param ids Projects to list; an empty list asks for all of them.
+   * @param signal Deadline of the caller.
+   * @returns One entry per workspace, with creation times in milliseconds.
+   * @throws CheckError `api_error` when a creation time cannot be read.
+   */
+  workspaceProjects(ids: readonly string[], signal: AbortSignal): Promise<WorkspaceProjects[]>;
+  /**
+   * Reads a release of a project.
+   * @param projectId 24-character hex id of the project.
+   * @param release Release name.
+   * @param signal Deadline of the caller.
+   * @returns The release, or null while Hawk answers that it is not found, which is what a release that was just uploaded does.
+   */
+  releaseDetails(projectId: string, release: string, signal: AbortSignal): Promise<ReleaseDetails | null>;
   /**
    * Removes an event; an attempt that removed it but timed out counts as done.
    * @param projectId 24-character hex id of the project.
@@ -195,6 +301,12 @@ interface RefreshData {
   refreshTokens: Session;
 }
 
+/** A grouping pattern in a raw answer. */
+interface RawPattern {
+  /** Text of the pattern. */
+  pattern: string;
+}
+
 /** Answer of the ProjectToken query. */
 interface ProjectTokenData {
   /** Null when the project is unknown. */
@@ -211,6 +323,8 @@ interface RemoveData {
 interface ProjectTokenValue {
   /** Integration token. */
   token: string;
+  /** Grouping patterns, null or absent when there are none. */
+  eventGroupingPatterns?: Array<RawPattern | null> | null;
 }
 
 /** An event in a raw answer. */
@@ -227,7 +341,9 @@ interface RawEvent {
   catcherType: string;
   /** Arrival time, in Unix seconds. */
   timestamp?: number | null;
-  /** Title and context. */
+  /** Number of users the event happened to. */
+  usersAffected?: number | null;
+  /** Title, context and the other fields of the payload. */
   payload: RawPayload;
 }
 
@@ -237,6 +353,20 @@ interface RawPayload {
   title: string;
   /** Context, any JSON. */
   context?: unknown;
+  /** Event type. */
+  type?: string | null;
+  /** Release name. */
+  release?: string | null;
+  /** User of the event. */
+  user?: unknown;
+  /** Query parameters. */
+  get?: unknown;
+  /** Stack frames. */
+  backtrace?: unknown;
+  /** Extra data of the catcher. */
+  addons?: unknown;
+  /** Breadcrumbs. */
+  breadcrumbs?: unknown;
 }
 
 /** Answer of the FindEvents query. */
@@ -275,6 +405,62 @@ interface EventCardProject {
   event: RawEvent | null;
 }
 
+/** Answer of the CreateProject mutation. */
+interface CreateProjectData {
+  /** The new project, null when Hawk made none. */
+  createProject: CreatedProject | null;
+}
+
+/** Answer of the RemoveProject mutation. */
+interface RemoveProjectData {
+  /** False when Hawk removed nothing. */
+  removeProject: boolean;
+}
+
+/** Answer of the WorkspaceProjects query. */
+interface WorkspaceProjectsData {
+  /** Workspaces of the account, possibly with nulls. */
+  workspaces: (RawProjectsOfWorkspace | null)[] | null;
+}
+
+/** A workspace with its projects in a raw answer. */
+interface RawProjectsOfWorkspace {
+  /** Workspace id. */
+  id: string;
+  /** Projects, possibly with nulls. */
+  projects: (RawListedProject | null)[] | null;
+}
+
+/** A project in a raw list. */
+interface RawListedProject {
+  /** Project id. */
+  id: string;
+  /** Project name. */
+  name: string;
+  /** Creation time as text or a number of seconds or milliseconds. */
+  creationDate: string | number;
+}
+
+/** Answer of the ReleaseDetails query. */
+interface ReleaseDetailsData {
+  /** Null when the project is not visible. */
+  project: RawReleaseProject | null;
+}
+
+/** The project part of the ReleaseDetails answer. */
+interface RawReleaseProject {
+  /** The release. */
+  releaseDetails: RawRelease;
+}
+
+/** A release in a raw answer. */
+interface RawRelease {
+  /** Release name. */
+  release: string;
+  /** Map files, null when there are none. */
+  files: ReleaseFileInfo[] | null;
+}
+
 /** Answer of the WorkspaceQuota query. */
 interface WorkspaceQuotaData {
   /** Workspaces of the account, possibly with nulls. */
@@ -311,6 +497,22 @@ function toMilliseconds(value: number): number {
 }
 
 /**
+ * Reads the creation time of a project.
+ * @param value Date as the API sends it.
+ * @returns Milliseconds.
+ * @throws CheckError `api_error` when the value is neither a number nor a date text.
+ */
+function creationTime(value: string | number): number {
+  const time = typeof value === 'number' ? toMilliseconds(value) : Date.parse(value);
+
+  if (Number.isNaN(time)) {
+    throw new CheckError('api_error', { detail: `unreadable project creation date: ${String(value)}` });
+  }
+
+  return time;
+}
+
+/**
  * Converts a raw event.
  * @param event Event of an answer.
  * @returns Event with the original id resolved.
@@ -323,6 +525,25 @@ function toFoundEvent(event: RawEvent): FoundEvent {
     title: event.payload.title,
     context: event.payload.context ?? null,
     ...typeof event.timestamp === 'number' ? { timestamp: toMilliseconds(event.timestamp) } : {} };
+}
+
+/**
+ * Converts a raw event into a card.
+ * @param event Event of an answer.
+ * @returns Card with the fields of the payload.
+ */
+function toCard(event: RawEvent): EventCard {
+  const { payload } = event;
+
+  return { ...toFoundEvent(event),
+    type: payload.type,
+    release: payload.release,
+    user: payload.user,
+    get: payload.get,
+    backtrace: payload.backtrace,
+    addons: payload.addons,
+    breadcrumbs: payload.breadcrumbs,
+    usersAffected: event.usersAffected };
 }
 
 /**
@@ -444,25 +665,29 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
   };
 
   const eventCard = async (projectId: string, eventId: string, signal: AbortSignal): Promise<EventCard | null> => {
-    const data = await authorized<EventCardData>(EVENT_CARD, { projectId,
-      eventId }, signal);
+    const data = await authorized<EventCardData>(EVENT, { projectId,
+      eventId,
+      originalEventId: eventId }, signal);
 
     if (!data.project) {
       throw new CheckError('api_error', { detail: 'project not found' });
     }
 
-    return data.project.event ? toFoundEvent(data.project.event) : null;
+    return data.project.event ? toCard(data.project.event) : null;
   };
 
-  const projectToken: HawkApi['projectToken'] = async (projectId, signal) => {
+  const projectInfo: HawkApi['projectInfo'] = async (projectId, signal) => {
     const data = await authorized<ProjectTokenData>(PROJECT_TOKEN, { projectId }, signal);
 
     if (!data.project) {
       throw new CheckError('api_error', { detail: 'project not found' });
     }
 
-    return data.project.token;
+    return { token: data.project.token,
+      groupingPatterns: (data.project.eventGroupingPatterns ?? []).flatMap(item => item === null ? [] : [item.pattern]) };
   };
+
+  const projectToken: HawkApi['projectToken'] = async (projectId, signal) => (await projectInfo(projectId, signal)).token;
 
   const workspaceQuota: HawkApi['workspaceQuota'] = async (projectId, signal) => {
     const data = await authorized<WorkspaceQuotaData>(WORKSPACE_QUOTA, { projectId }, signal);
@@ -484,7 +709,7 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
   };
 
   const findEvents: HawkApi['findEvents'] = async (projectId, search, signal) => {
-    const data = await authorized<FindEventsData>(FIND_EVENTS, { projectId,
+    const data = await authorized<FindEventsData>(PROJECT_DAILY_EVENTS, { projectId,
       search }, signal);
 
     if (!data.project) {
@@ -539,6 +764,60 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
       ruleId } }, signal);
   };
 
+  const createProject: HawkApi['createProject'] = async (workspaceId, name, signal) => {
+    const data = await authorized<CreateProjectData>(CREATE_PROJECT, { workspaceId,
+      name }, signal);
+
+    if (!data.createProject) {
+      throw new CheckError('api_error', { detail: 'createProject answered without a project' });
+    }
+
+    return { id: data.createProject.id,
+      token: data.createProject.token };
+  };
+
+  const removeProject: HawkApi['removeProject'] = async (projectId, signal) => {
+    const data = await authorized<RemoveProjectData>(REMOVE_PROJECT, { projectId }, signal);
+
+    return data.removeProject;
+  };
+
+  const workspaceProjects: HawkApi['workspaceProjects'] = async (ids, signal) => {
+    const data = await authorized<WorkspaceProjectsData>(WORKSPACE_PROJECTS, { ids: [...ids] }, signal);
+
+    return (data.workspaces ?? []).flatMap(workspace => workspace === null
+      ? []
+      : [{ workspaceId: workspace.id,
+          projects: (workspace.projects ?? []).flatMap(project => project === null
+            ? []
+            : [{ id: project.id,
+                name: project.name,
+                createdAtMs: creationTime(project.creationDate) }]) }]);
+  };
+
+  const releaseDetails: HawkApi['releaseDetails'] = async (projectId, release, signal) => {
+    let data: ReleaseDetailsData;
+
+    try {
+      data = await authorized<ReleaseDetailsData>(RELEASE_DETAILS, { projectId,
+        release }, signal);
+    } catch (error) {
+      if (isCheckError(error) && error.errorClass === 'api_query_rejected' && (error.facts.detail ?? '').includes('not found')) {
+        return null;
+      }
+
+      throw error;
+    }
+
+    if (!data.project) {
+      throw new CheckError('api_error', { detail: 'project not found' });
+    }
+
+    return { release: data.project.releaseDetails.release,
+      files: (data.project.releaseDetails.files ?? []).map(file => ({ mapFileName: file.mapFileName,
+        originFileName: file.originFileName })) };
+  };
+
   const removeEvent: HawkApi['removeEvent'] = async (projectId, eventId, signal) => {
     let failedBefore = false;
 
@@ -576,6 +855,7 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
     ensureSession,
     eventCard,
     projectToken,
+    projectInfo,
     workspaceQuota,
     findEvents,
     notificationRules,
@@ -583,5 +863,9 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
     updateNotificationRule,
     deleteNotificationRule,
     removeEvent,
+    createProject,
+    removeProject,
+    workspaceProjects,
+    releaseDetails,
   };
 }

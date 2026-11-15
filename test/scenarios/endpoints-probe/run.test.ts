@@ -165,7 +165,7 @@ describe('runEndpointsProbe', () => {
     const { deps } = createTestDeps(hawk);
     const result = await runEndpointsProbe({ ...deps,
       api: { ...deps.api,
-        projectToken: async () => Promise.reject(new Error(`leak ${hawk.password} ${hawk.token}`)) } }, { sequence: 1 });
+        projectInfo: async () => Promise.reject(new Error(`leak ${hawk.password} ${hawk.token}`)) } }, { sequence: 1 });
     const text = JSON.stringify(result);
 
     expect(result.status).toBe('failed');
