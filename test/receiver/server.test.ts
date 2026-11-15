@@ -5,6 +5,7 @@ import { createFakeClock } from '../support/fake-clock.js';
 import { memoryLogger } from '../support/logger.js';
 import { systemClock } from '../../src/time/clock.js';
 import type { Clock } from '../../src/time/clock.js';
+import type { ArrivalKind } from '../../src/notifications/types.js';
 import { startReceiver } from '../../src/receiver/server.js';
 import type { Receiver, ReceiverOptions, WaitOptions } from '../../src/receiver/server.js';
 
@@ -114,7 +115,7 @@ function waitOptions(overrides: Partial<WaitOptions> = {}): WaitOptions {
  * @param count Expected number.
  * @returns Resolves when the count is reached.
  */
-async function arrived(receiver: Receiver, runId: string, channel: 'loop' | 'webhook', count: number): Promise<void> {
+async function arrived(receiver: Receiver, runId: string, channel: ArrivalKind, count: number): Promise<void> {
   await vi.waitFor(() => {
     expect(receiver.counts(runId)[channel]).toHaveLength(count);
   });
@@ -122,6 +123,59 @@ async function arrived(receiver: Receiver, runId: string, channel: 'loop' | 'web
 
 afterEach(async () => {
   await Promise.all(open.splice(0).map(async receiver => receiver.close()));
+});
+
+describe('threshold kind', () => {
+  it('binds a POST of the threshold path to the run, apart from webhook and loop', async () => {
+    const { receiver } = await start();
+
+    receiver.expect('run-1');
+
+    const waiting = receiver.wait('run-1', waitOptions({ channels: ['threshold'] }));
+
+    expect((await post(receiver, 'threshold', 'about run-1')).status).toBe(200);
+
+    const arrivals = await waiting;
+
+    expect(arrivals.threshold).toHaveLength(1);
+    expect(arrivals.threshold[0]).toMatchObject({ channel: 'threshold',
+      rawBody: 'about run-1' });
+    expect(arrivals.webhook).toEqual([]);
+    expect(arrivals.loop).toEqual([]);
+  });
+
+  it('a threshold POST of another run goes to onUnmatched with its kind', async () => {
+    const calls: string[] = [];
+    const { receiver } = await start({ onUnmatched: (channel) => {
+      calls.push(channel);
+    } });
+
+    receiver.expect('run-1');
+    await post(receiver, 'threshold', 'about run-2');
+    await vi.waitFor(() => {
+      expect(calls).toEqual(['threshold']);
+    });
+    expect(receiver.counts('run-1').threshold).toEqual([]);
+  });
+
+  it('keeps every key of the arrivals in all the places that build them', async () => {
+    const { receiver } = await start();
+    const empty = { webhook: [],
+      loop: [],
+      threshold: [],
+      unmatched: 0 };
+
+    expect(await receiver.wait('nope', waitOptions())).toEqual(empty);
+    expect(receiver.counts('nope')).toEqual(empty);
+    receiver.expect('run-1');
+    expect(receiver.counts('run-1')).toEqual(empty);
+  });
+
+  it('still answers 404 to an unknown kind', async () => {
+    const { receiver } = await start();
+
+    expect((await post(receiver, 'other', 'x')).status).toBe(404);
+  });
 });
 
 describe('receiver', () => {
@@ -342,6 +396,7 @@ describe('receiver', () => {
 
     expect(await receiver.wait('nope', waitOptions())).toEqual({ webhook: [],
       loop: [],
+      threshold: [],
       unmatched: 0 });
   });
 
@@ -357,6 +412,7 @@ describe('receiver', () => {
 
     expect(receiver.counts('run-1')).toEqual({ webhook: [],
       loop: [],
+      threshold: [],
       unmatched: 0 });
   });
 
@@ -519,6 +575,7 @@ describe('wait on a fake clock', () => {
 
     expect(await waiting.result).toEqual({ webhook: [],
       loop: [],
+      threshold: [],
       unmatched: 0 });
   });
 

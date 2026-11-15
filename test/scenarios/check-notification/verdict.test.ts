@@ -87,6 +87,7 @@ function arrival(channel: 'webhook' | 'loop', atMs: number, body?: string, heade
 function arrivals(webhook: Arrival[], loop: Arrival[], unmatched = 0): Arrivals {
   return { webhook,
     loop,
+    threshold: [],
     unmatched };
 }
 

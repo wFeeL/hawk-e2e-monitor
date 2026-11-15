@@ -189,6 +189,7 @@ describe('a healthy fake Hawk', () => {
     expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
     expect(parts.receiver.counts(RUN_ID)).toEqual({ webhook: [],
       loop: [],
+      threshold: [],
       unmatched: 0 });
   });
 

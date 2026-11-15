@@ -6,7 +6,7 @@ import { CheckError, isCheckError } from '../../errors/taxonomy.js';
 import { probeReceiver } from '../../notifications/address.js';
 import type { PublicAddress } from '../../notifications/address.js';
 import type { ProvisionResult, Provisioner } from '../../notifications/provisioning.js';
-import type { NotificationChannel } from '../../notifications/types.js';
+import type { ArrivalKind, NotificationChannel } from '../../notifications/types.js';
 import type { Arrival, Arrivals, Receiver } from '../../receiver/server.js';
 import type { ScenarioContext } from '../send-and-receive/stages.js';
 import { MS_PER_SECOND } from '../../time/units.js';
@@ -400,7 +400,7 @@ export function notificationFormedStage(timeoutMs: number): StageSpec<Notificati
           details };
       }
 
-      const latencyMs: Partial<Record<NotificationChannel, number>> = {};
+      const latencyMs: Partial<Record<ArrivalKind, number>> = {};
 
       for (const arrival of [webhook, loop]) {
         if (arrival !== undefined && state.acceptedAtMs !== undefined) {

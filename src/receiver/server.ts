@@ -4,7 +4,8 @@ import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Logger } from '../log/logger.js';
-import type { NotificationChannel } from '../notifications/types.js';
+import { ARRIVAL_KINDS } from '../notifications/types.js';
+import type { ArrivalKind } from '../notifications/types.js';
 import type { Clock } from '../time/clock.js';
 import { HttpStatus } from '../net/http-status.js';
 
@@ -15,7 +16,7 @@ const PATH_SEGMENTS = 4;
 /** One POST that was bound to a run. */
 export interface Arrival {
   /** Channel the POST came through. */
-  channel: NotificationChannel;
+  channel: ArrivalKind;
   /** Monotonic time of the arrival. */
   atMs: number;
   /** Request headers, names in lower case. */
@@ -30,6 +31,8 @@ export interface Arrivals {
   webhook: Arrival[];
   /** POSTs of the loop channel. */
   loop: Arrival[];
+  /** POSTs of the threshold webhook. */
+  threshold: Arrival[];
   /** POSTs that matched no run while the run was waiting. */
   unmatched: number;
 }
@@ -37,7 +40,7 @@ export interface Arrivals {
 /** Limits of one `wait`. */
 export interface WaitOptions {
   /** Channels the caller needs. */
-  channels: readonly NotificationChannel[];
+  channels: readonly ArrivalKind[];
   /** Longest wait. */
   timeoutMs: number;
   /** Time to wait for the missing channels after the first arrival. */
@@ -97,7 +100,7 @@ export interface ReceiverOptions {
   /** Largest accepted body, 1 MiB by default. */
   maxBodyBytes?: number;
   /** Called for every POST with a valid secret that belongs to no registered run; a failure is logged and ignored. */
-  onUnmatched?: (channel: NotificationChannel, rawBody: string, atMs: number) => void;
+  onUnmatched?: (channel: ArrivalKind, rawBody: string, atMs: number) => void;
 }
 
 /** State of a registered run. */
@@ -127,6 +130,7 @@ function digest(value: string): Buffer {
 function snapshot(arrivals: Arrivals): Arrivals {
   return { webhook: [...arrivals.webhook],
     loop: [...arrivals.loop],
+    threshold: [...arrivals.threshold],
     unmatched: arrivals.unmatched };
 }
 
@@ -193,7 +197,7 @@ export async function startReceiver(options: ReceiverOptions): Promise<Receiver>
   // Map order is the order of `expect`, so the first expected run wins a tie.
   const runs = new Map<string, RunState>();
 
-  const bind = (channel: NotificationChannel, headers: Record<string, string>, rawBody: string): void => {
+  const bind = (channel: ArrivalKind, headers: Record<string, string>, rawBody: string): void => {
     const matched = [...runs.entries()].find(([runId]) => rawBody.includes(runId));
 
     if (matched) {
@@ -229,7 +233,7 @@ export async function startReceiver(options: ReceiverOptions): Promise<Receiver>
     const known = segments.length === PATH_SEGMENTS && segments[1] === 'hooks' && kind !== undefined && given !== undefined
       && timingSafeEqual(digest(given), secretDigest);
     const isProbe = kind === 'probe' && method === 'GET';
-    const channel = kind === 'webhook' || kind === 'loop' ? kind : undefined;
+    const channel = ARRIVAL_KINDS.find(name => name === kind);
 
     if (!known || (!isProbe && !(channel !== undefined && method === 'POST'))) {
       sendEmpty(res, HttpStatus.notFound);
@@ -288,6 +292,7 @@ export async function startReceiver(options: ReceiverOptions): Promise<Receiver>
     if (run === undefined) {
       return { webhook: [],
         loop: [],
+        threshold: [],
         unmatched: 0 };
     }
 
@@ -352,6 +357,7 @@ export async function startReceiver(options: ReceiverOptions): Promise<Receiver>
     if (!runs.has(runId)) {
       runs.set(runId, { arrivals: { webhook: [],
         loop: [],
+        threshold: [],
         unmatched: 0 },
       listeners: new Set() });
     }
@@ -375,6 +381,7 @@ export async function startReceiver(options: ReceiverOptions): Promise<Receiver>
     wait,
     counts: runId => snapshot(runs.get(runId)?.arrivals ?? { webhook: [],
       loop: [],
+      threshold: [],
       unmatched: 0 }),
     release,
     close,

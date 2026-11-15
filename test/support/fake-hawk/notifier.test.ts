@@ -241,6 +241,12 @@ function json(request: Received | undefined): Record<string, unknown> {
   return JSON.parse(request?.body ?? 'null') as Record<string, unknown>;
 }
 
+/** The payload of a webhook body as the tests read it. */
+interface WebhookPayload {
+  /** Events of the notification. */
+  events: Array<Record<string, unknown>>;
+}
+
 afterEach(async () => {
   await Promise.all(notifiers.splice(0).map(async notifier => notifier.close()));
   await Promise.all(hawks.splice(0).map(async hawk => hawk.close()));
@@ -384,18 +390,117 @@ describe('fake notifier rules', () => {
     expect(of(receiver, 'loop')).toHaveLength(1);
   });
 
-  it('SEEN_MORE also fires on a repetition', async () => {
-    const { store, receiver, notifier } = await setup({ whatToReceive: 'SEEN_MORE',
-      threshold: 1,
-      thresholdPeriod: 3_600_000 });
+  it('a new-events rule tells repetitionId null', async () => {
+    const { store, receiver, notifier } = await setup();
+    const event = ingest(store);
+
+    await notifier.delivered(event.id);
+
+    const [request] = of(receiver, 'webhook');
+    const [item] = (json(request).payload as WebhookPayload).events;
+
+    expect(item?.repetitionId).toBeNull();
+  });
+});
+
+describe('fake notifier threshold rule', () => {
+  const THRESHOLD = { whatToReceive: 'SEEN_MORE',
+    threshold: 2,
+    thresholdPeriod: 3_600_000 };
+
+  /**
+   * Reads the repetition ids of the webhooks a receiver got.
+   * @param receiver Receiver that saw them.
+   * @returns One value per webhook.
+   */
+  function repetitionIds(receiver: Receiver): unknown[] {
+    return of(receiver, 'webhook').map(request => (json(request).payload as WebhookPayload).events[0]?.repetitionId);
+  }
+
+  it('sends on the event that makes the count reach the threshold, and on no other', async () => {
+    const { store, receiver, notifier } = await setup(THRESHOLD);
+
+    ingest(store);
+    await notifier.idle();
+    expect(of(receiver, 'webhook')).toHaveLength(0);
+
+    const second = ingest(store);
+
+    await notifier.idle();
+    expect(repetitionIds(receiver)).toEqual([second.lastRepetitionId]);
+    expect(second.lastRepetitionId).toEqual(expect.any(String));
 
     ingest(store);
     ingest(store);
     await notifier.idle();
+    expect(of(receiver, 'webhook')).toHaveLength(1);
+  });
 
+  it('counts each group on its own', async () => {
+    const { store, receiver, notifier } = await setup(THRESHOLD);
+
+    ingest(store, '[e2e:t] one');
+    ingest(store, '[e2e:t] two');
+    await notifier.idle();
+    expect(of(receiver, 'webhook')).toHaveLength(0);
+
+    ingest(store, '[e2e:t] two');
+    await notifier.idle();
+    expect(of(receiver, 'webhook')).toHaveLength(1);
+  });
+
+  it('starts the count again when the period has passed', async () => {
+    const { store, receiver, notifier, time } = await setup(THRESHOLD);
+
+    ingest(store);
+    time.value = 3_600_000;
+    ingest(store);
+    await notifier.idle();
+    expect(of(receiver, 'webhook')).toHaveLength(0);
+
+    ingest(store);
+    await notifier.idle();
+    expect(of(receiver, 'webhook')).toHaveLength(1);
+  });
+
+  it('keeps the count within the period', async () => {
+    const { store, receiver, notifier, time } = await setup(THRESHOLD);
+
+    ingest(store);
+    time.value = 3_599_999;
+    ingest(store);
+    await notifier.idle();
+
+    expect(of(receiver, 'webhook')).toHaveLength(1);
+  });
+
+  it('counts separately for each rule', async () => {
+    const { store, receiver, notifier, rules } = await setup(THRESHOLD);
+
+    created(rules.create(PROJECT, ruleInput(receiver, { ...THRESHOLD,
+      threshold: 3 })));
+    ingest(store);
+    ingest(store);
+    await notifier.idle();
+    expect(of(receiver, 'webhook')).toHaveLength(1);
+
+    ingest(store);
+    await notifier.idle();
     expect(of(receiver, 'webhook')).toHaveLength(2);
   });
 
+  it('a threshold of 1 fires on the first event, with no repetition id', async () => {
+    const { store, receiver, notifier } = await setup({ ...THRESHOLD,
+      threshold: 1 });
+
+    ingest(store);
+    await notifier.idle();
+
+    expect(repetitionIds(receiver)).toEqual([null]);
+  });
+});
+
+describe('fake notifier rule matching', () => {
   it('including is case sensitive, excluding is not', async () => {
     const { store, receiver, notifier } = await setup({ including: ['ABC'],
       excluding: ['SKIP'] });

@@ -4,6 +4,12 @@ export const CHANNELS = ['webhook', 'loop'] as const;
 /** One of `CHANNELS`. */
 export type NotificationChannel = (typeof CHANNELS)[number];
 
+/** Paths the receiver answers on: the channels of the rules and the threshold webhook, which is a rule of its own. */
+export const ARRIVAL_KINDS = [...CHANNELS, 'threshold'] as const;
+
+/** One of `ARRIVAL_KINDS`. */
+export type ArrivalKind = (typeof ARRIVAL_KINDS)[number];
+
 /** Settings of one channel of a rule. */
 export interface ChannelSettings {
   /** Whether the channel receives notifications. */

@@ -342,6 +342,7 @@ describe('notificationBeforeSend', () => {
 
     expect(parts.receiver.counts(parts.plan.runId)).toEqual({ webhook: [],
       loop: [],
+      threshold: [],
       unmatched: 0 });
     expect(parts.context.notification.warmup).toBe(false);
   });
@@ -643,6 +644,7 @@ describe('checkNotificationAgainstEvent', () => {
 
     return { webhook: webhook === undefined ? [] : [arrival('webhook', webhook)],
       loop: loop === undefined ? [] : [arrival('loop', loop)],
+      threshold: [],
       unmatched: 0 };
   }
 

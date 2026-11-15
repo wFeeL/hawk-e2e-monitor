@@ -151,11 +151,12 @@ export const setupCheckNotification: SetupScenario = async (context): Promise<Sc
       onUnmatched: (channel, rawBody) => {
         const found = LATE_RUN_ID(config.instanceId).exec(rawBody);
         const runId = found?.[1];
-        const outcome = runId === undefined ? undefined : history.markLateNotification(runId, channel, clock.wallTime().toISOString());
+        // The history keeps a late notification of the two channels of the rules; a late threshold POST is only logged.
+        const outcome = runId === undefined || channel === 'threshold' ? undefined : history.markLateNotification(runId, channel, clock.wallTime().toISOString());
 
         logger.info('late notification', { channel,
           runId,
-          result: outcome ?? (runId === undefined ? 'not of this instance' : 'unknown run or already counted') });
+          result: outcome ?? (runId === undefined ? 'not of this instance' : channel === 'threshold' ? 'threshold POST is not recorded' : 'unknown run or already counted') });
       } });
   } catch (error) {
     throw receiverError(error, config);
