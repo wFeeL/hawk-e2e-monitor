@@ -204,7 +204,8 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
       for (let page = 0; page < MAX_PAGES; page += 1) {
         signal.throwIfAborted();
 
-        const events = await api.findEvents(projectId, `[e2e:${config.instanceId}]`, signal);
+        // Hawk parses the search as a regex, so no brackets; the title prefix is checked on the results.
+        const events = await api.findEvents(projectId, `e2e:${config.instanceId}`, signal);
         const removedBefore = report.removed;
 
         report.pages += 1;

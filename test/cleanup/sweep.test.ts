@@ -150,6 +150,35 @@ describe('sweepOnce', () => {
     expect(hawk.store.get(hawk.projectId, id)).toBeUndefined();
   });
 
+  it('sweeps an instance whose id has a hyphen, which Hawk would reject as a bracketed pattern', async () => {
+    const instanceId = 'stand-compose';
+    const id = leftover('raaaaaaaaaaaaaaa', { instanceId,
+      title: buildTitle(instanceId, 'raaaaaaaaaaaaaaa', 'send-and-receive-event') });
+
+    finished('raaaaaaaaaaaaaaa', 'ok', 2 * HOUR_MS);
+
+    const report = await sweeper({ config: { ...config,
+      instanceId } }).sweepOnce(SIGNAL);
+
+    expect(report.error).toBeUndefined();
+    expect(report.removed).toBe(1);
+    expect(hawk.store.get(hawk.projectId, id)).toBeUndefined();
+  });
+
+  it('leaves the events of an instance whose id contains ours', async () => {
+    const id = leftover('rbbbbbbbbbbbbbbb', { instanceId: 'stand-compose',
+      title: buildTitle('stand-compose', 'rbbbbbbbbbbbbbbb', 'send-and-receive-event') });
+
+    finished('rbbbbbbbbbbbbbbb', 'ok', 2 * HOUR_MS);
+
+    const report = await sweeper({ config: { ...config,
+      instanceId: 'stand' } }).sweepOnce(SIGNAL);
+
+    expect(report.error).toBeUndefined();
+    expect(report.removed).toBe(0);
+    expect(hawk.store.get(hawk.projectId, id)).toBeDefined();
+  });
+
   it('removes the event of a check-notification run as well', async () => {
     const id = leftover('rbbbbbbbbbbbbbbb', { scenario: 'check-notification' });
 
