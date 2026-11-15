@@ -440,6 +440,111 @@ describe('serve: scheduled runs and the history routes', () => {
   });
 });
 
+/** One sample line of the metrics text. */
+interface Sample {
+  /** Printed name, with `_bucket`, `_sum` or `_count` for a histogram. */
+  name: string;
+  /** Labels as printed, empty without any. */
+  labels: string;
+  /** Number the line ends with. */
+  value: number;
+}
+
+/** Samples of a metrics text and the metric names that have a `# TYPE` line. */
+interface ParsedMetrics {
+  /** Sample lines. */
+  samples: Sample[];
+  /** Names with a `# TYPE` line. */
+  typed: Set<string>;
+}
+
+/**
+ * Splits the text of `/metrics` into sample lines and the metrics that have a `# TYPE` line.
+ * @param text Body of the answer.
+ * @returns Samples and the typed names.
+ */
+function parseMetrics(text: string): ParsedMetrics {
+  const typed = new Set<string>();
+  const samples: Sample[] = [];
+
+  for (const line of text.split('\n')) {
+    const type = /^# TYPE (\S+) /u.exec(line);
+    const sample = /^([A-Za-z_:][\w:]*)(\{.*\})? (\S+)$/u.exec(line);
+
+    if (type?.[1] !== undefined) {
+      typed.add(type[1]);
+    } else if (sample?.[1] !== undefined && !line.startsWith('#')) {
+      samples.push({ name: sample[1],
+        labels: sample[2] ?? '',
+        value: Number(sample[3]) });
+    }
+  }
+
+  return { samples,
+    typed };
+}
+
+describe('serve: metrics', () => {
+  it('prints the Prometheus text with a TYPE line for every hawk_e2e metric and counts the runs', async () => {
+    const harness = await launch();
+
+    await vi.waitFor(() => {
+      expect(finishedRows(harness).filter(row => row.status === 'ok')).toHaveLength(2);
+    }, WAIT);
+
+    const response = await get(harness, '/metrics');
+    const { samples, typed } = parseMetrics(await response.text());
+    const labelled = (name: string, fragment: string): Sample | undefined => samples.find(sample => sample.name === name && sample.labels.includes(fragment));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toMatch(/^text\/plain; version=0\.0\.4/u);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+
+    const own = samples.filter(sample => sample.name.startsWith('hawk_e2e_'));
+
+    expect(own.length).toBeGreaterThan(10);
+
+    for (const sample of own) {
+      const base = sample.name.replace(/_(bucket|sum|count)$/u, '');
+
+      expect(typed.has(sample.name) || typed.has(base), `${sample.name} has a TYPE line`).toBe(true);
+    }
+
+    expect(labelled('hawk_e2e_runs_total', `scenario="${SEND}",status="ok",trigger="schedule"`)?.value).toBeGreaterThanOrEqual(2);
+    expect(labelled('hawk_e2e_runs_total', `scenario="${SEND}",status="failed",trigger="manual"`)?.value).toBe(0);
+    expect(labelled('hawk_e2e_last_status', SEND)?.value).toBe(1);
+    expect(labelled('hawk_e2e_scenario_interval_seconds', SEND)?.value).toBe(0.7);
+    expect(labelled('hawk_e2e_stage_duration_seconds_count', 'stage="collector_availability"')?.value).toBeGreaterThanOrEqual(2);
+    expect(labelled('hawk_e2e_build_info', 'version="0.1.0"')?.value).toBe(1);
+  });
+
+  it('restores last_status and the timestamp of the earlier process and starts the counters at zero', async () => {
+    const finishedAt = new Date(Date.now() - 60_000).toISOString();
+    const harness = await launch({ intervalMs: 600_000,
+      seed: (history) => {
+        history.startRun({ runId: 'rfffffffffffffff',
+          scenario: SEND,
+          sequence: 1,
+          trigger: 'schedule',
+          startedAt: new Date(Date.now() - 65_000).toISOString() });
+        history.finishRun('rfffffffffffffff', { status: 'failed',
+          finishedAt,
+          durationMs: 5000,
+          degraded: [],
+          errorClass: 'event_not_found',
+          culprit: 'hawk',
+          failedStage: 'event_visible' });
+      } });
+    const { samples } = parseMetrics(await (await get(harness, '/metrics')).text());
+    const labelled = (name: string, fragment: string): Sample | undefined => samples.find(sample => sample.name === name && sample.labels.includes(fragment));
+
+    expect(labelled('hawk_e2e_last_status', SEND)?.value).toBe(0);
+    expect(labelled('hawk_e2e_last_run_timestamp_seconds', SEND)?.value).toBe(Date.parse(finishedAt) / 1000);
+    expect(labelled('hawk_e2e_runs_total', `scenario="${SEND}",status="ok",trigger="schedule"`)?.value).toBe(0);
+    expect(labelled('hawk_e2e_scenario_interval_seconds', SEND)?.value).toBe(600);
+  });
+});
+
 describe('serve: sweep of leftover events', () => {
   it('removes the event a finished run left behind, on the timer', async () => {
     const hawk = await hawkFor();

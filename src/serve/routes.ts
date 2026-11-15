@@ -2,7 +2,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Alerter } from '../alerting/alerter.js';
 import type { Config } from '../config/load.js';
 import type { RouteHandler } from '../http/internal-server.js';
-import { sendJson } from '../http/respond.js';
+import { sendJson, sendText } from '../http/respond.js';
+import type { MonitorMetrics } from '../metrics/metrics.js';
 import { SCENARIO_NAMES } from '../scenarios/names.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import { DEFAULT_LIST_LIMIT } from '../storage/history.js';
@@ -27,6 +28,8 @@ export interface RouteDeps {
   alerter: Alerter;
   /** Counts failed sweeps of leftover events. */
   sweepFailures: () => number;
+  /** Metrics to print on `GET /metrics`; the route is absent without them. */
+  metrics?: MonitorMetrics;
 }
 
 /**
@@ -127,14 +130,31 @@ function stats(deps: RouteDeps): RouteHandler {
 }
 
 /**
- * Builds the routes of the internal server: `/runs`, `/runs/<runId>` and `/stats`, all `GET`.
+ * Handles `GET /metrics`.
+ * @param metrics Metrics to print.
+ * @returns Route handler.
+ */
+function metricsRoute(metrics: MonitorMetrics): RouteHandler {
+  return async (_req, res) => {
+    sendText(res, HttpStatus.ok, await metrics.registry.metrics(), metrics.registry.contentType);
+  };
+}
+
+/**
+ * Builds the routes of the internal server: `/runs`, `/runs/<runId>`, `/stats` and, with metrics, `/metrics`, all `GET`.
  * @param deps What the routes read.
  * @returns Routes for `createInternalServer`.
  */
 export function createRoutes(deps: RouteDeps): Map<string, RouteHandler> {
-  return new Map<string, RouteHandler>([
+  const routes = new Map<string, RouteHandler>([
     ['GET /runs', listRuns(deps)],
     ['GET /runs/*', oneRun(deps)],
     ['GET /stats', stats(deps)],
   ]);
+
+  if (deps.metrics !== undefined) {
+    routes.set('GET /metrics', metricsRoute(deps.metrics));
+  }
+
+  return routes;
 }

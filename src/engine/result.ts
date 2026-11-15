@@ -7,8 +7,11 @@ export const STAGE_NAMES = ['collector_availability', 'api_availability', 'notif
 /** One of `STAGE_NAMES`. */
 export type StageName = (typeof STAGE_NAMES)[number];
 
+/** Ways a stage can end. */
+export const STAGE_STATUSES = ['ok', 'failed', 'uncertain', 'skipped'] as const;
+
 /** How a stage ended. */
-export type StageStatus = 'ok' | 'failed' | 'uncertain' | 'skipped';
+export type StageStatus = (typeof STAGE_STATUSES)[number];
 
 /** Recorded outcome of one stage. */
 export interface StageResult {

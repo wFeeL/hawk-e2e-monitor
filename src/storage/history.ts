@@ -211,7 +211,7 @@ export interface History {
   /**
    * Finds the newest run that carries a verdict.
    * @param scenario Scenario whose runs are searched.
-   * @param options `aborts` also counts an abort that is not a stop or restart of the monitor.
+   * @param options `aborts` also counts an abort that is not a stop or restart of the monitor; `warmup: false` leaves out the warmup skip.
    * @returns The row, or undefined when no run has a verdict.
    */
   lastVerdict(scenario: ScenarioName, options?: VerdictOptions): RunRow | undefined;

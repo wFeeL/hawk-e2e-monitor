@@ -204,6 +204,12 @@ describe('isVerdict', () => {
     expect(isVerdict({ status: 'running' })).toBe(false);
   });
 
+  it('leaves the warmup skip out on request', () => {
+    expect(isVerdict({ status: 'skipped',
+      skipReason: 'rule_cache_warmup' }, { warmup: false })).toBe(false);
+    expect(isVerdict({ status: 'ok' }, { warmup: false })).toBe(true);
+  });
+
   it('counts an abort only on request and never one by a stop or restart of the monitor', () => {
     expect(isVerdict({ status: 'aborted',
       errorClass: 'run_hung' })).toBe(false);

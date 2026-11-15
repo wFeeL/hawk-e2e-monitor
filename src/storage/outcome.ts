@@ -128,6 +128,8 @@ export function rowOf(start: RunStart, outcome: RunOutcome): RunRow {
 export interface VerdictOptions {
   /** Also counts an `aborted` run that is not a stop or restart of the monitor. */
   aborts?: boolean;
+  /** Set to false to leave out the skip for the rule cache warmup. */
+  warmup?: boolean;
 }
 
 /** The part of a run that tells whether it carries a verdict. */
@@ -154,7 +156,7 @@ export function isVerdict(row: VerdictFields, options: VerdictOptions = {}): boo
   }
 
   if (row.status === 'skipped') {
-    return row.skipReason === 'rule_cache_warmup';
+    return row.skipReason === 'rule_cache_warmup' && options.warmup !== false;
   }
 
   return options.aborts === true && row.status === 'aborted' && !isMonitorAbort(row);

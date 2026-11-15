@@ -25,13 +25,17 @@ import type { History } from '../storage/history.js';
 import { LEASE_REFRESH_MS, liveLease, releaseLease, writeLease } from '../storage/lease.js';
 import { systemClock } from '../time/clock.js';
 import type { Clock } from '../time/clock.js';
+import { scenarioSettings } from '../config/scenario.js';
+import { createMetrics } from '../metrics/metrics.js';
+import { SERVICE_VERSION } from '../version.js';
 import { createRoutes } from './routes.js';
 import { buildRunners } from './runners.js';
 import type { Closer, RunnerOverrides } from './scenario-setup.js';
 import { every } from '../time/every.js';
-import { MS_PER_DAY } from '../time/units.js';
+import { MS_PER_DAY, MS_PER_SECOND } from '../time/units.js';
 
 const ALERT_BACKLOG_LIMIT_MS = 1_800_000;
+const ALERT_BACKLOG_METRIC_MS = 15_000;
 const NOTIFY_TOKEN_MARKER = '/u/';
 
 /** Test hooks and replacements for the parts of `serve` that talk to the outside. */
@@ -297,6 +301,16 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
     alerter.start();
     closers.push(async () => alerter.stop());
 
+    const metrics = createMetrics({ version: SERVICE_VERSION,
+      logger });
+
+    metrics.initialize(history, monitoring.scenarios, scenario => scenarioSettings(config, scenario).intervalMs);
+    workers.push(every(clock, ALERT_BACKLOG_METRIC_MS, background.signal, () => {
+      metrics.setAlertBacklog((alerter.health().backlogAgeMs ?? 0) / MS_PER_SECOND);
+    }, (error) => {
+      logger.error('could not update the alert backlog metric', { error });
+    }));
+
     const built = await buildRunners({ config,
       history,
       clock,
@@ -316,6 +330,8 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
       beforeFirstRun: built.beforeFirstRun,
       onRunFinished: [(row, result) => {
         alerter.onRunFinished(row, result);
+      }, (row, result) => {
+        metrics.onRunFinished(row, result);
       }],
       exit });
     const sweeper = createSweeper({ api,
@@ -356,7 +372,8 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
         clock,
         scheduler,
         alerter,
-        sweepFailures: () => sweeper.failures() }) });
+        sweepFailures: () => sweeper.failures(),
+        metrics }) });
 
     closers.push(async () => app.stop());
     closers.push(async () => scheduler.stop());

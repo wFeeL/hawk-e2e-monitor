@@ -479,6 +479,7 @@ describe('lastVerdict', () => {
         skipReason: 'rule_cache_warmup' } });
 
     expect(history.lastVerdict(SCENARIO)?.runId).toBe('warm');
+    expect(history.lastVerdict(SCENARIO, { warmup: false })?.runId).toBe('ok');
   });
 });
 
