@@ -1,6 +1,8 @@
 const MIN_SECRET_LENGTH = 4;
 const MASK = '***';
-const TOKEN_INVALID_PREFIX = 'Integration token invalid';
+
+/** Start of the collector's message for an invalid integration token; the secret follows it. */
+export const TOKEN_INVALID_PREFIX = 'Integration token invalid';
 
 /** Replaces secrets in a text. */
 export type Redactor = (text: string) => string;

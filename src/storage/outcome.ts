@@ -5,9 +5,9 @@ import type { ErrorClass, MessageFacts } from '../errors/taxonomy.js';
 import type { ScenarioName } from '../scenarios/send-and-receive/plan.js';
 import type { RunStart } from './history.js';
 import type { DegradedCode, RunOutcome, RunRow } from './types.js';
+import { MS_PER_DAY } from '../time/units.js';
 
 const DAYS_PER_PERIOD = 30;
-const MS_PER_DAY = 86_400_000;
 
 /** What `outcomeOf` needs to know besides the result. */
 export interface OutcomeContext {

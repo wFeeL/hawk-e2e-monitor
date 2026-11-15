@@ -18,8 +18,7 @@ import { refusalWhileServing } from './serving.js';
 import { openDatabase } from '../storage/database.js';
 import { createHistory } from '../storage/history.js';
 import { MATCH_CHANGED_KEY } from '../storage/keys.js';
-
-const MS_PER_SECOND = 1000;
+import { MS_PER_SECOND } from '../time/units.js';
 
 /** Replacements for the default dependencies, for tests. */
 export interface ProvisionDeps {

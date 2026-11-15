@@ -37,8 +37,8 @@ import { projectedEventsPer30Days } from '../storage/outcome.js';
 import { systemClock } from '../time/clock.js';
 import type { Clock } from '../time/clock.js';
 import { createRoutes } from './routes.js';
+import { MS_PER_DAY } from '../time/units.js';
 
-const MS_PER_DAY = 86_400_000;
 const TUNNEL_POLL_MS = 2000;
 const ALERT_BACKLOG_LIMIT_MS = 1_800_000;
 const NOTIFY_TOKEN_MARKER = '/u/';

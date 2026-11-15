@@ -6,10 +6,8 @@ import { SCENARIO_NAMES } from '../scenarios/send-and-receive/plan.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import type { History, ListOptions } from '../storage/history.js';
 import type { Clock } from '../time/clock.js';
+import { HttpStatus } from '../net/http-status.js';
 
-const HTTP_OK = 200;
-const HTTP_BAD_REQUEST = 400;
-const HTTP_NOT_FOUND = 404;
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 500;
 const RUNS_PREFIX = '/runs/';
@@ -49,7 +47,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
  * @param message What is wrong with the request.
  */
 function badRequest(res: ServerResponse, message: string): void {
-  sendJson(res, HTTP_BAD_REQUEST, { error: 'bad_request',
+  sendJson(res, HttpStatus.badRequest, { error: 'bad_request',
     message });
 }
 
@@ -94,7 +92,7 @@ function listRuns(deps: RouteDeps): RouteHandler {
       options.scenario = scenario;
     }
 
-    sendJson(res, HTTP_OK, deps.history.list(options));
+    sendJson(res, HttpStatus.ok, deps.history.list(options));
   };
 }
 
@@ -110,12 +108,12 @@ function oneRun(deps: RouteDeps): RouteHandler {
     const run = runId === '' ? undefined : deps.history.get(runId);
 
     if (run === undefined) {
-      sendJson(res, HTTP_NOT_FOUND, { error: 'not_found' });
+      sendJson(res, HttpStatus.notFound, { error: 'not_found' });
 
       return;
     }
 
-    sendJson(res, HTTP_OK, run);
+    sendJson(res, HttpStatus.ok, run);
   };
 }
 
@@ -129,7 +127,7 @@ function stats(deps: RouteDeps): RouteHandler {
     const now = deps.clock.wallTime();
     const alerts = deps.alerter.health();
 
-    sendJson(res, HTTP_OK, {
+    sendJson(res, HttpStatus.ok, {
       generatedAt: now.toISOString(),
       scenarios: deps.history.stats(now, deps.config.monitoring.scenarios),
       storageFailures: deps.scheduler.failures() + deps.alerter.failures(),

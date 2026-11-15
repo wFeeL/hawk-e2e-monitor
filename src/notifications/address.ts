@@ -2,13 +2,12 @@ import { CheckError } from '../errors/taxonomy.js';
 import { NetworkError, requestWithRetry } from '../net/http.js';
 import type { HttpResponse } from '../net/http.js';
 import type { Clock } from '../time/clock.js';
+import { HttpStatus } from '../net/http-status.js';
 
 const FULL_ATTEMPTS = 3;
 const FIRST_RETRY_DELAY_MS = 200;
 const SECOND_RETRY_DELAY_MS = 500;
 const DEFAULT_RETRY_DELAYS_MS = [FIRST_RETRY_DELAY_MS, SECOND_RETRY_DELAY_MS] as const;
-const HTTP_OK = 200;
-const HTTP_SERVER_ERROR = 500;
 const PROBE_PATH = '/hooks/probe/';
 
 /** Where Hawk can reach the receiver. */
@@ -76,7 +75,7 @@ async function get(url: string, deps: AddressDeps, attempts: number, signal: Abo
     signal }, 'api', { attempts,
     delaysMs: deps.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS,
     clock: deps.clock,
-    retryStatus: status => status >= HTTP_SERVER_ERROR,
+    retryStatus: status => status >= HttpStatus.internalServerError,
     retryNetwork: () => true });
 
   return response;
@@ -132,7 +131,7 @@ export async function resolvePublicAddress(settings: AddressSettings, deps: Addr
     throw error;
   }
 
-  if (response.status !== HTTP_OK) {
+  if (response.status !== HttpStatus.ok) {
     throw new CheckError('tunnel_unavailable', { url,
       detail: `answered HTTP ${String(response.status)}` });
   }
@@ -174,7 +173,7 @@ export async function probeReceiver(address: PublicAddress, secret: string, expe
     throw error;
   }
 
-  if (response.status !== HTTP_OK) {
+  if (response.status !== HttpStatus.ok) {
     throw new CheckError('receiver_unreachable', { detail: `${shown} answered HTTP ${String(response.status)}` });
   }
 

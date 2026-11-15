@@ -1,20 +1,18 @@
 import { CheckError, isCheckError } from '../errors/taxonomy.js';
 import type { ErrorClass } from '../errors/taxonomy.js';
 import type { Clock } from '../time/clock.js';
-import { GraphqlFailure } from './graphql.js';
+import { ACCESS_EXPIRED, GraphqlFailure, UNAUTHENTICATED } from './graphql.js';
 import type { GraphqlOperation, GraphqlTransport } from './graphql.js';
 import type { ChannelSettings, NotificationRule, NotificationRuleInput, NotificationRuleUpdate } from '../notifications/types.js';
 import { CREATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE, EVENT_CARD, FIND_EVENTS, LOGIN, NOTIFICATION_RULES, PROJECT_TOKEN, REFRESH_TOKENS, REMOVE_EVENT, UPDATE_NOTIFICATION_RULE, WORKSPACE_QUOTA } from './operations.js';
+import { MS_PER_SECOND } from '../time/units.js';
 
-const ACCESS_EXPIRED = 'ACCESS_TOKEN_EXPIRED_ERROR';
-const UNAUTHENTICATED = 'UNAUTHENTICATED';
 const REMOVE_ATTEMPTS = 3;
 const FIRST_RETRY_DELAY_MS = 200;
 const SECOND_RETRY_DELAY_MS = 500;
 const DEFAULT_RETRY_DELAYS_MS = [FIRST_RETRY_DELAY_MS, SECOND_RETRY_DELAY_MS] as const;
 const NOT_FOUND_PREFIX = 'Event not found for eventId';
 const RETRYABLE_CLASSES: ReadonlySet<ErrorClass> = new Set<ErrorClass>(['api_unavailable', 'dns_error', 'network_error', 'tls_error']);
-const MS_PER_SECOND = 1000;
 // Unix seconds stay below this until the year 5138; anything above is already milliseconds.
 const MILLISECONDS_THRESHOLD = 1e11;
 

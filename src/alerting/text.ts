@@ -5,15 +5,13 @@ import type { ScenarioName } from '../scenarios/send-and-receive/plan.js';
 import type { AlertStateRow } from '../storage/history.js';
 import type { RunRow } from '../storage/types.js';
 import type { AlertKind } from './state.js';
+import { MINUTES_PER_HOUR, MS_PER_SECOND, SECONDS_PER_MINUTE } from '../time/units.js';
 
 /** Longest alert text codex.bot gets, counted after escaping. */
 export const ALERT_TEXT_LIMIT = 3500;
 
 const ELLIPSIS = '…';
 const BOLD_TAGS_LENGTH = '<b></b>'.length;
-const MS_PER_SECOND = 1000;
-const SECONDS_PER_MINUTE = 60;
-const MINUTES_PER_HOUR = 60;
 const WARNING_CLASSES: readonly ErrorClass[] = ['quota_exhausted', 'rate_limited'];
 const TITLES: ReadonlyMap<AlertKind, string> = new Map([
   ['failed', 'FAILED'],

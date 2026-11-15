@@ -5,8 +5,8 @@ import type { Culprit, ErrorClass } from '../errors/taxonomy.js';
 import type { NotificationChannel } from '../notifications/types.js';
 import type { ScenarioName } from '../scenarios/send-and-receive/plan.js';
 import type { AlertLevelState, DegradedCode, RunOutcome, RunRow, RunStatus, RunTrigger, SkipReason, StageRow } from './types.js';
+import { MS_PER_DAY } from '../time/units.js';
 
-const MS_PER_DAY = 86_400_000;
 const WINDOW_DAYS = 7;
 const SHORT_WINDOW_DAYS = 1;
 const P50 = 0.5;

@@ -5,6 +5,9 @@ import { classifyNetworkError, unavailableClass } from './classify.js';
 import type { NetTarget, NetworkFailure } from './classify.js';
 import { withRetry } from './retry.js';
 
+/** Headers for a JSON body. */
+export const JSON_HEADERS: Readonly<Record<string, string>> = Object.fromEntries([['content-type', 'application/json']]);
+
 /** A request made by `httpRequest`. */
 export interface HttpRequest {
   /** Address. */

@@ -6,13 +6,10 @@ import type { AddressInfo } from 'node:net';
 import type { Logger } from '../log/logger.js';
 import type { NotificationChannel } from '../notifications/types.js';
 import type { Clock } from '../time/clock.js';
+import { HttpStatus } from '../net/http-status.js';
 
 const DEFAULT_MAX_BODY_BYTES = 1_048_576;
 const NONCE_BYTES = 16;
-const HTTP_OK = 200;
-const HTTP_NOT_FOUND = 404;
-const HTTP_PAYLOAD_TOO_LARGE = 413;
-const HTTP_INTERNAL_ERROR = 500;
 const PATH_SEGMENTS = 4;
 
 /** One POST that was bound to a run. */
@@ -235,13 +232,13 @@ export async function startReceiver(options: ReceiverOptions): Promise<Receiver>
     const channel = kind === 'webhook' || kind === 'loop' ? kind : undefined;
 
     if (!known || (!isProbe && !(channel !== undefined && method === 'POST'))) {
-      sendEmpty(res, HTTP_NOT_FOUND);
+      sendEmpty(res, HttpStatus.notFound);
 
       return;
     }
 
     if (isProbe) {
-      res.statusCode = HTTP_OK;
+      res.statusCode = HttpStatus.ok;
       res.setHeader('content-type', 'text/plain');
       res.end(nonce);
 
@@ -251,7 +248,7 @@ export async function startReceiver(options: ReceiverOptions): Promise<Receiver>
     const body = await readBody(req, maxBodyBytes);
 
     if (body === undefined || channel === undefined) {
-      res.writeHead(HTTP_PAYLOAD_TOO_LARGE, { connection: 'close' });
+      res.writeHead(HttpStatus.payloadTooLarge, { connection: 'close' });
       res.end(() => {
         req.destroy();
       });
@@ -260,7 +257,7 @@ export async function startReceiver(options: ReceiverOptions): Promise<Receiver>
     }
 
     // Hawk waits for the answer with a short idle timeout, so answer before binding.
-    sendEmpty(res, HTTP_OK);
+    sendEmpty(res, HttpStatus.ok);
     bind(channel, flattenHeaders(req.headers), body);
   };
 
@@ -270,7 +267,7 @@ export async function startReceiver(options: ReceiverOptions): Promise<Receiver>
       if (res.headersSent) {
         res.destroy();
       } else {
-        sendEmpty(res, HTTP_INTERNAL_ERROR);
+        sendEmpty(res, HttpStatus.internalServerError);
       }
     });
   });

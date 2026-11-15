@@ -8,8 +8,8 @@ import type { ProvisionResult, Provisioner } from '../../notifications/provision
 import type { NotificationChannel } from '../../notifications/types.js';
 import type { Arrival, Arrivals, Receiver } from '../../receiver/server.js';
 import type { ScenarioContext } from '../send-and-receive/stages.js';
+import { MS_PER_SECOND } from '../../time/units.js';
 
-const MS_PER_SECOND = 1000;
 const PROBE_ATTEMPTS = 3;
 const DEFAULT_ADDRESS_POLL_MS = 2000;
 const WEBHOOK_AGENT = 'Hawk-Webhook/1.0';

@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { MS_PER_SECOND } from '../../time/units.js';
 
 const SEARCH_LIMIT = 50;
-const MS_PER_SECOND = 1000;
 
 /** Event as the fake grouper keeps it. */
 export interface StoredEvent {

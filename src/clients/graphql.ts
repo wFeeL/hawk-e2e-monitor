@@ -2,15 +2,19 @@ import { CheckError } from '../errors/taxonomy.js';
 import { NetworkError, networkFailureToCheckError, requestWithRetry } from '../net/http.js';
 import type { HttpResponse } from '../net/http.js';
 import type { Clock } from '../time/clock.js';
+import { HttpStatus } from '../net/http-status.js';
+import { JSON_HEADERS } from '../net/http.js';
 
 const ATTEMPTS = 3;
 const FIRST_RETRY_DELAY_MS = 200;
 const SECOND_RETRY_DELAY_MS = 500;
 const DEFAULT_RETRY_DELAYS_MS = [FIRST_RETRY_DELAY_MS, SECOND_RETRY_DELAY_MS] as const;
-const HTTP_SERVER_ERROR = 500;
-const HTTP_BAD_REQUEST = 400;
-const JSON_HEADERS = Object.fromEntries([['content-type', 'application/json']]);
-const AUTH_CODES = new Set(['UNAUTHENTICATED', 'ACCESS_TOKEN_EXPIRED_ERROR', 'SSO_REQUIRED']);
+
+/** Hawk code for an expired access token. */
+export const ACCESS_EXPIRED = 'ACCESS_TOKEN_EXPIRED_ERROR';
+/** Hawk code for a missing or invalid login. */
+export const UNAUTHENTICATED = 'UNAUTHENTICATED';
+const AUTH_CODES = new Set([UNAUTHENTICATED, ACCESS_EXPIRED, 'SSO_REQUIRED']);
 const REJECTED_CODES = new Set(['GRAPHQL_VALIDATION_FAILED', 'BAD_USER_INPUT']);
 
 /** One GraphQL document with its name. */
@@ -142,7 +146,7 @@ export function createGraphqlTransport(options: GraphqlTransportOptions): Graphq
         signal }, 'api', { attempts: operation.idempotent ? ATTEMPTS : 1,
         delaysMs,
         clock,
-        retryStatus: status => operation.idempotent && status >= HTTP_SERVER_ERROR,
+        retryStatus: status => operation.idempotent && status >= HttpStatus.internalServerError,
         retryNetwork: () => operation.idempotent });
 
       return response;
@@ -168,7 +172,7 @@ export function createGraphqlTransport(options: GraphqlTransportOptions): Graphq
       const waitedMs = Math.round(clock.monotonicMs() - startedAt);
       const body = parseObject(response.text);
 
-      if (response.status >= HTTP_SERVER_ERROR || !body) {
+      if (response.status >= HttpStatus.internalServerError || !body) {
         throw new CheckError('api_unavailable', { url,
           status: response.status,
           waitedMs });
@@ -178,7 +182,7 @@ export function createGraphqlTransport(options: GraphqlTransportOptions): Graphq
       const message = typeof first?.message === 'string' ? first.message : '';
       const code = typeof first?.extensions?.code === 'string' ? first.extensions.code : '';
 
-      if (response.status === HTTP_BAD_REQUEST) {
+      if (response.status === HttpStatus.badRequest) {
         throw new CheckError('api_query_rejected', { url,
           status: response.status,
           detail: message || undefined });
