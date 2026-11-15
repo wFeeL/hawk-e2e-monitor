@@ -75,6 +75,8 @@ export interface ServeDeps {
   exit?: (code: number) => void;
   /** Host and process id for the lease; the real ones by default. */
   identity?: ProcessIdentity;
+  /** Aborts the start, for a stop signal that comes while `startServe` waits for the lease of an earlier process. */
+  signal?: AbortSignal;
   /** Replacements for tests. */
   overrides?: ServeOverrides;
 }
@@ -248,7 +250,7 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
   });
 
   try {
-    const now = clock.wallTime();
+    let now = clock.wallTime();
     const ownLease = (): Lease => ({ pid: identity.pid,
       hostname: identity.hostname,
       nonce: identity.nonce,
@@ -258,8 +260,16 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
     if (claim.kind === 'twin') {
       // After a container restart the predecessor has the same pid and host name; a live twin renews within one period.
       logger.warn('a lease with the same pid and hostname exists; waiting one renewal period', { pid: claim.lease.pid });
-      await clock.sleep(LEASE_REFRESH_MS + LEASE_TWIN_MARGIN_MS, background.signal);
-      claim = claimLease(history, ownLease(), clock.wallTime(), { staleAt: claim.lease.at });
+
+      try {
+        await clock.sleep(LEASE_REFRESH_MS + LEASE_TWIN_MARGIN_MS, deps.signal === undefined ? background.signal : AbortSignal.any([background.signal, deps.signal]));
+      } catch (error) {
+        throw new StartupError('stopped while waiting for the lease of an earlier process', { cause: error });
+      }
+
+      // The wait took a renewal period, so the earlier reading would date the aborted runs and the pruning too early.
+      now = clock.wallTime();
+      claim = claimLease(history, ownLease(), now, { staleAt: claim.lease.at });
     }
 
     if (claim.kind !== 'claimed') {

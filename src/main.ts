@@ -54,6 +54,7 @@ async function serve(config: Config, env: ParsedEnv): Promise<number> {
   }
 
   let app: ServeHandle | undefined;
+  const starting = new AbortController();
   let stopRequested = false;
   let pendingSignal = '';
 
@@ -77,6 +78,7 @@ async function serve(config: Config, env: ParsedEnv): Promise<number> {
           during: 'startup' });
         stopRequested = true;
         pendingSignal = signal;
+        starting.abort();
       } else {
         logger.info('stopping', { signal });
         shutdown();
@@ -86,12 +88,22 @@ async function serve(config: Config, env: ParsedEnv): Promise<number> {
 
   try {
     app = await startServe({ config,
-      logger });
+      logger,
+      signal: starting.signal });
   } catch (error: unknown) {
     if (!(error instanceof StartupError)) {
       throw error;
     }
     process.stderr.write(`${error.message}\n`);
+
+    // A stop the operator asked for during startup is not a failure.
+    if (stopRequested) {
+      logger.info('stopped during startup', { signal: pendingSignal,
+        reason: error.message });
+
+      return 0;
+    }
+
     logger.error('startup failed', { error });
 
     return 1;
