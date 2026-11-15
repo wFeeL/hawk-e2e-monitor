@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { buildSchema, parse, validate } from 'graphql';
+import { Kind, buildSchema, parse, validate } from 'graphql';
 import type { OperationDefinitionNode } from 'graphql';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { isCheckError } from '../../src/errors/taxonomy.js';
@@ -9,7 +9,7 @@ import type { FakeApiError, FakeHawk } from '../support/fake-hawk/index.js';
 import { systemClock } from '../../src/time/clock.js';
 import { GraphqlFailure, createGraphqlTransport } from '../../src/clients/graphql.js';
 import type { GraphqlOperation, GraphqlTransport } from '../../src/clients/graphql.js';
-import { ALL_OPERATIONS, CREATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE, EVENT_CARD, FIND_EVENTS, LOGIN, NOTIFICATION_RULES, PROJECT_TOKEN, REFRESH_TOKENS, REMOVE_EVENT, UPDATE_NOTIFICATION_RULE, WORKSPACE_QUOTA } from '../../src/clients/operations.js';
+import { ALL_OPERATIONS, CREATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE, EVENT, PROJECT_DAILY_EVENTS, LOGIN, NOTIFICATION_RULES, PROJECT_TOKEN, REFRESH_TOKENS, REMOVE_EVENT, UPDATE_NOTIFICATION_RULE, WORKSPACE_QUOTA } from '../../src/clients/operations.js';
 
 const FIXTURE = new URL('../fixtures/hawk-api.graphql', import.meta.url);
 const OPERATION_COUNT = 11;
@@ -124,20 +124,33 @@ describe('operations', () => {
 
   it('lists all eleven operations', () => {
     expect(ALL_OPERATIONS).toHaveLength(OPERATION_COUNT);
-    expect(ALL_OPERATIONS).toEqual([LOGIN, REFRESH_TOKENS, PROJECT_TOKEN, WORKSPACE_QUOTA, FIND_EVENTS, EVENT_CARD, REMOVE_EVENT, NOTIFICATION_RULES, CREATE_NOTIFICATION_RULE, UPDATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE]);
+    expect(ALL_OPERATIONS).toEqual([LOGIN, REFRESH_TOKENS, PROJECT_TOKEN, WORKSPACE_QUOTA, PROJECT_DAILY_EVENTS, EVENT, REMOVE_EVENT, NOTIFICATION_RULES, CREATE_NOTIFICATION_RULE, UPDATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE]);
   });
 
   it.each(ALL_OPERATIONS.map(operation => [operation.name, operation] as const))(
     'every operation validates against the Hawk schema fixture: %s',
     (_name, operation) => {
       const document = parse(operation.document);
-      const definition = document.definitions[0] as OperationDefinitionNode;
+      const operations = document.definitions.filter((definition): definition is OperationDefinitionNode => definition.kind === Kind.OPERATION_DEFINITION);
 
       expect(validate(schema, document)).toEqual([]);
-      expect(document.definitions).toHaveLength(1);
-      expect(definition.name?.value).toBe(operation.name);
+      expect(operations).toHaveLength(1);
+      expect(operations[0]?.name?.value).toBe(operation.name);
     }
   );
+
+  it('reads events with the documents of Garage, fragment included', () => {
+    for (const operation of [PROJECT_DAILY_EVENTS, EVENT]) {
+      expect(operation.document).toContain('fragment Event on Event');
+      expect(operation.document).toContain('fragment eventBacktrace on EventBacktraceFrame');
+      expect(operation.document).toContain('...Event');
+      expect(operation.idempotent).toBe(true);
+    }
+
+    expect(parse(EVENT.document).definitions.filter(definition => definition.kind === Kind.FRAGMENT_DEFINITION)).toHaveLength(3);
+    expect(EVENT.document).toContain('query Event($projectId: ID!, $eventId: ID!, $originalEventId: ID!)');
+    expect(PROJECT_DAILY_EVENTS.document).toContain('dailyEventsPortion(sort: $sort, filters: $filters, search: $search, release: $release, assignee: $assignee, nextCursor: $cursor)');
+  });
 
   it('a typo is caught', () => {
     const typo = PROJECT_TOKEN.document.replace('token', 'toke');
@@ -224,10 +237,10 @@ describe('graphql transport', () => {
   });
 
   it('INTERNAL_SERVER_ERROR is api_error', async () => {
-    hawk.api.knobs.errors = injected('EventCard', 'INTERNAL_SERVER_ERROR', 'boom');
+    hawk.api.knobs.errors = injected('Event', 'INTERNAL_SERVER_ERROR', 'boom');
 
     const token = await login(transportFor());
-    const error = checkError(await failureOf(transportFor().request(EVENT_CARD, { projectId: hawk.projectId,
+    const error = checkError(await failureOf(transportFor().request(EVENT, { projectId: hawk.projectId,
       eventId: 'a'.repeat(24) }, token, signal)), 'api_error');
 
     expect(error.facts.detail).toBe('boom');

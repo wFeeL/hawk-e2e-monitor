@@ -360,7 +360,7 @@ describe('fake api project operations', () => {
     const { accessToken } = await login(api);
     const first = store.ingest(PROJECT, 'errors/nodejs', { title: 'run abc',
       context: { runId: 'abc' } });
-    const found = async (): Promise<DailyEventShape[]> => dataOf(await gql(api, 'FindEvents', { projectId: PROJECT,
+    const found = async (): Promise<DailyEventShape[]> => dataOf(await gql(api, 'ProjectDailyEvents', { projectId: PROJECT,
       search: 'abc' }, accessToken)).project.dailyEventsPortion.dailyEvents;
 
     expect(head(await found())).toMatchObject({ id: first.id,
@@ -390,7 +390,7 @@ describe('fake api project operations', () => {
 
     api.knobs.foreignEvent = true;
 
-    const rows = dataOf(await gql(api, 'FindEvents', { projectId: PROJECT,
+    const rows = dataOf(await gql(api, 'ProjectDailyEvents', { projectId: PROJECT,
       search: 'rzzz' }, accessToken)).project.dailyEventsPortion.dailyEvents;
 
     expect(rows).toHaveLength(1);
@@ -399,7 +399,7 @@ describe('fake api project operations', () => {
     expect(head(rows).event.totalCount).toBe(1);
     expect(store.all(PROJECT)).toEqual([]);
 
-    const card = await gql(api, 'EventCard', { projectId: PROJECT,
+    const card = await gql(api, 'Event', { projectId: PROJECT,
       eventId: head(rows).event.originalEventId }, accessToken);
 
     expect(dataOf(card).project.event).toBeNull();
@@ -410,9 +410,9 @@ describe('fake api project operations', () => {
     const { accessToken } = await login(api);
     const event = store.ingest(PROJECT, 'errors/javascript', { title: 't',
       context: { runId: 'x' } });
-    const card = await gql(api, 'EventCard', { projectId: PROJECT,
+    const card = await gql(api, 'Event', { projectId: PROJECT,
       eventId: event.id }, accessToken);
-    const missing = await gql(api, 'EventCard', { projectId: PROJECT,
+    const missing = await gql(api, 'Event', { projectId: PROJECT,
       eventId: 'f'.repeat(24) }, accessToken);
 
     expect(dataOf(card).project.event).toMatchObject({ id: event.id,
@@ -495,7 +495,7 @@ describe('fake api search pages', () => {
       store.ingest(PROJECT, 'errors/nodejs', { title: `[e2e:page] item ${String(index)}` });
     }
 
-    const rows = dataOf(await gql(api, 'FindEvents', { projectId: PROJECT,
+    const rows = dataOf(await gql(api, 'ProjectDailyEvents', { projectId: PROJECT,
       search: '[e2e:page]' }, accessToken)).project.dailyEventsPortion.dailyEvents;
 
     expect(rows).toHaveLength(50);
@@ -508,9 +508,9 @@ describe('fake api search pages', () => {
 
     store.setTimestamp(PROJECT, stored.id, 1_794_699_912);
 
-    const { project } = dataOf(await gql(api, 'FindEvents', { projectId: PROJECT,
+    const { project } = dataOf(await gql(api, 'ProjectDailyEvents', { projectId: PROJECT,
       search: '[e2e:stamp]' }, accessToken));
-    const card = dataOf(await gql(api, 'EventCard', { projectId: PROJECT,
+    const card = dataOf(await gql(api, 'Event', { projectId: PROJECT,
       eventId: stored.id }, accessToken));
 
     expect(head(project.dailyEventsPortion.dailyEvents).event).toMatchObject({ timestamp: 1_794_699_912 });
@@ -533,7 +533,7 @@ describe('fake api access rules', () => {
     const { api } = await start();
     const { accessToken } = await login(api);
 
-    for (const name of ['ProjectToken', 'FindEvents', 'EventCard', 'RemoveEvent']) {
+    for (const name of ['ProjectToken', 'ProjectDailyEvents', 'Event', 'RemoveEvent']) {
       const answer = await gql(api, name, { projectId: 'e'.repeat(24),
         search: 'x',
         eventId: 'f'.repeat(24) }, accessToken);
@@ -680,7 +680,7 @@ describe('fake hawk', () => {
 
       const session = dataOf(await gql(hawk.api, 'Login', { email: hawk.email,
         password: hawk.password })).login;
-      const rows = dataOf(await gql(hawk.api, 'FindEvents', { projectId: hawk.projectId,
+      const rows = dataOf(await gql(hawk.api, 'ProjectDailyEvents', { projectId: hawk.projectId,
         search: 'via collector' }, session.accessToken)).project.dailyEventsPortion.dailyEvents;
 
       expect(rows).toHaveLength(1);

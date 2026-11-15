@@ -473,7 +473,7 @@ describe('serve: sweep of leftover events', () => {
   it('counts a failed sweep in /stats and keeps the process up', async () => {
     const hawk = await hawkFor();
 
-    hawk.api.knobs.errors = Object.fromEntries([['FindEvents', { code: 'INTERNAL_SERVER_ERROR',
+    hawk.api.knobs.errors = Object.fromEntries([['ProjectDailyEvents', { code: 'INTERNAL_SERVER_ERROR',
       message: 'search is down' }]]);
 
     const harness = await launch({ intervalMs: 600_000,

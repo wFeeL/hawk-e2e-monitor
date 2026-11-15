@@ -322,7 +322,7 @@ describe('sweepOnce', () => {
 
   it('reports a failure of the API and does not throw', async () => {
     leftover('rooooooooooooooo');
-    hawk.api.knobs.errors = Object.fromEntries([['FindEvents', { code: 'INTERNAL_SERVER_ERROR',
+    hawk.api.knobs.errors = Object.fromEntries([['ProjectDailyEvents', { code: 'INTERNAL_SERVER_ERROR',
       message: 'search is down' }]]);
 
     const instance = sweeper();

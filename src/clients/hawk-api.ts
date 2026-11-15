@@ -5,7 +5,7 @@ import type { Clock } from '../time/clock.js';
 import { ACCESS_EXPIRED, GraphqlFailure, UNAUTHENTICATED } from './graphql.js';
 import type { GraphqlOperation, GraphqlTransport } from './graphql.js';
 import type { ChannelSettings, NotificationRule, NotificationRuleInput, NotificationRuleUpdate } from '../notifications/types.js';
-import { CREATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE, EVENT_CARD, FIND_EVENTS, LOGIN, NOTIFICATION_RULES, PROJECT_TOKEN, REFRESH_TOKENS, REMOVE_EVENT, UPDATE_NOTIFICATION_RULE, WORKSPACE_QUOTA } from './operations.js';
+import { CREATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE, EVENT, PROJECT_DAILY_EVENTS, LOGIN, NOTIFICATION_RULES, PROJECT_TOKEN, REFRESH_TOKENS, REMOVE_EVENT, UPDATE_NOTIFICATION_RULE, WORKSPACE_QUOTA } from './operations.js';
 import { MS_PER_SECOND } from '../time/units.js';
 
 const NOT_FOUND_PREFIX = 'Event not found for eventId';
@@ -444,8 +444,9 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
   };
 
   const eventCard = async (projectId: string, eventId: string, signal: AbortSignal): Promise<EventCard | null> => {
-    const data = await authorized<EventCardData>(EVENT_CARD, { projectId,
-      eventId }, signal);
+    const data = await authorized<EventCardData>(EVENT, { projectId,
+      eventId,
+      originalEventId: eventId }, signal);
 
     if (!data.project) {
       throw new CheckError('api_error', { detail: 'project not found' });
@@ -484,7 +485,7 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
   };
 
   const findEvents: HawkApi['findEvents'] = async (projectId, search, signal) => {
-    const data = await authorized<FindEventsData>(FIND_EVENTS, { projectId,
+    const data = await authorized<FindEventsData>(PROJECT_DAILY_EVENTS, { projectId,
       search }, signal);
 
     if (!data.project) {

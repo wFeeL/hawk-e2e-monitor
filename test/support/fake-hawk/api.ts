@@ -12,11 +12,11 @@ import { PLAIN_TYPE } from './content-types.js';
 const JSON_TYPE = 'application/json; charset=utf-8';
 const DEFAULT_EVENTS_LIMIT = 10_000;
 const UNAUTHENTICATED_MESSAGE = 'You must be signed in to view this resource.';
-// The FindEvents query asks for 50 rows.
+// The ProjectDailyEvents query asks for 50 rows.
 const PAGE_LIMIT = 50;
 const RULE_MUTATIONS = new Set(['CreateNotificationRule', 'UpdateNotificationRule', 'DeleteNotificationRule']);
-const PROJECT_OPERATIONS = new Set(['ProjectToken', 'FindEvents', 'EventCard', 'RemoveEvent', 'NotificationRules', ...RULE_MUTATIONS]);
-const OPERATIONS = new Set(['Login', 'RefreshTokens', 'ProjectToken', 'WorkspaceQuota', 'FindEvents', 'EventCard', 'RemoveEvent', 'NotificationRules', ...RULE_MUTATIONS]);
+const PROJECT_OPERATIONS = new Set(['ProjectToken', 'ProjectDailyEvents', 'Event', 'RemoveEvent', 'NotificationRules', ...RULE_MUTATIONS]);
+const OPERATIONS = new Set(['Login', 'RefreshTokens', 'ProjectToken', 'WorkspaceQuota', 'ProjectDailyEvents', 'Event', 'RemoveEvent', 'NotificationRules', ...RULE_MUTATIONS]);
 const ANONYMOUS_OPERATIONS = new Set(['Login', 'RefreshTokens']);
 
 /** A GraphQL error the fake can be told to return. */
@@ -368,9 +368,9 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
         return success({ project: { token: knobs.projectToken ?? options.token } });
       case 'WorkspaceQuota':
         return workspaceQuota(variable(variables, 'projectId'));
-      case 'FindEvents':
+      case 'ProjectDailyEvents':
         return findEvents(variable(variables, 'search'));
-      case 'EventCard': {
+      case 'Event': {
         const event = store.get(projectId, variable(variables, 'eventId'));
 
         return success({ project: { event: event ? eventView(event, event.id) : null } });
