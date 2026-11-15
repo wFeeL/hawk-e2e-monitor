@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { CheckError } from '../errors/taxonomy.js';
 import type { MessageFacts } from '../errors/taxonomy.js';
 import type { Clock } from '../time/clock.js';
@@ -20,6 +21,8 @@ export interface HttpRequest {
   body?: string;
   /** Deadline of the whole request, body included. */
   timeoutMs: number;
+  /** Reads at most this many bytes of the body and cancels the rest; the whole body when absent. */
+  maxBytes?: number;
   /** Caller's abort signal. */
   signal: AbortSignal;
 }
@@ -30,7 +33,7 @@ export interface HttpResponse {
   status: number;
   /** `content-type` header, empty when absent. */
   contentType: string;
-  /** Body text. */
+  /** Body text; cut at `maxBytes` of the request when it had one. */
   text: string;
 }
 
@@ -90,6 +93,38 @@ class HttpStatusError extends Error {
 }
 
 /**
+ * Reads the start of a body and cancels the rest.
+ * @param response Answer whose body is read.
+ * @param maxBytes Most bytes to read.
+ * @returns The bytes read, decoded as UTF-8; a character cut at the end becomes a replacement character.
+ */
+async function readStart(response: Response, maxBytes: number): Promise<string> {
+  const reader = response.body?.getReader() as ReadableStreamDefaultReader<Uint8Array> | undefined;
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+
+  if (reader === undefined) {
+    return '';
+  }
+
+  while (total < maxBytes) {
+    const { done, value } = await reader.read();
+
+    if (done) {
+      break;
+    }
+
+    chunks.push(value);
+    total += value.byteLength;
+  }
+
+  await reader.cancel();
+
+  return Buffer.concat(chunks).subarray(0, maxBytes)
+    .toString('utf8');
+}
+
+/**
  * Sends one request; the status is left to the caller.
  * @param request Request with its own deadline and signal.
  * @param target Which side is called, for classification.
@@ -113,7 +148,7 @@ export async function httpRequest(request: HttpRequest, target: NetTarget): Prom
     }
 
     const response = await fetch(request.url, init);
-    const text = await response.text();
+    const text = request.maxBytes === undefined ? await response.text() : await readStart(response, request.maxBytes);
 
     return { status: response.status,
       contentType: response.headers.get('content-type') ?? '',

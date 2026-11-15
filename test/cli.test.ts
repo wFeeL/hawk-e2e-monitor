@@ -67,6 +67,25 @@ describe('parseCommand', () => {
     expect(command.kind === 'usage' ? command.message : '').toContain('--sequence');
   });
 
+  it('the probe takes no options and says so', () => {
+    expect(parseCommand(['check', 'endpoints-probe'])).toEqual({ kind: 'check',
+      scenario: 'endpoints-probe',
+      sequence: 1,
+      repeat: false });
+
+    for (const flags of [['--sequence', '2'], ['--transport', 'ws'], ['--repeat']]) {
+      const command = parseCommand(['check', 'endpoints-probe', ...flags]);
+
+      expect(command.kind).toBe('usage');
+      expect(command.kind === 'usage' ? command.message : '').toContain('endpoints-probe takes no options');
+    }
+  });
+
+  it('usage lists the probe without options', () => {
+    expect(USAGE).toContain('check endpoints-probe\n');
+    expect(USAGE).toContain('check check-notification [--sequence');
+  });
+
   it('usage names both scenarios', () => {
     expect(USAGE).toContain('check send-and-receive-event');
     expect(USAGE).toContain('check check-notification');

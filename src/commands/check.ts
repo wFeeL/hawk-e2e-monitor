@@ -10,6 +10,7 @@ import type { MutableRedactor } from '../errors/redact.js';
 import { collectorEndpoints, decodeIntegrationToken } from '../hawk/token.js';
 import { createLogger } from '../log/logger.js';
 import { startReceiver } from '../receiver/server.js';
+import { runEndpointsProbe } from '../scenarios/endpoints-probe/run.js';
 import { runCheckNotification } from '../scenarios/check-notification/run.js';
 import type { NotificationDeps } from '../scenarios/check-notification/run.js';
 import { runSendAndReceive, scenarioSecrets } from '../scenarios/send-and-receive/run.js';
@@ -163,16 +164,21 @@ const runSendAndReceiveCommand: CheckScenario = async (command, config, io, deps
 };
 
 /**
- * Stands in for the probe until its runner exists.
- * @param _command Parsed `check` command.
- * @param _config Validated configuration.
+ * Runs `endpoints-probe` and prints the result.
+ * @param command Parsed `check` command.
+ * @param config Validated configuration.
  * @param io Output streams.
- * @returns Exit code 1.
+ * @param deps Replacements for the default dependencies, for tests.
+ * @param masking Redactor shared with the logger.
+ * @returns Exit code.
  */
-const runProbeCommand: CheckScenario = async (_command, _config, io) => {
-  io.stderr(`${ENDPOINTS_PROBE} is not implemented yet\n`);
+const runProbeCommand: CheckScenario = async (command, config, io, deps, masking) => {
+  const result = await runEndpointsProbe({ ...defaultDeps(config, io, masking),
+    ...deps }, { sequence: command.sequence });
 
-  return Promise.resolve(1);
+  io.stdout(`${JSON.stringify(result)}\n`);
+
+  return summarize(result, io, masking);
 };
 
 /** One entry per scenario; a new scenario is added here. */

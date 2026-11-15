@@ -1,5 +1,5 @@
 import type { Transport } from './clients/collector.js';
-import { SCENARIO_NAMES } from './scenarios/names.js';
+import { SCENARIO_NAMES, SCENARIO_TRAITS } from './scenarios/names.js';
 import type { ScenarioName } from './scenarios/names.js';
 import { DEFAULT_LIST_LIMIT } from './storage/history.js';
 
@@ -57,7 +57,7 @@ export type Command = CheckCommand | HistoryCommand | ProvisionCommand | ServeCo
 /** Usage text printed for an unknown command. */
 export const USAGE = [
   'Usage: hawk-e2e-monitor [serve]',
-  ...SCENARIO_NAMES.map(name => `       hawk-e2e-monitor check ${name} [--sequence <n>] [--transport http|ws] [--repeat]`),
+  ...SCENARIO_NAMES.map(name => `       hawk-e2e-monitor check ${name}${SCENARIO_TRAITS[name].sendsEvents ? ' [--sequence <n>] [--transport http|ws] [--repeat]' : ''}`),
   '       hawk-e2e-monitor provision [--no-wait]',
   '       hawk-e2e-monitor history [--scenario <name>] [--limit <n>] [--stats]',
   '',
@@ -92,6 +92,10 @@ function parseCheck(args: readonly string[]): CheckCommand | UsageCommand {
 
   if (known === undefined) {
     return invalid(`unknown scenario "${scenario}"`);
+  }
+
+  if (!SCENARIO_TRAITS[known].sendsEvents && flags.length > 0) {
+    return invalid(`${known} takes no options`);
   }
 
   const command: CheckCommand = { kind: 'check',

@@ -392,3 +392,50 @@ describe('runCheckCommand next to a running serve', () => {
     expect(code).toBe(0);
   });
 });
+
+describe('runCheckCommand: endpoints-probe', () => {
+  /**
+   * Runs the probe command on the fake Hawk.
+   * @param env Environment overrides.
+   * @returns Exit code and both streams.
+   */
+  async function runProbe(env: Record<string, string> = {}): Promise<Captured> {
+    const { deps } = createTestDeps(hawk, { env });
+    const captured: Captured = { code: -1,
+      stdout: '',
+      stderr: '' };
+
+    captured.code = await runCheckCommand({ kind: 'check',
+      scenario: 'endpoints-probe',
+      sequence: 1,
+      repeat: false }, deps.config, { stdout: (text) => {
+      captured.stdout += text;
+    },
+    stderr: (text) => {
+      captured.stderr += text;
+    } });
+
+    return captured;
+  }
+
+  it('prints the result of the probe and exits 0, sending no event', async () => {
+    const { code, stdout, stderr } = await runProbe();
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({ scenario: 'endpoints-probe',
+      status: 'ok' });
+    expect(stderr).toContain('ok\n');
+    expect(hawk.collector.posts).toBe(0);
+  });
+
+  it('exits 1 with the failed stage and class when a stage fails', async () => {
+    hawk.collector.knobs.health = { status: 500,
+      redis: false,
+      mongo: true };
+
+    const { code, stderr } = await runProbe();
+
+    expect(code).toBe(1);
+    expect(stderr).toContain('failed collector_availability collector_dependency_error:');
+  });
+});

@@ -36,6 +36,7 @@ import type { ProcessIdentity, ServeHandle } from '../../src/serve/serve.js';
 
 const SEND = 'send-and-receive-event';
 const NOTIFY = 'check-notification';
+const PROBE = 'endpoints-probe';
 const WAIT = { timeout: 15_000,
   interval: 25 };
 const FAKE_ID = 'fake';
@@ -107,7 +108,7 @@ interface Harness {
 /** What a test may change. */
 interface LaunchOptions {
   /** Scenarios to run; send-and-receive only by default. */
-  scenarios?: Array<typeof NOTIFY | typeof SEND>;
+  scenarios?: Array<typeof NOTIFY | typeof PROBE | typeof SEND>;
   /** Interval between runs of a scenario. */
   intervalMs?: number;
   /** Stagger between the first runs. */
@@ -132,6 +133,8 @@ interface LaunchOptions {
   wrapApi?: (api: HawkApi) => HawkApi;
   /** Address and interval of the heartbeat, set on the configuration directly so that the interval can be short. */
   heartbeat?: HeartbeatConfig;
+  /** Interval of the probe, set on the configuration directly so that it can be short. */
+  probeIntervalMs?: number;
   /** Token of manual runs; the route exists only with one. */
   runToken?: string;
 }
@@ -225,6 +228,10 @@ async function launch(options: LaunchOptions = {}, hawk?: FakeHawk): Promise<Har
       alertNotifyUrl: bot.url,
       alertRetryMs: 1000,
       ...options.heartbeat === undefined ? {} : { heartbeat: options.heartbeat },
+      ...options.probeIntervalMs === undefined
+        ? {}
+        : { probe: { ...deps.config.monitoring.probe,
+            intervalMs: options.probeIntervalMs } },
       manual: { ...options.runToken === undefined ? {} : { token: options.runToken },
         minIntervalMs: 0 } } };
 
@@ -283,7 +290,7 @@ function inspect<T>(harness: Harness, read: (history: History) => T): T {
  * @param scenario Scenario whose rows are read.
  * @returns Rows that are not running.
  */
-function finishedRows(harness: Harness, scenario: typeof NOTIFY | typeof SEND = SEND): RunRow[] {
+function finishedRows(harness: Harness, scenario: typeof NOTIFY | typeof PROBE | typeof SEND = SEND): RunRow[] {
   return inspect(harness, history => history.list({ scenario,
     limit: 100 })).filter(row => row.status !== 'running')
     .toReversed();
@@ -667,6 +674,43 @@ describe('serve: heartbeat', () => {
       setTimeout(resolve, 3 * PING_MS);
     });
     expect(fake.pings).toBe(0);
+  });
+});
+
+describe('serve: the probe', () => {
+  it('runs on its own interval, stores its stages and sends no event', async () => {
+    const hawk = await hawkFor();
+    const harness = await launch({ scenarios: [PROBE],
+      intervalMs: 600_000,
+      probeIntervalMs: 300 }, hawk);
+
+    await vi.waitFor(() => {
+      expect(finishedRows(harness, PROBE).filter(row => row.status === 'ok')).toHaveLength(3);
+    }, WAIT);
+
+    const [first] = finishedRows(harness, PROBE);
+
+    expect(first?.stages.map(stage => stage.name)).toEqual(['collector_availability', 'api_availability']);
+    expect(hawk.collector.posts).toBe(0);
+    expect(hawk.store.all(hawk.projectId)).toEqual([]);
+    expect(hawk.collector.wsMessages).toBeGreaterThanOrEqual(3);
+    expect(harness.exit).not.toHaveBeenCalled();
+  });
+
+  it('fails the run and records the class when the collector is closed', async () => {
+    const hawk = await hawkFor();
+    const harness = await launch({ scenarios: [PROBE],
+      intervalMs: 600_000,
+      probeIntervalMs: 300 }, hawk);
+
+    await vi.waitFor(() => {
+      expect(finishedRows(harness, PROBE).some(row => row.status === 'ok')).toBe(true);
+    }, WAIT);
+    await hawk.collector.close();
+    await vi.waitFor(() => {
+      expect(finishedRows(harness, PROBE).some(row => row.status === 'failed')).toBe(true);
+    }, WAIT);
+    expect(finishedRows(harness, PROBE).find(row => row.status === 'failed')).toMatchObject({ failedStage: 'collector_availability' });
   });
 });
 
