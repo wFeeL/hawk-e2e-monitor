@@ -159,13 +159,20 @@ describe('abortedOutcome and rowOf', () => {
 describe('projection', () => {
   const DAY_RUNS = 144;
 
-  it('eventsPerRun follows the transport mode and the repeat period', () => {
-    expect(eventsPerRun('check-notification', testConfig())).toBe(1);
-    expect(eventsPerRun('send-and-receive-event', testConfig({ transportMode: 'alternate',
-      repeatEveryNRuns: 6 }))).toBeCloseTo(1 + 1 / 12);
-    expect(eventsPerRun('send-and-receive-event', testConfig({ transportMode: 'http',
+  it('eventsPerRun follows the transport mode and the repeat period, for both scenarios alike', () => {
+    expect(eventsPerRun(testConfig())).toBeCloseTo(1 + 1 / 12);
+    expect(eventsPerRun(testConfig({ transportMode: 'http',
       repeatEveryNRuns: 6 }))).toBeCloseTo(1 + 1 / 6);
-    expect(eventsPerRun('send-and-receive-event', testConfig({ repeatEveryNRuns: 0 }))).toBe(1);
+    expect(eventsPerRun(testConfig({ repeatEveryNRuns: 0 }))).toBe(1);
+  });
+
+  it('projects repeat events of check-notification too', () => {
+    const config = testConfig();
+    const only = testConfig({ monitoring: { ...config.monitoring,
+      intervalMs: 600_000,
+      scenarios: ['check-notification'] } });
+
+    expect(projectedEventsPer30Days(only)).toBeCloseTo(DAY_RUNS * 30 * (1 + 1 / 12));
   });
 
   it('projects 144 runs a day per scenario at a 600000 ms interval', () => {

@@ -3,7 +3,6 @@ import type { RunResult } from '../engine/result.js';
 import { CheckError } from '../errors/taxonomy.js';
 import type { ErrorClass, MessageFacts } from '../errors/taxonomy.js';
 import { CHECK_NOTIFICATION } from '../scenarios/names.js';
-import type { ScenarioName } from '../scenarios/names.js';
 import type { RunStart } from './history.js';
 import type { DegradedCode, RunOutcome, RunRow } from './types.js';
 import { MS_PER_DAY } from '../time/units.js';
@@ -139,13 +138,12 @@ export function rowOf(start: RunStart, outcome: RunOutcome): RunRow {
 }
 
 /**
- * Counts the events a scenario sends per run on average.
- * @param scenario Scenario whose events are counted.
+ * Counts the events a run sends on average; both scenarios repeat the event by the same rule.
  * @param config Configuration with the transport mode and the repeat period.
- * @returns `check-notification` 1; `send-and-receive-event` 1 plus the share of runs that repeat the event.
+ * @returns 1 plus the share of runs that repeat the event.
  */
-export function eventsPerRun(scenario: ScenarioName, config: Config): number {
-  if (scenario === CHECK_NOTIFICATION || config.repeatEveryNRuns === 0) {
+export function eventsPerRun(config: Config): number {
+  if (config.repeatEveryNRuns === 0) {
     return 1;
   }
 
@@ -158,10 +156,10 @@ export function eventsPerRun(scenario: ScenarioName, config: Config): number {
 /**
  * Projects the events the enabled scenarios send in 30 days.
  * @param config Configuration with the scenarios and the interval.
- * @returns Sum over the scenarios of events per run times runs in 30 days.
+ * @returns Events per run times runs in 30 days, summed over the scenarios.
  */
 export function projectedEventsPer30Days(config: Config): number {
   const runs = DAYS_PER_PERIOD * MS_PER_DAY / config.monitoring.intervalMs;
 
-  return config.monitoring.scenarios.reduce((sum, scenario) => sum + eventsPerRun(scenario, config) * runs, 0);
+  return config.monitoring.scenarios.length * eventsPerRun(config) * runs;
 }
