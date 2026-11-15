@@ -160,6 +160,8 @@ export interface ListOptions {
 export interface PruneOptions {
   /** Only runs and delivered alerts of this scenario; all of them by default. */
   scenario?: ScenarioName;
+  /** Only runs and delivered alerts of scenarios that are not listed, such as ones the code no longer knows; ignored with `scenario`. */
+  exceptScenarios?: readonly ScenarioName[];
 }
 
 /** A message to queue together with a state change. */
@@ -201,9 +203,9 @@ export interface History {
    * Ends every run still marked running.
    * @param errorClass Class to give them.
    * @param at Time of the end, ISO.
-   * @returns Number of rows changed.
+   * @returns The rows as they are after the change.
    */
-  abortRunning(errorClass: 'monitor_restarted', at: string): number;
+  abortRunning(errorClass: 'monitor_restarted', at: string): RunRow[];
   /**
    * Reads one run.
    * @param runId Id of the run to read.
@@ -542,7 +544,7 @@ export function createHistory(db: DatabaseSync): History {
           at, Number.isNaN(duration) ? 0 : duration, errorClass, CULPRIT_OF[errorClass], message, num(row, 'id') ?? 0);
       }
 
-      return rows.length;
+      return rows.map(row => toRow(one('SELECT * FROM runs WHERE id = ?', num(row, 'id') ?? 0) ?? row));
     });
   };
 
@@ -705,6 +707,16 @@ export function createHistory(db: DatabaseSync): History {
 
   const prune: History['prune'] = (before, options = {}) => {
     return transaction(() => {
+      if (options.scenario === undefined && options.exceptScenarios !== undefined) {
+        const marks = options.exceptScenarios.map(() => '?').join(', ');
+        const listed = options.exceptScenarios.length === 0 ? '' : ` AND scenario NOT IN (${marks})`;
+        const removed = run(`DELETE FROM runs WHERE finished_at IS NOT NULL AND finished_at < ?${listed}`, before, ...options.exceptScenarios);
+
+        run(`DELETE FROM alert_outbox WHERE (sent_at < ? OR dropped_at < ?)${listed}`, before, before, ...options.exceptScenarios);
+
+        return removed;
+      }
+
       if (options.scenario === undefined) {
         const removed = run('DELETE FROM runs WHERE finished_at IS NOT NULL AND finished_at < ?', before);
 

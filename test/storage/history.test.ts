@@ -280,14 +280,21 @@ describe('runs', () => {
     store(history, { runId: 'rbbbbbbbbbbbbbbbb',
       sequence: 2 });
 
-    expect(history.abortRunning('monitor_restarted', at(0))).toBe(1);
+    const aborted = history.abortRunning('monitor_restarted', at(0));
+
+    expect(aborted.map(row => row.runId)).toEqual(['raaaaaaaaaaaaaaaa']);
+    expect(aborted[0]).toMatchObject({ status: 'aborted',
+      errorClass: 'monitor_restarted',
+      culprit: 'monitor',
+      scenario: SCENARIO,
+      trigger: 'schedule' });
     expect(history.get('raaaaaaaaaaaaaaaa')).toMatchObject({ status: 'aborted',
       errorClass: 'monitor_restarted',
       culprit: 'monitor',
       finishedAt: at(0),
       durationMs: 60_000 });
     expect(history.get('rbbbbbbbbbbbbbbbb')?.status).toBe('ok');
-    expect(history.abortRunning('monitor_restarted', at(0))).toBe(0);
+    expect(history.abortRunning('monitor_restarted', at(0))).toEqual([]);
   });
 
   it('list returns newest first, filtered by scenario, up to the limit', () => {
@@ -712,6 +719,37 @@ describe('prune', () => {
     expect(count()).toEqual({ n: 1 });
     history.prune(at(-7 * 24 * HOUR_MS), { scenario: SCENARIO });
     expect(count()).toEqual({ n: 0 });
+  });
+
+  it('prune with exceptScenarios removes old rows of every other scenario name, also one the code no longer knows', () => {
+    const db = openDatabase(':memory:');
+    const history = createHistory(db);
+    const old = at(-10 * 24 * HOUR_MS);
+
+    store(history, { runId: 'raaaaaaaaaaaaaaaa',
+      startedAt: old });
+    store(history, { runId: 'rbbbbbbbbbbbbbbbb',
+      scenario: 'removed-scenario' as 'check-notification',
+      startedAt: old });
+    store(history, { runId: 'rcccccccccccccccc',
+      scenario: 'removed-scenario' as 'check-notification',
+      sequence: 2,
+      startedAt: at(-HOUR_MS) });
+    history.saveAlert({ scenario: 'removed-scenario' as 'check-notification',
+      state: 'ok',
+      failureStreak: 0,
+      episodeFailures: 0,
+      degraded: [],
+      updatedAt: at(0) }, { text: 'old alert',
+      at: old });
+    history.alertAttempt(1, { sentAt: old });
+
+    expect(history.prune(at(-7 * 24 * HOUR_MS), { exceptScenarios: [SCENARIO] })).toBe(1);
+    expect(history.get('raaaaaaaaaaaaaaaa')).toBeDefined();
+    expect(history.get('rbbbbbbbbbbbbbbbb')).toBeUndefined();
+    expect(history.get('rcccccccccccccccc')).toBeDefined();
+    expect(db.prepare('SELECT COUNT(*) AS n FROM alert_outbox').get()).toEqual({ n: 0 });
+    expect(history.prune(at(-7 * 24 * HOUR_MS), { exceptScenarios: [] })).toBe(1);
   });
 
   it('prune removes old runs with stages, finished outbox rows and keeps the rest', () => {

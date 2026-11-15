@@ -7,7 +7,10 @@ import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { StartupError } from '../../src/app.js';
 import type { HawkApi } from '../../src/clients/hawk-api.js';
-import type { Config, HeartbeatConfig } from '../../src/config/load.js';
+import type { Config, HeartbeatConfig, StageTimeouts } from '../../src/config/load.js';
+import type { RunResult } from '../../src/engine/result.js';
+import type { ScenarioName } from '../../src/scenarios/names.js';
+import type { ScenarioRunner } from '../../src/scheduler/scheduler.js';
 import { CheckError } from '../../src/errors/taxonomy.js';
 import { createProvisioner } from '../../src/notifications/provisioning.js';
 import { openDatabase } from '../../src/storage/database.js';
@@ -133,6 +136,12 @@ interface LaunchOptions {
   wrapApi?: (api: HawkApi) => HawkApi;
   /** Address and interval of the heartbeat, set on the configuration directly so that the interval can be short. */
   heartbeat?: HeartbeatConfig;
+  /** Time added to the watchdog of a run, set on the configuration directly. */
+  watchdogGraceMs?: number;
+  /** Stage timeouts that replace the test ones, set on the configuration directly. */
+  timeouts?: Partial<StageTimeouts>;
+  /** Replaces the runner of a scenario. */
+  runners?: Partial<Record<ScenarioName, ScenarioRunner>>;
   /** Interval of the probe, set on the configuration directly so that it can be short. */
   probeIntervalMs?: number;
   /** Token of manual runs; the route exists only with one. */
@@ -220,6 +229,8 @@ async function launch(options: LaunchOptions = {}, hawk?: FakeHawk): Promise<Har
       port: 0 },
     notifications: { ...deps.config.notifications,
       receiverPort: options.receiverPort ?? 0 },
+    timeouts: { ...deps.config.timeouts,
+      ...options.timeouts },
     monitoring: { ...deps.config.monitoring,
       scenarios: options.scenarios ?? [SEND],
       intervalMs: options.intervalMs ?? 700,
@@ -228,6 +239,7 @@ async function launch(options: LaunchOptions = {}, hawk?: FakeHawk): Promise<Har
       alertNotifyUrl: bot.url,
       alertRetryMs: 1000,
       ...options.heartbeat === undefined ? {} : { heartbeat: options.heartbeat },
+      ...options.watchdogGraceMs === undefined ? {} : { watchdogGraceMs: options.watchdogGraceMs },
       ...options.probeIntervalMs === undefined
         ? {}
         : { probe: { ...deps.config.monitoring.probe,
@@ -249,6 +261,7 @@ async function launch(options: LaunchOptions = {}, hawk?: FakeHawk): Promise<Har
     overrides: { api: options.wrapApi?.(deps.api) ?? deps.api,
       collector: deps.collector,
       pollScheduleMs: [20, 40],
+      ...options.runners === undefined ? {} : { runners: options.runners },
       ...options.addressPollMs === undefined ? {} : { addressPollMs: options.addressPollMs },
       ...options.sweepFirstDelayMs === undefined ? {} : { sweepFirstDelayMs: options.sweepFirstDelayMs },
       ...options.resolveAddress === undefined ? {} : { resolveAddress: async () => resolveFor(options.resolveAddress, options.receiverPort ?? 0) } } });
@@ -768,6 +781,17 @@ describe('serve: the probe in the history', () => {
 
     expect(kept).toEqual(['rprobenewnewnewn', 'rsendeightdayold']);
   });
+
+  it('expires the rows of a scenario that is no longer known with the global retention', async () => {
+    const harness = await launch({ intervalMs: 600_000,
+      seed: (history) => {
+        seedRun(history, 'rgoneoldoldoldol', 'removed-scenario' as typeof SEND, 40);
+        seedRun(history, 'rgonenewnewnewne', 'removed-scenario' as typeof SEND, 10);
+      } });
+    const kept = inspect(harness, history => ['rgoneoldoldoldol', 'rgonenewnewnewne'].filter(runId => history.get(runId) !== undefined));
+
+    expect(kept).toEqual(['rgonenewnewnewne']);
+  });
 });
 
 describe('serve: manual runs', () => {
@@ -849,6 +873,46 @@ describe('serve: manual runs', () => {
       status: 'ok' });
     expect(body.result?.runId).toBe(body.runId);
     expect(body.stages.length).toBeGreaterThan(0);
+  });
+});
+
+describe('serve: heartbeat with a hung scenario', () => {
+  it('send-and-receive hangs, the probe keeps running, and the pings stop with the reason logged once', async () => {
+    const fake = await startFakeHealthchecks();
+
+    cleanups.push(async () => fake.close());
+
+    const hawk = await hawkFor();
+    const harness = await launch({ scenarios: [SEND, PROBE],
+      intervalMs: 700,
+      probeIntervalMs: 300,
+      watchdogGraceMs: 1000,
+      timeouts: { run: 300,
+        cleanup: 100 },
+      // The send scenario never ends and ignores its signal, as a runner stuck in a call would.
+      runners: { [SEND]: async () => new Promise<RunResult>(() => undefined) },
+      heartbeat: { url: fake.url,
+        intervalMs: 100 } }, hawk);
+
+    await vi.waitFor(() => {
+      expect(fake.pings).toBeGreaterThanOrEqual(1);
+    }, WAIT);
+    await vi.waitFor(() => {
+      expect(harness.logger.lines.some(line => String(line.msg).includes(`${SEND} has no verdict`))).toBe(true);
+    }, WAIT);
+
+    const pings = fake.pings;
+    const probeRows = finishedRows(harness, PROBE).length;
+
+    await vi.waitFor(() => {
+      expect(finishedRows(harness, PROBE).length).toBeGreaterThanOrEqual(probeRows + 3);
+    }, WAIT);
+    expect(fake.pings).toBe(pings);
+
+    const notSent = harness.logger.lines.filter(line => String(line.msg).startsWith('heartbeat is not sent')).map(line => line.msg);
+
+    expect(new Set(notSent).size).toBe(notSent.length);
+    expect(notSent.filter(text => String(text).includes('has no verdict'))).toHaveLength(1);
   });
 });
 
@@ -966,6 +1030,10 @@ describe('serve: start and stop', () => {
 
     expect(inspect(harness, history => history.get('rsssssssssssssss'))).toMatchObject({ status: 'aborted',
       errorClass: 'monitor_restarted' });
+
+    const { samples } = parseMetrics(await (await get(harness, '/metrics')).text());
+
+    expect(samples.find(sample => sample.name === 'hawk_e2e_runs_total' && sample.labels.includes(`scenario="${SEND}",status="monitor_abort",trigger="schedule"`))?.value).toBe(1);
     await vi.waitFor(() => {
       expect(finishedRows(harness).some(row => row.status === 'ok')).toBe(true);
     }, WAIT);

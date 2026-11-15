@@ -81,7 +81,7 @@ export async function buildRunners(context: RunnerContext): Promise<BuiltRunners
   for (const scenario of context.config.monitoring.scenarios) {
     const setup = await SETUPS[scenario](context);
 
-    built.runners[scenario] = setup.runner;
+    built.runners[scenario] = context.overrides.runners?.[scenario] ?? setup.runner;
 
     if (setup.beforeFirstRun !== undefined) {
       built.beforeFirstRun[scenario] = setup.beforeFirstRun;

@@ -175,6 +175,9 @@ function pruneHistory(history: History, config: Config, now: Date): void {
   for (const scenario of SCENARIO_NAMES) {
     history.prune(new Date(now.getTime() - scenarioSettings(config, scenario).retentionDays * MS_PER_DAY).toISOString(), { scenario });
   }
+
+  // Rows of a scenario that was removed or renamed belong to no list above, so they expire with the global retention.
+  history.prune(new Date(now.getTime() - config.monitoring.retentionDays * MS_PER_DAY).toISOString(), { exceptScenarios: SCENARIO_NAMES });
 }
 
 /**
@@ -247,8 +250,8 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
 
     const aborted = history.abortRunning('monitor_restarted', now.toISOString());
 
-    if (aborted > 0) {
-      logger.warn('runs of an earlier process were still marked running', { aborted });
+    if (aborted.length > 0) {
+      logger.warn('runs of an earlier process were still marked running', { aborted: aborted.length });
     }
 
     pruneHistory(history, config, now);
@@ -293,6 +296,15 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
 
     const metrics = createMetrics({ version: SERVICE_VERSION,
       logger });
+
+    closers.push(() => {
+      metrics.stop();
+    });
+
+    for (const row of aborted) {
+      // The alerter ignores a restart of the monitor, so only the metrics hear of these rows.
+      metrics.onRunFinished(row, undefined);
+    }
 
     metrics.initialize(history, monitoring.scenarios, scenario => scenarioSettings(config, scenario).intervalMs);
     workers.push(every(clock, ALERT_BACKLOG_METRIC_MS, background.signal, () => {

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { decodeIntegrationToken } from '../hawk/token.js';
 import { blockedPortOf } from '../net/blocked-ports.js';
-import { CHECK_NOTIFICATION, SCENARIO_NAMES, SEND_AND_RECEIVE_EVENT } from '../scenarios/names.js';
+import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, SCENARIO_NAMES, SEND_AND_RECEIVE_EVENT } from '../scenarios/names.js';
 import { PROBE_WATCHDOG_MARGIN_MS } from './scenario.js';
 import { MAX_DURATION_MS, boundedDurationMs, durationMs } from './duration.js';
 
@@ -373,27 +373,30 @@ function checkRetry(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx): voi
  * @param ctx Collects the issues.
  */
 function checkProbe(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx): void {
-  const budget = env.COLLECTOR_AVAILABILITY_TIMEOUT_MS + env.API_AVAILABILITY_TIMEOUT_MS + (env.GARAGE_URL === undefined ? 0 : env.GARAGE_TIMEOUT_MS);
+  // A configuration without the probe was valid before the probe existed, so its variables are not judged.
+  if (Array.isArray(env.SCENARIOS) && env.SCENARIOS.includes(ENDPOINTS_PROBE)) {
+    const budget = env.COLLECTOR_AVAILABILITY_TIMEOUT_MS + env.API_AVAILABILITY_TIMEOUT_MS + (env.GARAGE_URL === undefined ? 0 : env.GARAGE_TIMEOUT_MS);
 
-  if (env.PROBE_INTERVAL_MS > env.CHECK_INTERVAL_MS) {
-    ctx.addIssue({ code: 'custom',
-      path: ['PROBE_INTERVAL_MS'],
-      message: 'must not exceed CHECK_INTERVAL_MS' });
+    if (env.PROBE_INTERVAL_MS > env.CHECK_INTERVAL_MS) {
+      ctx.addIssue({ code: 'custom',
+        path: ['PROBE_INTERVAL_MS'],
+        message: 'must not exceed CHECK_INTERVAL_MS' });
+    }
+
+    if (env.PROBE_INTERVAL_MS <= budget + PROBE_WATCHDOG_MARGIN_MS) {
+      ctx.addIssue({ code: 'custom',
+        path: ['PROBE_INTERVAL_MS'],
+        message: `must be greater than the timeouts of the probe stages (${String(budget)} ms) + ${String(PROBE_WATCHDOG_MARGIN_MS)} ms` });
+    }
+
+    if (env.PROBE_RETENTION_DAYS > env.HISTORY_RETENTION_DAYS) {
+      ctx.addIssue({ code: 'custom',
+        path: ['PROBE_RETENTION_DAYS'],
+        message: 'must not exceed HISTORY_RETENTION_DAYS' });
+    }
   }
 
-  if (env.PROBE_INTERVAL_MS <= budget + PROBE_WATCHDOG_MARGIN_MS) {
-    ctx.addIssue({ code: 'custom',
-      path: ['PROBE_INTERVAL_MS'],
-      message: `must be greater than the timeouts of the probe stages (${String(budget)} ms) + ${String(PROBE_WATCHDOG_MARGIN_MS)} ms` });
-  }
-
-  if (env.PROBE_RETENTION_DAYS > env.HISTORY_RETENTION_DAYS) {
-    ctx.addIssue({ code: 'custom',
-      path: ['PROBE_RETENTION_DAYS'],
-      message: 'must not exceed HISTORY_RETENTION_DAYS' });
-  }
-
-  if (env.HTTP_TIMEOUT_MS >= env.GARAGE_TIMEOUT_MS) {
+  if (env.GARAGE_URL !== undefined && env.HTTP_TIMEOUT_MS >= env.GARAGE_TIMEOUT_MS) {
     ctx.addIssue({ code: 'custom',
       path: ['GARAGE_TIMEOUT_MS'],
       message: 'must be greater than HTTP_TIMEOUT_MS' });

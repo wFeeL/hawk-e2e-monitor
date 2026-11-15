@@ -4,6 +4,8 @@ import { expectErrors, expectOk } from '../support/result.js';
 import { describeConfig } from '../../src/config/describe.js';
 import { loadConfig } from '../../src/config/load.js';
 
+const PROBE_SCENARIOS = 'send-and-receive-event,endpoints-probe';
+
 /**
  * Loads the env and returns the errors of one variable.
  * @param overrides Variables to set.
@@ -55,34 +57,48 @@ describe('probe configuration', () => {
   });
 
   it('keeps the probe interval within CHECK_INTERVAL_MS', () => {
-    expect(messagesOf({ PROBE_INTERVAL_MS: '600001' }, 'PROBE_INTERVAL_MS')[0]).toContain('CHECK_INTERVAL_MS');
-    expectOk(loadConfig(validEnv({ PROBE_INTERVAL_MS: '600000' })));
+    expect(messagesOf({ SCENARIOS: PROBE_SCENARIOS,
+      PROBE_INTERVAL_MS: '600001' }, 'PROBE_INTERVAL_MS')[0]).toContain('CHECK_INTERVAL_MS');
+    expectOk(loadConfig(validEnv({ SCENARIOS: PROBE_SCENARIOS,
+      PROBE_INTERVAL_MS: '600000' })));
   });
 
   it('keeps the probe retention within HISTORY_RETENTION_DAYS', () => {
-    expect(messagesOf({ PROBE_RETENTION_DAYS: '31' }, 'PROBE_RETENTION_DAYS')[0]).toContain('HISTORY_RETENTION_DAYS');
-    expectOk(loadConfig(validEnv({ PROBE_RETENTION_DAYS: '30' })));
+    expect(messagesOf({ SCENARIOS: PROBE_SCENARIOS,
+      PROBE_RETENTION_DAYS: '31' }, 'PROBE_RETENTION_DAYS')[0]).toContain('HISTORY_RETENTION_DAYS');
+    expectOk(loadConfig(validEnv({ SCENARIOS: PROBE_SCENARIOS,
+      PROBE_RETENTION_DAYS: '30' })));
   });
 
   it('makes the probe interval greater than its stage timeouts plus 10 s', () => {
     // 15000 + 15000 without Garage.
-    expect(messagesOf({ PROBE_INTERVAL_MS: '40000' }, 'PROBE_INTERVAL_MS')[0]).toContain('30000 ms');
-    expect(messagesOf({ PROBE_INTERVAL_MS: '40000' }, 'PROBE_INTERVAL_MS')[0]).toContain('+ 10000');
-    expectOk(loadConfig(validEnv({ PROBE_INTERVAL_MS: '40001' })));
+    expect(messagesOf({ SCENARIOS: PROBE_SCENARIOS,
+      PROBE_INTERVAL_MS: '40000' }, 'PROBE_INTERVAL_MS')[0]).toContain('30000 ms');
+    expect(messagesOf({ SCENARIOS: PROBE_SCENARIOS,
+      PROBE_INTERVAL_MS: '40000' }, 'PROBE_INTERVAL_MS')[0]).toContain('+ 10000');
+    expectOk(loadConfig(validEnv({ SCENARIOS: PROBE_SCENARIOS,
+      PROBE_INTERVAL_MS: '40001' })));
   });
 
   it('counts the Garage timeout in that sum only when there is a Garage address', () => {
-    expectOk(loadConfig(validEnv({ PROBE_INTERVAL_MS: '40001',
+    expectOk(loadConfig(validEnv({ SCENARIOS: PROBE_SCENARIOS,
+      PROBE_INTERVAL_MS: '40001',
       GARAGE_TIMEOUT_MS: '60000' })));
-    expect(messagesOf({ PROBE_INTERVAL_MS: '55000',
+    expect(messagesOf({ SCENARIOS: PROBE_SCENARIOS,
+      PROBE_INTERVAL_MS: '55000',
       GARAGE_URL: 'http://garage.example.test' }, 'PROBE_INTERVAL_MS')).toHaveLength(1);
-    expectOk(loadConfig(validEnv({ PROBE_INTERVAL_MS: '55001',
+    expectOk(loadConfig(validEnv({ SCENARIOS: PROBE_SCENARIOS,
+      PROBE_INTERVAL_MS: '55001',
       GARAGE_URL: 'http://garage.example.test' })));
   });
 
-  it('wants GARAGE_TIMEOUT_MS greater than HTTP_TIMEOUT_MS', () => {
-    expect(messagesOf({ GARAGE_TIMEOUT_MS: '5000' }, 'GARAGE_TIMEOUT_MS')[0]).toContain('HTTP_TIMEOUT_MS');
-    expectOk(loadConfig(validEnv({ GARAGE_TIMEOUT_MS: '5001' })));
+  it('wants GARAGE_TIMEOUT_MS greater than HTTP_TIMEOUT_MS when there is a Garage address', () => {
+    const garage = { GARAGE_URL: 'http://garage.example.test' };
+
+    expect(messagesOf({ ...garage,
+      GARAGE_TIMEOUT_MS: '5000' }, 'GARAGE_TIMEOUT_MS')[0]).toContain('HTTP_TIMEOUT_MS');
+    expectOk(loadConfig(validEnv({ ...garage,
+      GARAGE_TIMEOUT_MS: '5001' })));
   });
 
   it('checks the retry pauses against GARAGE_TIMEOUT_MS when there is a Garage address', () => {
@@ -110,5 +126,58 @@ describe('probe configuration', () => {
     expect(summary.values.GARAGE_URL).toBe('http://garage.example.test:8080');
     expect(summary.values.PROBE_INTERVAL_MS).toBe('90000');
     expect(summary.values.GARAGE_TIMEOUT_MS).toBe('15000');
+  });
+
+  describe('without the probe', () => {
+    it('accepts what was valid before the probe existed: a long HTTP timeout and raised stage timeouts', () => {
+      const env = { HTTP_TIMEOUT_MS: '20000',
+        COLLECTOR_AVAILABILITY_TIMEOUT_MS: '60000',
+        API_AVAILABILITY_TIMEOUT_MS: '60000',
+        COLLECTOR_ACCEPT_TIMEOUT_MS: '60000',
+        EVENT_VISIBLE_TIMEOUT_MS: '60000',
+        EVENT_REPEATED_TIMEOUT_MS: '60000',
+        CLEANUP_TIMEOUT_MS: '90000',
+        RUN_TIMEOUT_MS: '480000',
+        CHECK_INTERVAL_MS: '700000' };
+
+      expectOk(loadConfig(validEnv(env)));
+      expectOk(loadConfig(validEnv({ ...env,
+        SCENARIOS: 'send-and-receive-event' })));
+    });
+
+    it('accepts a short history retention and ignores the probe retention', () => {
+      expectOk(loadConfig(validEnv({ HISTORY_RETENTION_DAYS: '3' })));
+    });
+
+    it('does not compare GARAGE_TIMEOUT_MS with HTTP_TIMEOUT_MS without GARAGE_URL', () => {
+      expectOk(loadConfig(validEnv({ HTTP_TIMEOUT_MS: '9000',
+        CLEANUP_TIMEOUT_MS: '60000',
+        GARAGE_TIMEOUT_MS: '5000' })));
+    });
+  });
+
+  describe('with the probe selected', () => {
+    const PROBE = { SCENARIOS: 'send-and-receive-event,endpoints-probe' };
+
+    it('rejects the same configurations the rules are for', () => {
+      expect(messagesOf({ ...PROBE,
+        HISTORY_RETENTION_DAYS: '3' }, 'PROBE_RETENTION_DAYS')[0]).toContain('HISTORY_RETENTION_DAYS');
+      expect(messagesOf({ ...PROBE,
+        COLLECTOR_AVAILABILITY_TIMEOUT_MS: '60000',
+        API_AVAILABILITY_TIMEOUT_MS: '60000' }, 'PROBE_INTERVAL_MS')).toHaveLength(1);
+    });
+
+    it('wants GARAGE_TIMEOUT_MS above HTTP_TIMEOUT_MS only with GARAGE_URL', () => {
+      expectOk(loadConfig(validEnv({ ...PROBE,
+        HTTP_TIMEOUT_MS: '9000',
+        CLEANUP_TIMEOUT_MS: '60000',
+        GARAGE_TIMEOUT_MS: '5000' })));
+      expect(messagesOf({ ...PROBE,
+        GARAGE_URL: 'http://garage.example.test',
+        HTTP_TIMEOUT_MS: '9000',
+        CLEANUP_TIMEOUT_MS: '60000',
+        GARAGE_TIMEOUT_MS: '5000',
+        PROBE_INTERVAL_MS: '90000' }, 'GARAGE_TIMEOUT_MS')[0]).toContain('HTTP_TIMEOUT_MS');
+    });
   });
 });
