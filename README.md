@@ -49,9 +49,9 @@ tests against a fake Hawk and needs no network.
 ## Checking notifications
 
 `check check-notification` sends one event and waits for the webhook and loop
-notifications Hawk sends about it. Hawk accepts only public https addresses
-for these channels, so the receiver needs a public address. A cloudflared quick
-tunnel needs no account:
+notifications Hawk sends about it. Hawk accepts only public addresses for these
+channels (https for loop), so the receiver needs a public address. A
+cloudflared quick tunnel needs no account:
 
 ```sh
 cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8091 --metrics 127.0.0.1:20241
@@ -126,8 +126,8 @@ Add @codex_bot to a Telegram chat, send it `/notify_start` and put the address
 it answers with into `ALERT_NOTIFY_URL`. The monitor sends a message when a
 scenario starts failing (after `ALERT_AFTER_FAILURES` failed runs in a row),
 when the reason of the failure changes, when it recovers, and when it becomes
-degraded: a run passed but only one notification channel arrived, or the
-projected event count exceeds the plan limit. A message names the stage,
+degraded: a run passed but only one notification channel arrived, or less
+than 10% of the workspace event quota is left. A message names the stage,
 the error class, the likely culprit and the time of every stage. Messages that
 the bot does not accept are retried with a growing pause for up to 24 hours.
 With `ALERT_NOTIFY_URL` empty, alerts go to the log only.
@@ -156,11 +156,11 @@ With `ALERT_NOTIFY_URL` empty, alerts go to the log only.
 - Test events left behind by failed or interrupted runs are removed once an
   hour (`SWEEP_INTERVAL_MS`) when they are older than `SWEEP_MIN_AGE_MS`.
 
-Every run of each scenario sends one event, two on repeat runs. One scenario
-every 10 minutes is about 4,700 events a month with the default repeats, so the
-free plan of 1,000 events lasts about a week; the monitor warns when the
-projected count exceeds the workspace limit. Use a bigger plan or a longer
-interval.
+Every run of each scenario sends one event, two on repeat runs; one scenario
+every 10 minutes sends about 4,700 events a month. Hawk counts the quota from
+the events that remain in a project, and the monitor removes its events after
+each run, so they barely use the quota. They do count against the rate limits
+of the collector.
 
 ## About this test assignment
 
