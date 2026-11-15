@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { StartupError } from '../../src/app.js';
 import type { HawkApi } from '../../src/clients/hawk-api.js';
-import type { Config } from '../../src/config/load.js';
+import type { Config, HeartbeatConfig } from '../../src/config/load.js';
 import { CheckError } from '../../src/errors/taxonomy.js';
 import { createProvisioner } from '../../src/notifications/provisioning.js';
 import { openDatabase } from '../../src/storage/database.js';
@@ -25,6 +25,7 @@ import type { FakeCollector } from '../support/fake-hawk/collector.js';
 import { startFakeHawk } from '../support/fake-hawk/index.js';
 import type { FakeHawk } from '../support/fake-hawk/index.js';
 import { decodeTokenKey } from '../support/fake-hawk/token.js';
+import { startFakeHealthchecks } from '../support/fake-healthchecks.js';
 import { startFakeNotify } from '../support/fake-notify.js';
 import type { FakeNotify, FakeNotifyAnswer } from '../support/fake-notify.js';
 import { memoryLogger } from '../support/logger.js';
@@ -129,6 +130,8 @@ interface LaunchOptions {
   sweepFirstDelayMs?: number;
   /** Replaces the Hawk API client of the scenarios with a changed copy. */
   wrapApi?: (api: HawkApi) => HawkApi;
+  /** Address and interval of the heartbeat, set on the configuration directly so that the interval can be short. */
+  heartbeat?: HeartbeatConfig;
 }
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -218,7 +221,8 @@ async function launch(options: LaunchOptions = {}, hawk?: FakeHawk): Promise<Har
       staggerMs: options.staggerMs ?? 0,
       databasePath: database.path,
       alertNotifyUrl: bot.url,
-      alertRetryMs: 1000 } };
+      alertRetryMs: 1000,
+      ...options.heartbeat === undefined ? {} : { heartbeat: options.heartbeat } } };
 
   if (options.seed !== undefined) {
     const history = createHistory(openDatabase(database.path));
@@ -542,6 +546,123 @@ describe('serve: metrics', () => {
     expect(labelled('hawk_e2e_last_run_timestamp_seconds', SEND)?.value).toBe(Date.parse(finishedAt) / 1000);
     expect(labelled('hawk_e2e_runs_total', `scenario="${SEND}",status="ok",trigger="schedule"`)?.value).toBe(0);
     expect(labelled('hawk_e2e_scenario_interval_seconds', SEND)?.value).toBe(600);
+  });
+});
+
+describe('serve: heartbeat', () => {
+  const PING_MS = 100;
+
+  /**
+   * Starts a fake heartbeat service that is closed after the test.
+   * @returns The fake.
+   */
+  async function healthchecks(): Promise<Awaited<ReturnType<typeof startFakeHealthchecks>>> {
+    const fake = await startFakeHealthchecks();
+
+    cleanups.push(async () => fake.close());
+
+    return fake;
+  }
+
+  it('pings while the monitor is healthy, also after a failed run, and keeps the address out of the log', async () => {
+    const fake = await healthchecks();
+    const hawk = await hawkFor();
+    const harness = await launch({ intervalMs: 500,
+      heartbeat: { url: fake.url,
+        intervalMs: PING_MS } }, hawk);
+
+    await vi.waitFor(() => {
+      expect(fake.pings).toBeGreaterThanOrEqual(2);
+    }, WAIT);
+    await hawk.collector.close();
+    await vi.waitFor(() => {
+      expect(finishedRows(harness).some(row => row.status === 'failed')).toBe(true);
+    }, WAIT);
+
+    const before = fake.pings;
+
+    await vi.waitFor(() => {
+      expect(fake.pings).toBeGreaterThan(before);
+    }, WAIT);
+    expect(JSON.stringify(harness.logger.lines)).not.toContain(fake.key);
+  });
+
+  it('counts a ping the service refuses and does not touch the runs', async () => {
+    const fake = await healthchecks();
+
+    fake.setStatus(500);
+
+    const harness = await launch({ intervalMs: 500,
+      heartbeat: { url: fake.url,
+        intervalMs: PING_MS } });
+
+    await vi.waitFor(() => {
+      expect(fake.pings).toBeGreaterThanOrEqual(2);
+    }, WAIT);
+    await vi.waitFor(() => {
+      expect(finishedRows(harness).filter(row => row.status === 'ok')).toHaveLength(2);
+    }, WAIT);
+
+    const { samples } = parseMetrics(await (await get(harness, '/metrics')).text());
+
+    expect(samples.find(sample => sample.name === 'hawk_e2e_heartbeat_failures_total')?.value).toBeGreaterThanOrEqual(2);
+    expect(JSON.stringify(harness.logger.lines)).not.toContain(fake.key);
+  });
+
+  it('stays silent while alerts are not delivered for over 30 minutes', async () => {
+    const fake = await healthchecks();
+    const harness = await launch({ intervalMs: 500,
+      answer: { status: 500 },
+      heartbeat: { url: fake.url,
+        intervalMs: PING_MS },
+      seed: (history) => {
+        const at = new Date(Date.now() - 31 * 60_000).toISOString();
+
+        history.saveAlert({ scenario: SEND,
+          state: 'failing',
+          failureStreak: 1,
+          episodeFailures: 1,
+          degraded: [],
+          updatedAt: at }, { text: 'old alert',
+          at });
+      } });
+
+    await vi.waitFor(() => {
+      expect(harness.logger.lines.some(line => line.level === 'warn' && String(line.msg).includes('alerts are not delivered'))).toBe(true);
+    }, WAIT);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 5 * PING_MS);
+    });
+    expect(fake.pings).toBe(0);
+    expect(harness.logger.lines.filter(line => String(line.msg).includes('alerts are not delivered'))).toHaveLength(1);
+  });
+
+  it('stops pinging when the serve stops', async () => {
+    const fake = await healthchecks();
+    const harness = await launch({ heartbeat: { url: fake.url,
+      intervalMs: PING_MS } });
+
+    await vi.waitFor(() => {
+      expect(fake.pings).toBeGreaterThanOrEqual(1);
+    }, WAIT);
+    await harness.handle.stop();
+
+    const stopped = fake.pings;
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 5 * PING_MS);
+    });
+    expect(fake.pings).toBe(stopped);
+  });
+
+  it('does not ping without an address', async () => {
+    const fake = await healthchecks();
+
+    await launch();
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 3 * PING_MS);
+    });
+    expect(fake.pings).toBe(0);
   });
 });
 

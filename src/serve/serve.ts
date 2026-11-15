@@ -27,6 +27,7 @@ import type { Clock } from '../time/clock.js';
 import { scenarioSettings } from '../config/scenario.js';
 import { createMetrics } from '../metrics/metrics.js';
 import { SERVICE_VERSION } from '../version.js';
+import { createServeHeartbeat } from './heartbeat-setup.js';
 import { createMasking } from './masking.js';
 import { createRoutes } from './routes.js';
 import { buildRunners } from './runners.js';
@@ -354,8 +355,24 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
     closers.push(async () => app.stop());
     closers.push(async () => scheduler.stop());
     closers.push(async () => sweeper.stop());
+
+    const heartbeat = createServeHeartbeat({ config,
+      clock,
+      logger,
+      redact: masking.redact,
+      scheduler,
+      alerter,
+      metrics });
+
+    if (heartbeat !== undefined) {
+      closers.push(() => {
+        heartbeat.stop();
+      });
+    }
+
     scheduler.start();
     sweeper.start();
+    heartbeat?.start();
     logger.info('serve started', { scenarios: monitoring.scenarios,
       intervalMs: monitoring.intervalMs,
       databasePath: monitoring.databasePath });
