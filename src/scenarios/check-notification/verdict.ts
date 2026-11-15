@@ -148,7 +148,7 @@ function lateMismatch(notification: NotificationState, title: string, projectId:
 }
 
 /**
- * Decides the outcome of a `check-notification` run on top of the F1 verdict.
+ * Decides the outcome of a `check-notification` run on top of the `send-and-receive-event` verdict.
  * A notification proves the collector took the event, so it keeps the blame off the collector.
  * @param stages Recorded stages, cleanup last.
  * @param state Run state of the scenario.

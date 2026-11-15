@@ -3,7 +3,7 @@ import type { RunResult } from '../engine/result.js';
 import type { Redactor } from '../errors/redact.js';
 import { isCheckError } from '../errors/taxonomy.js';
 import type { Logger } from '../log/logger.js';
-import type { ScenarioName } from '../scenarios/send-and-receive/plan.js';
+import type { ScenarioName } from '../scenarios/names.js';
 import type { AlertStateRow, History } from '../storage/history.js';
 import type { RunRow } from '../storage/types.js';
 import type { Clock } from '../time/clock.js';
@@ -11,10 +11,10 @@ import { sendNotify } from './notify.js';
 import { decideAlert } from './state.js';
 import type { AlertKind } from './state.js';
 import { alertText, escapeHtml } from './text.js';
+import { MS_PER_DAY } from '../time/units.js';
 
 const FLUSH_BATCH = 50;
 const MAX_RETRY_PAUSE_MS = 600_000;
-const DROP_AFTER_MS = 86_400_000;
 const REJECTED_LOG_EVERY = 3;
 
 /** What the alerter needs from outside. */
@@ -176,7 +176,7 @@ export function createAlerter(deps: AlerterDeps): Alerter {
     }
 
     for (const row of rows) {
-      if (Date.parse(now) - Date.parse(row.createdAt) > DROP_AFTER_MS) {
+      if (Date.parse(now) - Date.parse(row.createdAt) > MS_PER_DAY) {
         history.alertAttempt(row.id, { droppedAt: now,
           error: 'dropped after 24 hours' });
         logger.error('alert dropped', { scenario: row.scenario,
@@ -260,106 +260,114 @@ export function createAlerter(deps: AlerterDeps): Alerter {
     }
   };
 
-  return {
-    onRunFinished(row, result) {
+  const onRunFinished: Alerter['onRunFinished'] = (row, result) => {
+    try {
+      const now = nowIso();
+      let kind: AlertKind | undefined;
+      let text: string | undefined;
+
       try {
-        const now = nowIso();
-        let kind: AlertKind | undefined;
-        let text: string | undefined;
+        const previous = memory.get(row.scenario) ?? history.alertState(row.scenario);
+        const decision = decideAlert(previous, row, monitoring, now);
+
+        kind = decision.kind;
+        memory.set(row.scenario, decision.state);
+
+        if (kind !== undefined) {
+          text = alertText({ kind,
+            instanceId: config.instanceId,
+            scenario: row.scenario,
+            row,
+            state: decision.state,
+            ...result === undefined ? {} : { result },
+            now }, redact);
+        }
 
         try {
-          const previous = memory.get(row.scenario) ?? history.alertState(row.scenario);
-          const decision = decideAlert(previous, row, monitoring, now);
-
-          kind = decision.kind;
-          memory.set(row.scenario, decision.state);
-
-          if (kind !== undefined) {
-            text = alertText({ kind,
-              instanceId: config.instanceId,
-              scenario: row.scenario,
-              row,
-              state: decision.state,
-              ...result === undefined ? {} : { result },
-              now }, redact);
+          if (decision.state !== previous) {
+            history.saveAlert(decision.state, text === undefined
+              ? undefined
+              : { text,
+                  runId: row.runId,
+                  at: now });
           }
 
-          try {
-            if (decision.state !== previous) {
-              history.saveAlert(decision.state, text === undefined
-                ? undefined
-                : { text,
-                    runId: row.runId,
-                    at: now });
-            }
-
-            storageWorked();
-          } catch (error) {
-            storageFailed(error, 'save');
-
-            if (text !== undefined) {
-              sendAfterStorageFailure(text, row.scenario, error);
-            }
-
-            return kind;
-          }
+          storageWorked();
         } catch (error) {
-          storageFailed(error, 'read');
+          storageFailed(error, 'save');
+
+          if (text !== undefined) {
+            sendAfterStorageFailure(text, row.scenario, error);
+          }
 
           return kind;
         }
-
-        if (kind !== undefined) {
-          requestFlush();
-        }
+      } catch (error) {
+        storageFailed(error, 'read');
 
         return kind;
-      } catch (error) {
-        logger.error('alerter failed', { error });
-
-        return undefined;
-      }
-    },
-    flush,
-    start() {
-      if (started) {
-        return;
       }
 
-      started = true;
-      loop = (async (): Promise<void> => {
-        for (;;) {
-          try {
-            await clock.sleep(monitoring.alertRetryMs, stopper.signal);
-          } catch {
-            return;
-          }
+      if (kind !== undefined) {
+        requestFlush();
+      }
 
-          requestFlush();
+      return kind;
+    } catch (error) {
+      logger.error('alerter failed', { error });
+
+      return undefined;
+    }
+  };
+
+  const start: Alerter['start'] = () => {
+    if (started) {
+      return;
+    }
+
+    started = true;
+    loop = (async (): Promise<void> => {
+      for (;;) {
+        try {
+          await clock.sleep(monitoring.alertRetryMs, stopper.signal);
+        } catch {
+          return;
         }
-      })();
-    },
-    async stop() {
-      stopper.abort();
-      await loop;
-      await flushing?.catch(() => undefined);
-      await direct;
-    },
-    health() {
-      let backlogAgeMs: number | null = null;
 
-      try {
-        const oldest = history.oldestUnsentAlert();
-
-        backlogAgeMs = oldest === undefined ? null : Date.parse(nowIso()) - Date.parse(oldest);
-      } catch (error) {
-        storageFailed(error, 'health');
+        requestFlush();
       }
+    })();
+  };
 
-      return { backlogAgeMs,
-        rejectedInRow,
-        storageFailing };
-    },
+  const stop: Alerter['stop'] = async () => {
+    stopper.abort();
+    await loop;
+    await flushing?.catch(() => undefined);
+    await direct;
+  };
+
+  const health: Alerter['health'] = () => {
+    let backlogAgeMs: number | null = null;
+
+    try {
+      const oldest = history.oldestUnsentAlert();
+
+      backlogAgeMs = oldest === undefined ? null : Date.parse(nowIso()) - Date.parse(oldest);
+    } catch (error) {
+      storageFailed(error, 'health');
+    }
+
+    return { backlogAgeMs,
+      rejectedInRow,
+      storageFailing };
+  };
+
+  return {
+    onRunFinished,
+    flush,
+    start,
+    stop,
+    health,
     failures: () => storageFailures,
   };
 }

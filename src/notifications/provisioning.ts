@@ -3,8 +3,8 @@ import { CheckError, isCheckError } from '../errors/taxonomy.js';
 import type { Clock } from '../time/clock.js';
 import type { PublicAddress } from './address.js';
 import type { ChannelSettings, NotificationChannels, NotificationRule, NotificationRuleInput } from './types.js';
+import { SEND_AND_RECEIVE_EVENT } from '../scenarios/names.js';
 
-const EXCLUDED_SCENARIO = 'send-and-receive-event';
 const CHANNEL_NAMES = ['email', 'slack', 'loop', 'telegram', 'webhook'] as const;
 const OFF: ChannelSettings = { isEnabled: false,
   endpoint: '' };
@@ -148,7 +148,7 @@ export function desiredRule(deps: Pick<ProvisionerDeps, 'instanceId' | 'loop' | 
     isEnabled: true,
     whatToReceive: 'ONLY_NEW',
     including: [`[e2e:${deps.instanceId}]`],
-    excluding: [EXCLUDED_SCENARIO],
+    excluding: [SEND_AND_RECEIVE_EVENT],
     channels: { email: OFF,
       slack: OFF,
       telegram: OFF,
@@ -337,26 +337,30 @@ export function createProvisioner(deps: ProvisionerDeps): Provisioner {
     }
   };
 
+  const provision: Provisioner['provision'] = async (address, signal) => {
+    const { difference, ...result } = await decide(address, signal);
+
+    if (result.matchChanged) {
+      markMatchChange();
+    }
+
+    const repeated = result.matchChanged && previousMatchChanged;
+
+    previousMatchChanged = result.matchChanged;
+
+    if (repeated) {
+      throw new CheckError('provisioning_unstable', { detail: difference ?? CREATED_AGAIN });
+    }
+
+    return result;
+  };
+
+  const warmupRemainingMs: Provisioner['warmupRemainingMs'] = () => {
+    return lastMatchChangeAtMs === undefined ? 0 : Math.max(0, deps.warmupMs - (clock.monotonicMs() - lastMatchChangeAtMs));
+  };
+
   return {
-    async provision(address, signal) {
-      const { difference, ...result } = await decide(address, signal);
-
-      if (result.matchChanged) {
-        markMatchChange();
-      }
-
-      const repeated = result.matchChanged && previousMatchChanged;
-
-      previousMatchChanged = result.matchChanged;
-
-      if (repeated) {
-        throw new CheckError('provisioning_unstable', { detail: difference ?? CREATED_AGAIN });
-      }
-
-      return result;
-    },
-    warmupRemainingMs() {
-      return lastMatchChangeAtMs === undefined ? 0 : Math.max(0, deps.warmupMs - (clock.monotonicMs() - lastMatchChangeAtMs));
-    },
+    provision,
+    warmupRemainingMs,
   };
 }

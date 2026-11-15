@@ -1,10 +1,9 @@
 import { CheckError } from '../errors/taxonomy.js';
 import { NetworkError, httpRequest } from '../net/http.js';
 import type { Clock } from '../time/clock.js';
+import { HttpStatus } from '../net/http-status.js';
 
 const FORM_HEADERS = Object.fromEntries([['content-type', 'application/x-www-form-urlencoded']]);
-const HTTP_OK = 200;
-const HTTP_SERVER_ERROR = 500;
 const OK_MARK = 'OK!';
 const MAX_BODY_CHARS = 200;
 
@@ -49,14 +48,14 @@ export async function sendNotify(url: string, text: string, deps: NotifyDeps, si
       host }, { message: `codex.bot is not reachable at ${host}: ${error.failure.code}` });
   }
 
-  if (response.status >= HTTP_SERVER_ERROR) {
+  if (response.status >= HttpStatus.internalServerError) {
     const host = URL.canParse(url) ? new URL(url).hostname : 'the notify URL';
 
     throw new CheckError('network_error', { status: response.status,
       host }, { message: `codex.bot answered ${String(response.status)} at ${host}` });
   }
 
-  if (response.status !== HTTP_OK || !response.text.includes(OK_MARK)) {
+  if (response.status !== HttpStatus.ok || !response.text.includes(OK_MARK)) {
     throw new CheckError('alert_rejected', { status: response.status,
       detail: response.text.slice(0, MAX_BODY_CHARS) });
   }

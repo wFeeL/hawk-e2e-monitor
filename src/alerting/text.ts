@@ -1,19 +1,17 @@
 import type { RunResult } from '../engine/result.js';
 import type { Redactor } from '../errors/redact.js';
 import type { ErrorClass } from '../errors/taxonomy.js';
-import type { ScenarioName } from '../scenarios/send-and-receive/plan.js';
+import type { ScenarioName } from '../scenarios/names.js';
 import type { AlertStateRow } from '../storage/history.js';
 import type { RunRow } from '../storage/types.js';
 import type { AlertKind } from './state.js';
+import { MINUTES_PER_HOUR, MS_PER_SECOND, SECONDS_PER_MINUTE } from '../time/units.js';
 
 /** Longest alert text codex.bot gets, counted after escaping. */
 export const ALERT_TEXT_LIMIT = 3500;
 
 const ELLIPSIS = '…';
 const BOLD_TAGS_LENGTH = '<b></b>'.length;
-const MS_PER_SECOND = 1000;
-const SECONDS_PER_MINUTE = 60;
-const MINUTES_PER_HOUR = 60;
 const WARNING_CLASSES: readonly ErrorClass[] = ['quota_exhausted', 'rate_limited'];
 const TITLES: ReadonlyMap<AlertKind, string> = new Map([
   ['failed', 'FAILED'],
@@ -67,13 +65,13 @@ function escapedLength(text: string): number {
 }
 
 /**
- * Cuts a text so that its escaped form fits a budget, never inside an entity.
+ * Cuts a text so that its escaped form fits a limit, never inside an entity.
  * @param text Plain text.
- * @param budget Characters allowed after escaping.
+ * @param limit Characters allowed after escaping.
  * @returns The text, or its start followed by an ellipsis.
  */
-function fit(text: string, budget: number): string {
-  if (escapedLength(text) <= budget) {
+function fit(text: string, limit: number): string {
+  if (escapedLength(text) <= limit) {
     return text;
   }
 
@@ -83,7 +81,7 @@ function fit(text: string, budget: number): string {
   for (const char of text) {
     used += (ESCAPES.get(char) ?? char).length;
 
-    if (used > budget) {
+    if (used > limit) {
       break;
     }
 

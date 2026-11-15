@@ -34,7 +34,7 @@ export const FIND_EVENTS: GraphqlOperation = {
   document: `query FindEvents($projectId: ID!, $search: String!) {
   project(projectId: $projectId) {
     dailyEventsPortion(limit: 50, search: $search) {
-      dailyEvents { id count event { id originalEventId groupHash totalCount catcherType payload { title context } } }
+      dailyEvents { id count event { id originalEventId groupHash totalCount catcherType timestamp payload { title context } } }
     }
   }
 }`,
@@ -46,7 +46,7 @@ export const EVENT_CARD: GraphqlOperation = {
   name: 'EventCard',
   document: `query EventCard($projectId: ID!, $eventId: ID!) {
   project(projectId: $projectId) {
-    event(eventId: $eventId, originalEventId: $eventId) { id originalEventId groupHash totalCount catcherType payload { title context } }
+    event(eventId: $eventId, originalEventId: $eventId) { id originalEventId groupHash totalCount catcherType timestamp payload { title context } }
   }
 }`,
   idempotent: true,

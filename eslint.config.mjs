@@ -12,7 +12,7 @@ export default [
     },
   },
   {
-    files: ['eslint.config.mjs', 'vitest*.config.ts', '**/*.test.ts', 'src/test-support/**'],
+    files: ['eslint.config.mjs', 'vitest*.config.ts', '**/*.test.ts', 'test/**'],
     rules: {
       'n/no-unpublished-import': 'off',
     },
@@ -51,13 +51,13 @@ export default [
     },
   },
   {
-    files: ['**/*.test.ts', 'src/test-support/**'],
+    files: ['**/*.test.ts', 'test/**'],
     rules: {
       '@typescript-eslint/no-magic-numbers': 'off',
     },
   },
   {
-    // node:sqlite is marked experimental in Node 24 but is the chosen store, see docs/architecture.md.
+    // node:sqlite is still flagged experimental by the plugin but is the chosen store.
     files: ['**/*.ts'],
     rules: {
       'n/no-unsupported-features/node-builtins': ['error', { ignores: ['sqlite'] }],

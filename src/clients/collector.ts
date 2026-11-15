@@ -3,26 +3,17 @@ import { CheckError } from '../errors/taxonomy.js';
 import type { ErrorClass, MessageFacts } from '../errors/taxonomy.js';
 import { stripTokenSecret } from '../errors/redact.js';
 import type { CollectorEndpoints } from '../hawk/token.js';
-import { NetworkError, networkFailureToCheckError, requestWithRetry } from '../net/http.js';
+import { JSON_HEADERS, NetworkError, networkFailureToCheckError, requestWithRetry } from '../net/http.js';
 import { withRetry } from '../net/retry.js';
+import type { RetryPolicy } from '../net/retry.js';
 import { sendOverWebSocket } from '../net/ws.js';
 import type { WsOutcome } from '../net/ws.js';
 import type { Clock } from '../time/clock.js';
+import { TOKEN_INVALID_PREFIX } from '../errors/redact.js';
+import { HttpStatus } from '../net/http-status.js';
 
-const ATTEMPTS = 3;
-const FIRST_RETRY_DELAY_MS = 200;
-const SECOND_RETRY_DELAY_MS = 500;
-const DEFAULT_RETRY_DELAYS_MS = [FIRST_RETRY_DELAY_MS, SECOND_RETRY_DELAY_MS] as const;
 const SNIPPET_LENGTH = 200;
-const TOKEN_INVALID_PREFIX = 'Integration token invalid';
 const PROBE_ID = '00000000-0000-4000-8000-000000000000';
-const HTTP_OK = 200;
-const HTTP_SERVER_ERROR = 500;
-const HTTP_BAD_REQUEST = 400;
-const HTTP_PAYMENT_REQUIRED = 402;
-const HTTP_TOO_LARGE = 413;
-const HTTP_TOO_MANY = 429;
-const JSON_HEADERS = Object.fromEntries([['content-type', 'application/json']]);
 
 /** How an event travels to the collector. */
 export type Transport = 'http' | 'ws';
@@ -102,8 +93,8 @@ export interface CollectorClientOptions {
   httpTimeoutMs: number;
   /** Clock for waits and durations. */
   clock: Clock;
-  /** Waits between attempts, `[200, 500]` by default. */
-  retryDelaysMs?: readonly number[];
+  /** Attempts and waits between them. */
+  retry: RetryPolicy;
 }
 
 /** The collector took the message. */
@@ -195,7 +186,7 @@ export function classifyCollectorReply(status: number, body: string): ReplyVerdi
   const unexpected = (): ReplyRejected => reject('collector_unexpected_response',
     typeof json?.message === 'string' ? stripTokenSecret(json.message) : snippet(status, body));
 
-  if (status === HTTP_OK) {
+  if (status === HttpStatus.ok) {
     return json?.error === false ? { kind: 'accepted' } : unexpected();
   }
 
@@ -203,7 +194,7 @@ export function classifyCollectorReply(status: number, body: string): ReplyVerdi
     const text = typeof json.message === 'string' ? stripTokenSecret(json.message) : undefined;
     const message = text ?? snippet(status, body);
 
-    if (status === HTTP_BAD_REQUEST) {
+    if (status === HttpStatus.badRequest) {
       if (text?.startsWith(TOKEN_INVALID_PREFIX) === true) {
         return reject('auth_invalid_token', text);
       }
@@ -211,7 +202,7 @@ export function classifyCollectorReply(status: number, body: string): ReplyVerdi
       return reject(text === 'Request is too large' ? 'payload_too_large' : 'bad_request', message);
     }
 
-    if (status === HTTP_PAYMENT_REQUIRED) {
+    if (status === HttpStatus.paymentRequired) {
       switch (text) {
         case 'Project has exceeded the events limit':
           return reject('quota_exhausted', message);
@@ -228,11 +219,11 @@ export function classifyCollectorReply(status: number, body: string): ReplyVerdi
   }
 
   switch (status) {
-    case HTTP_BAD_REQUEST:
+    case HttpStatus.badRequest:
       return reject('bad_request', snippet(status, body));
-    case HTTP_TOO_LARGE:
+    case HttpStatus.payloadTooLarge:
       return reject('payload_too_large', snippet(status, body));
-    case HTTP_TOO_MANY:
+    case HttpStatus.tooManyRequests:
       return reject('ip_blacklisted', snippet(status, body));
     default:
       return unexpected();
@@ -241,12 +232,12 @@ export function classifyCollectorReply(status: number, body: string): ReplyVerdi
 
 /**
  * Builds the client of the collector.
- * @param options Addresses, timeout, clock and retry delays.
+ * @param options Addresses, timeout, clock and retry policy.
  * @returns Client with `health`, `probeInvalidToken` and `send`.
  */
 export function createCollectorClient(options: CollectorClientOptions): CollectorClient {
   const { endpoints, httpTimeoutMs, clock } = options;
-  const delaysMs = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+  const { attempts: maxAttempts, delaysMs } = options.retry;
 
   /**
    * Opens a socket per attempt; a failed handshake is tried again.
@@ -269,7 +260,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
         }
 
         return outcome;
-      }, { attempts: ATTEMPTS,
+      }, { attempts: maxAttempts,
         delaysMs,
         clock,
         signal,
@@ -316,10 +307,10 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
       result = await requestWithRetry({ url: endpoints.healthUrl,
         method: 'GET',
         timeoutMs: httpTimeoutMs,
-        signal }, 'collector', { attempts: ATTEMPTS,
+        signal }, 'collector', { attempts: maxAttempts,
         delaysMs,
         clock,
-        retryStatus: (status, text) => status >= HTTP_SERVER_ERROR && parseObject(text) === undefined,
+        retryStatus: (status, text) => status >= HttpStatus.internalServerError && parseObject(text) === undefined,
         retryNetwork: () => true });
     } catch (error) {
       if (error instanceof NetworkError) {
@@ -332,8 +323,8 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
     const { status, text } = result.response;
     const json = parseObject(text);
 
-    if (json && (status === HTTP_OK || status >= HTTP_SERVER_ERROR)) {
-      if (status === HTTP_OK && json.redis_status === true && json.mongo_db_status === true) {
+    if (json && (status === HttpStatus.ok || status >= HttpStatus.internalServerError)) {
+      if (status === HttpStatus.ok && json.redis_status === true && json.mongo_db_status === true) {
         return;
       }
 
@@ -344,13 +335,13 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
         detail: `redis_status=${flag(json.redis_status)}, mongo_db_status=${flag(json.mongo_db_status)}` });
     }
 
-    if (status >= HTTP_SERVER_ERROR) {
+    if (status >= HttpStatus.internalServerError) {
       throw new CheckError('collector_unavailable', { ...facts(),
         status });
     }
 
     // The blacklist is checked before routing, so `/health` answers 429 as well.
-    const verdict = status === HTTP_TOO_MANY ? classifyCollectorReply(status, text) : undefined;
+    const verdict = status === HttpStatus.tooManyRequests ? classifyCollectorReply(status, text) : undefined;
 
     if (verdict?.kind === 'rejected') {
       throw new CheckError(verdict.errorClass, { ...facts(),
@@ -372,7 +363,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
     if (outcome.kind === 'response') {
       const json = parseObject(outcome.text);
 
-      if (json?.code === HTTP_BAD_REQUEST && typeof json.message === 'string' && json.message.startsWith(TOKEN_INVALID_PREFIX)) {
+      if (json?.code === HttpStatus.badRequest && typeof json.message === 'string' && json.message.startsWith(TOKEN_INVALID_PREFIX)) {
         return;
       }
 
@@ -399,7 +390,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
         headers: JSON_HEADERS,
         body: JSON.stringify(message),
         timeoutMs: httpTimeoutMs,
-        signal }, 'collector', { attempts: ATTEMPTS,
+        signal }, 'collector', { attempts: maxAttempts,
         delaysMs,
         clock,
         retryStatus: () => false,
@@ -422,7 +413,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
 
     const { response, attempts } = result;
 
-    if (response.status >= HTTP_SERVER_ERROR) {
+    if (response.status >= HttpStatus.internalServerError) {
       return { kind: 'uncertain',
         cause: new CheckError('collector_unavailable', { ...facts(),
           status: response.status }),

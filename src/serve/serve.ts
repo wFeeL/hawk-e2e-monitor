@@ -1,6 +1,7 @@
 import { hostname as osHostname } from 'node:os';
 import process from 'node:process';
 import { createAlerter } from '../alerting/alerter.js';
+import { createSweeper } from '../cleanup/sweep.js';
 import type { sendNotify } from '../alerting/notify.js';
 import { startApp, StartupError } from '../app.js';
 import { createCollectorClient } from '../clients/collector.js';
@@ -36,8 +37,10 @@ import { projectedEventsPer30Days } from '../storage/outcome.js';
 import { systemClock } from '../time/clock.js';
 import type { Clock } from '../time/clock.js';
 import { createRoutes } from './routes.js';
+import { MS_PER_DAY } from '../time/units.js';
+import { CHECK_NOTIFICATION, SEND_AND_RECEIVE_EVENT } from '../scenarios/names.js';
+import type { ScenarioName } from '../scenarios/names.js';
 
-const MS_PER_DAY = 86_400_000;
 const TUNNEL_POLL_MS = 2000;
 const ALERT_BACKLOG_LIMIT_MS = 1_800_000;
 const NOTIFY_TOKEN_MARKER = '/u/';
@@ -54,12 +57,12 @@ export interface ServeOverrides {
   resolveAddress?: typeof resolvePublicAddress;
   /** Poll schedule of the search for the event, short in tests. */
   pollScheduleMs?: readonly number[];
-  /** Pauses between attempts of address calls, short in tests. */
-  retryDelaysMs?: readonly number[];
   /** Pause between self-checks while a new tunnel address is awaited, 2000 ms by default. */
   addressPollMs?: number;
   /** Pause between self-checks while the tunnel starts, 2000 ms by default. */
   tunnelPollMs?: number;
+  /** Wait before the first sweep of leftover events, 5 minutes by default. */
+  sweepFirstDelayMs?: number;
 }
 
 /** Who runs this `serve`, for its lease. */
@@ -125,19 +128,27 @@ function maskedLogger(logger: Logger, masking: MutableRedactor): Logger {
     return redactDeep(Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, serializeError(value)])), masking.redact);
   };
 
+  const debug: Logger['debug'] = (msg, fields) => {
+    logger.debug(masking.redact(msg), mask(fields));
+  };
+
+  const info: Logger['info'] = (msg, fields) => {
+    logger.info(masking.redact(msg), mask(fields));
+  };
+
+  const warn: Logger['warn'] = (msg, fields) => {
+    logger.warn(masking.redact(msg), mask(fields));
+  };
+
+  const error: Logger['error'] = (msg, fields) => {
+    logger.error(masking.redact(msg), mask(fields));
+  };
+
   return {
-    debug: (msg, fields) => {
-      logger.debug(masking.redact(msg), mask(fields));
-    },
-    info: (msg, fields) => {
-      logger.info(masking.redact(msg), mask(fields));
-    },
-    warn: (msg, fields) => {
-      logger.warn(masking.redact(msg), mask(fields));
-    },
-    error: (msg, fields) => {
-      logger.error(masking.redact(msg), mask(fields));
-    },
+    debug,
+    info,
+    warn,
+    error,
   };
 }
 
@@ -203,13 +214,16 @@ function createClients(config: Config, clock: Clock): HawkClients {
   return {
     collector: createCollectorClient({ endpoints: collectorEndpoints(token, config.hawk.collectorUrl),
       httpTimeoutMs: config.httpTimeoutMs,
-      clock }),
+      clock,
+      retry: config.retry }),
     api: createHawkApi({ transport: createGraphqlTransport({ url: config.hawk.apiUrl,
       httpTimeoutMs: config.httpTimeoutMs,
-      clock }),
+      clock,
+      retry: config.retry }),
     email: config.hawk.email,
     password: config.hawk.password,
-    clock }),
+    clock,
+    retry: config.retry }),
   };
 }
 
@@ -293,8 +307,6 @@ interface TunnelWait {
   signal: AbortSignal;
   /** Pause between tries. */
   pollMs: number;
-  /** Pauses between attempts of address calls. */
-  retryDelaysMs?: readonly number[];
 }
 
 /**
@@ -321,7 +333,7 @@ async function waitForTunnel(wait: TunnelWait): Promise<void> {
       await probeReceiver(address, wait.secret, wait.receiver.nonce, { httpTimeoutMs: config.httpTimeoutMs,
         clock,
         attempts: 1,
-        ...wait.retryDelaysMs === undefined ? {} : { retryDelaysMs: wait.retryDelaysMs } }, signal);
+        retry: config.retry }, signal);
       logger.info('tunnel is ready');
 
       return;
@@ -362,12 +374,11 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
   const masking = createMasking(config);
   const logger = maskedLogger(deps.logger, masking);
   const exit = deps.exit ?? ((code: number): void => {
-    // eslint-disable-next-line n/no-process-exit -- fatal error policy, see docs/architecture.md
+    // eslint-disable-next-line n/no-process-exit -- a stuck scheduler cannot recover in place, so end the process and let the container restart it
     process.exit(code);
   });
   const background = new AbortController();
   const closers: Closer[] = [];
-  const retry = overrides.retryDelaysMs === undefined ? {} : { retryDelaysMs: overrides.retryDelaysMs };
 
   const history = openHistory(config);
 
@@ -429,9 +440,9 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
     alerter.start();
     closers.push(async () => alerter.stop());
 
-    const notifies = monitoring.scenarios.includes('check-notification');
-    const runners: Partial<Record<'check-notification' | 'send-and-receive-event', ScenarioRunner>> = {};
-    const beforeFirstRun: Partial<Record<'check-notification', (signal: AbortSignal) => Promise<void>>> = {};
+    const notifies = monitoring.scenarios.includes(CHECK_NOTIFICATION);
+    const runners: Partial<Record<ScenarioName, ScenarioRunner>> = {};
+    const beforeFirstRun: Partial<Record<typeof CHECK_NOTIFICATION, (signal: AbortSignal) => Promise<void>>> = {};
     let receiver: Receiver | undefined;
     let receiverClosed = false;
 
@@ -443,7 +454,7 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
       redact: masking.redact,
       ...overrides.pollScheduleMs === undefined ? {} : { pollScheduleMs: overrides.pollScheduleMs } };
 
-    runners['send-and-receive-event'] = async ({ runId, sequence, signal }) => runSendAndReceive({ ...base,
+    runners[SEND_AND_RECEIVE_EVENT] = async ({ runId, sequence, signal }) => runSendAndReceive({ ...base,
       signal }, { sequence,
       runId });
 
@@ -495,21 +506,20 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
       const resolve = overrides.resolveAddress ?? resolvePublicAddress;
       const findAddress = async (signal: AbortSignal): Promise<PublicAddress> => resolve(settings, { httpTimeoutMs: config.httpTimeoutMs,
         clock,
-        ...retry }, signal);
+        retry: config.retry }, signal);
       const lastHostname: LastHostname = {};
 
-      runners['check-notification'] = async ({ runId, sequence, signal }) => runCheckNotification({ ...base,
+      runners[CHECK_NOTIFICATION] = async ({ runId, sequence, signal }) => runCheckNotification({ ...base,
         signal,
         receiver: started,
         provisioner,
         resolveAddress: findAddress,
         addSecret: masking.add,
         lastHostname,
-        ...retry,
         ...overrides.addressPollMs === undefined ? {} : { addressPollMs: overrides.addressPollMs } }, { sequence,
         runId });
 
-      beforeFirstRun['check-notification'] = async (signal) => {
+      beforeFirstRun[CHECK_NOTIFICATION] = async (signal) => {
         await waitForTunnel({ findAddress,
           receiver: started,
           secret: settings.receiverSecret,
@@ -518,8 +528,7 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
           logger,
           masking,
           signal,
-          pollMs: overrides.tunnelPollMs ?? TUNNEL_POLL_MS,
-          ...retry });
+          pollMs: overrides.tunnelPollMs ?? TUNNEL_POLL_MS });
       };
     }
 
@@ -535,6 +544,13 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
       }],
       projectedEventsPer30Days: projectedEventsPer30Days(config),
       exit });
+    const sweeper = createSweeper({ api,
+      history,
+      clock,
+      logger,
+      config,
+      activeRunIds: () => scheduler.activeRunIds(),
+      ...overrides.sweepFirstDelayMs === undefined ? {} : { firstPassDelayMs: overrides.sweepFirstDelayMs } });
     const liveness: Check[] = [
       { name: 'scheduler',
         run: async () => Promise.resolve(scheduler.health().scheduler) },
@@ -567,11 +583,13 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
         clock,
         scheduler,
         alerter,
-        sweepFailures: () => 0 }) });
+        sweepFailures: () => sweeper.failures() }) });
 
     closers.push(async () => app.stop());
     closers.push(async () => scheduler.stop());
+    closers.push(async () => sweeper.stop());
     scheduler.start();
+    sweeper.start();
     logger.info('serve started', { scenarios: monitoring.scenarios,
       intervalMs: monitoring.intervalMs,
       databasePath: monitoring.databasePath });

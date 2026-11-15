@@ -8,9 +8,8 @@ import type { ProvisionResult, Provisioner } from '../../notifications/provision
 import type { NotificationChannel } from '../../notifications/types.js';
 import type { Arrival, Arrivals, Receiver } from '../../receiver/server.js';
 import type { ScenarioContext } from '../send-and-receive/stages.js';
+import { MS_PER_SECOND } from '../../time/units.js';
 
-const MS_PER_SECOND = 1000;
-const PROBE_ATTEMPTS = 3;
 const DEFAULT_ADDRESS_POLL_MS = 2000;
 const WEBHOOK_AGENT = 'Hawk-Webhook/1.0';
 const WEBHOOK_KIND = 'event';
@@ -47,8 +46,6 @@ export interface NotificationContext extends ScenarioContext {
   address?: PublicAddress;
   /** Finds the public address. */
   resolveAddress: (signal: AbortSignal) => Promise<PublicAddress>;
-  /** Pauses between attempts of the address calls, for tests. */
-  retryDelaysMs?: readonly number[];
   /** Adds a value to the secrets that output must not show. */
   addSecret: (value: string) => void;
   /** Host of the address of the previous run, shared by the runs of a process; a new host is waited for before the rule is changed. */
@@ -239,9 +236,9 @@ export function notificationBeforeSend(context: NotificationContext): () => void
  * Waits until the receiver answers through a new address, trying once per pause.
  * @param context Context of the stage.
  * @param address The new address.
- * @param signal Budget of the stage.
+ * @param signal Timeout of the stage.
  * @returns Resolves when a self-check passes.
- * @throws CheckError of the last self-check when the budget ends first.
+ * @throws CheckError of the last self-check when the timeout ends first.
  */
 async function waitForAddress(context: NotificationContext, address: PublicAddress, signal: AbortSignal): Promise<void> {
   const { config, clock, receiver, settings } = context;
@@ -253,7 +250,7 @@ async function waitForAddress(context: NotificationContext, address: PublicAddre
       await probeReceiver(address, settings.receiverSecret, receiver.nonce, { httpTimeoutMs: config.httpTimeoutMs,
         clock,
         attempts: 1,
-        ...context.retryDelaysMs === undefined ? {} : { retryDelaysMs: context.retryDelaysMs } }, signal);
+        retry: config.retry }, signal);
 
       return;
     } catch (error) {
@@ -274,13 +271,13 @@ async function waitForAddress(context: NotificationContext, address: PublicAddre
 
 /**
  * Stage `notification_setup`: finds the public address, checks the receiver through it and brings the rule to the wanted state.
- * @param budgetMs Time limit of the stage.
+ * @param timeoutMs Time limit of the stage.
  * @returns Stage spec.
  */
-export function notificationSetupStage(budgetMs: number): StageSpec<NotificationContext> {
+export function notificationSetupStage(timeoutMs: number): StageSpec<NotificationContext> {
   return {
     name: 'notification_setup',
-    budgetMs,
+    timeoutMs,
     run: async (context, signal): Promise<StageOutcome> => {
       const { config, clock, notification, provisioner, receiver, settings } = context;
       const address = await context.resolveAddress(signal);
@@ -298,8 +295,8 @@ export function notificationSetupStage(budgetMs: number): StageSpec<Notification
       } else {
         await probeReceiver(address, settings.receiverSecret, receiver.nonce, { httpTimeoutMs: config.httpTimeoutMs,
           clock,
-          attempts: PROBE_ATTEMPTS,
-          ...context.retryDelaysMs === undefined ? {} : { retryDelaysMs: context.retryDelaysMs } }, signal);
+          attempts: config.retry.attempts,
+          retry: config.retry }, signal);
       }
 
       if (context.lastHostname !== undefined) {
@@ -330,13 +327,13 @@ function missingChannels(arrivals: Arrivals, channels: readonly NotificationChan
 
 /**
  * Stage `notification_formed`: waits for the webhook and loop POSTs of the run and checks them.
- * @param budgetMs Time limit of the stage; room for one probe after the wait.
+ * @param timeoutMs Time limit of the stage; room for one probe after the wait.
  * @returns Stage spec.
  */
-export function notificationFormedStage(budgetMs: number): StageSpec<NotificationContext> {
+export function notificationFormedStage(timeoutMs: number): StageSpec<NotificationContext> {
   return {
     name: 'notification_formed',
-    budgetMs,
+    timeoutMs,
     run: async (context, signal): Promise<StageOutcome> => {
       const { clock, config, notification, plan, receiver, settings, state } = context;
 
@@ -374,7 +371,7 @@ export function notificationFormedStage(budgetMs: number): StageSpec<Notificatio
           await probeReceiver(address, settings.receiverSecret, receiver.nonce, { httpTimeoutMs: config.httpTimeoutMs,
             clock,
             attempts: 1,
-            ...context.retryDelaysMs === undefined ? {} : { retryDelaysMs: context.retryDelaysMs } }, signal);
+            retry: config.retry }, signal);
         } catch (error) {
           if (isCheckError(error)) {
             return { status: 'failed',

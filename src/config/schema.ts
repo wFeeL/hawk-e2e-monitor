@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { decodeIntegrationToken } from '../hawk/token.js';
-import { SCENARIO_NAMES } from '../scenarios/send-and-receive/plan.js';
+import { CHECK_NOTIFICATION, SCENARIO_NAMES, SEND_AND_RECEIVE_EVENT } from '../scenarios/names.js';
 import { boundedDurationMs, durationMs } from './duration.js';
 
 const DEFAULT_INTERNAL_PORT = 8090;
@@ -34,10 +34,12 @@ const MAX_ALERT_AFTER_FAILURES = 10;
 const DEFAULT_ALERT_RETRY_MS = 60_000;
 const MIN_ALERT_RETRY_MS = 1000;
 const MAX_ALERT_RETRY_MS = 3_600_000;
+const DEFAULT_RETRY_ATTEMPTS = 3;
+const MAX_RETRY_ATTEMPTS = 5;
+const DEFAULT_RETRY_DELAYS = '200,500';
+const MAX_RETRY_DELAY_MS = 60_000;
 const DEFAULT_SWEEP_INTERVAL_MS = 3_600_000;
 const DEFAULT_SWEEP_MIN_AGE_MS = 900_000;
-const DEFAULT_SCENARIOS = 'send-and-receive-event';
-const OWN_SCENARIO_NAME = 'send-and-receive-event';
 const RECEIVER_SECRET_PATTERN = /^[\w-]{32,}$/;
 const DEFAULT_REPEAT_EVERY_N_RUNS = 6;
 const MAX_INSTANCE_DIGITS = 12;
@@ -79,7 +81,7 @@ export const TRANSPORT_MODES = ['alternate', 'http', 'ws'] as const;
 /** One of `TRANSPORT_MODES`. */
 export type TransportMode = (typeof TRANSPORT_MODES)[number];
 
-/** Stage time limits, as environment variable and the key `Config.budgets` stores it under. */
+/** Stage time limits, as environment variable and the key `Config.timeouts` stores it under. */
 export const STAGE_TIMEOUT_VARS = [
   ['COLLECTOR_AVAILABILITY_TIMEOUT_MS', 'collectorAvailability'],
   ['API_AVAILABILITY_TIMEOUT_MS', 'apiAvailability'],
@@ -156,10 +158,25 @@ function scenarioList(): z.ZodType<Array<(typeof SCENARIO_NAMES)[number]>> {
   const names = SCENARIO_NAMES.join(', ');
 
   return z.string()
-    .default(DEFAULT_SCENARIOS)
+    .default(SEND_AND_RECEIVE_EVENT)
     .transform(value => value.split(',').map(name => name.trim()))
     .pipe(z.array(z.enum(SCENARIO_NAMES, { message: `must be a comma-separated list of: ${names}` }))
       .refine(list => new Set(list).size === list.length, 'must not repeat a scenario'));
+}
+
+/**
+ * Builds the schema of the pauses between attempts: whole milliseconds separated by commas.
+ * @returns Schema that outputs the pauses in the order given; an empty value means no pauses.
+ */
+function retryDelays(): z.ZodType<number[]> {
+  const message = `must be comma-separated whole milliseconds from 0 to ${String(MAX_RETRY_DELAY_MS)}`;
+
+  return z.string()
+    .default(DEFAULT_RETRY_DELAYS)
+    .transform(value => value.trim() === '' ? [] : value.split(',').map(part => part.trim()))
+    .pipe(z.array(z.string().regex(/^\d+$/, message)
+      .transform(Number)
+      .pipe(z.number().max(MAX_RETRY_DELAY_MS, message))));
 }
 
 /** Schemas of all environment variables, in the order errors are reported. */
@@ -168,7 +185,7 @@ export const ENV_SHAPE = {
     // The grouper masks values that look like card numbers (13-19 digits).
     .refine(value => value.replaceAll(/\D/gu, '').length <= MAX_INSTANCE_DIGITS, 'must contain at most 12 digits')
     // The title of this scenario's events must not match the other scenario's events.
-    .refine(value => !value.toLowerCase().includes(OWN_SCENARIO_NAME), `must not contain "${OWN_SCENARIO_NAME}"`)),
+    .refine(value => !value.toLowerCase().includes(SEND_AND_RECEIVE_EVENT), `must not contain "${SEND_AND_RECEIVE_EVENT}"`)),
   LOG_LEVEL: pub(z.enum(LOG_LEVELS).default('info')),
   INTERNAL_HOST: pub(z.string().min(1)
     .default('127.0.0.1')),
@@ -200,6 +217,8 @@ export const ENV_SHAPE = {
   EVENT_VISIBLE_TIMEOUT_MS: pub(durationMs(DEFAULT_VISIBLE_TIMEOUT_MS)),
   EVENT_REPEATED_TIMEOUT_MS: pub(durationMs(DEFAULT_VISIBLE_TIMEOUT_MS)),
   CLEANUP_TIMEOUT_MS: pub(durationMs(DEFAULT_CLEANUP_TIMEOUT_MS)),
+  RETRY_ATTEMPTS: pub(intRange(DEFAULT_RETRY_ATTEMPTS, 1, MAX_RETRY_ATTEMPTS)),
+  RETRY_DELAYS_MS: pub(retryDelays()),
   LATE_DUPLICATE_WAIT_MS: pub(durationMs(DEFAULT_LATE_DUPLICATE_WAIT_MS, { allowZero: true })),
   RUN_TIMEOUT_MS: pub(durationMs(DEFAULT_RUN_TIMEOUT_MS)),
   RECEIVER_HOST: pub(z.string().min(1)
@@ -239,7 +258,7 @@ export const ENV_SHAPE = {
  * @param env Parsed variables with usable numbers.
  * @param ctx Collects the issues.
  */
-function checkNotificationBudget(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx): void {
+function checkNotificationTimeout(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx): void {
   if (env.NOTIFICATION_PAIR_WAIT_MS >= env.NOTIFICATION_TIMEOUT_MS) {
     ctx.addIssue({ code: 'custom',
       path: ['NOTIFICATION_PAIR_WAIT_MS'],
@@ -261,6 +280,37 @@ function checkNotificationBudget(env: z.output<typeof baseSchema>, ctx: z.Refine
     ctx.addIssue({ code: 'custom',
       path: ['RUN_TIMEOUT_MS'],
       message: `must be at least the sum of the timeouts of the check-notification stages (${String(total)} ms)` });
+  }
+}
+
+/**
+ * Checks the retry policy against itself and against the shortest timeout that contains retries.
+ * @param env Parsed variables with usable numbers.
+ * @param ctx Collects the issues.
+ */
+function checkRetry(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx): void {
+  // A single attempt never pauses, so the list is not used and not checked.
+  if (env.RETRY_ATTEMPTS === 1) {
+    return;
+  }
+
+  if (env.RETRY_DELAYS_MS.length !== env.RETRY_ATTEMPTS - 1) {
+    ctx.addIssue({ code: 'custom',
+      path: ['RETRY_DELAYS_MS'],
+      message: `must list one pause fewer than RETRY_ATTEMPTS: ${String(env.RETRY_ATTEMPTS)} attempts need a list of ${String(env.RETRY_ATTEMPTS - 1)}, got ${String(env.RETRY_DELAYS_MS.length)}` });
+
+    return;
+  }
+
+  const pauses = env.RETRY_DELAYS_MS.reduce((sum, delay) => sum + delay, 0);
+  const [shortestName, shortest] = [...STAGE_TIMEOUT_VARS.map(([name]) => name), 'NOTIFICATION_SETUP_TIMEOUT_MS' as const]
+    .map(name => [name, env[name]] as const)
+    .reduce((least, entry) => entry[1] < least[1] ? entry : least);
+
+  if (pauses > shortest) {
+    ctx.addIssue({ code: 'custom',
+      path: ['RETRY_DELAYS_MS'],
+      message: `pauses add up to ${String(pauses)} ms, more than ${shortestName} (${String(shortest)} ms), the shortest timeout that contains retries; shorten RETRY_DELAYS_MS or lower RETRY_ATTEMPTS` });
   }
 }
 
@@ -291,7 +341,7 @@ function checkMonitoring(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx)
       message: `must be at least RUN_TIMEOUT_MS + CLEANUP_TIMEOUT_MS (${String(runAndCleanup)} ms)` });
   }
 
-  if (!Array.isArray(env.SCENARIOS) || !env.SCENARIOS.includes('check-notification')) {
+  if (!Array.isArray(env.SCENARIOS) || !env.SCENARIOS.includes(CHECK_NOTIFICATION)) {
     return;
   }
 
@@ -318,9 +368,9 @@ function checkCombinations(env: z.output<typeof baseSchema>, ctx: z.RefinementCt
   // Zod runs this check even when a field failed a format rule, so skip values that are not usable.
   const numbers = ['HTTP_TIMEOUT_MS', 'RUN_TIMEOUT_MS', 'LATE_DUPLICATE_WAIT_MS', ...STAGE_TIMEOUT_VARS.map(([name]) => name),
     'NOTIFICATION_TIMEOUT_MS', 'NOTIFICATION_PAIR_WAIT_MS', 'NOTIFICATION_SETUP_TIMEOUT_MS',
-    'CHECK_INTERVAL_MS', 'WATCHDOG_GRACE_MS', 'SCENARIO_STAGGER_MS', 'SWEEP_MIN_AGE_MS'] as const;
+    'CHECK_INTERVAL_MS', 'WATCHDOG_GRACE_MS', 'SCENARIO_STAGGER_MS', 'SWEEP_MIN_AGE_MS', 'RETRY_ATTEMPTS'] as const;
 
-  if (!URL.canParse(env.HAWK_API_URL) || numbers.some(name => typeof env[name] !== 'number')) {
+  if (!URL.canParse(env.HAWK_API_URL) || numbers.some(name => typeof env[name] !== 'number') || !Array.isArray(env.RETRY_DELAYS_MS)) {
     return;
   }
 
@@ -353,7 +403,8 @@ function checkCombinations(env: z.output<typeof baseSchema>, ctx: z.RefinementCt
       message: `must be at least the sum of the timeouts of stages 1-5 (${String(stagesTotal)} ms)` });
   }
 
-  checkNotificationBudget(env, ctx);
+  checkRetry(env, ctx);
+  checkNotificationTimeout(env, ctx);
   checkMonitoring(env, ctx);
 
   const hostname = new URL(env.HAWK_API_URL).hostname;

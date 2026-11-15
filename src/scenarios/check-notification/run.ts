@@ -17,6 +17,7 @@ import type { ScenarioState } from '../send-and-receive/stages.js';
 import { notificationBeforeSend, notificationFormedStage, notificationSetupStage } from './stages.js';
 import type { LastHostname, NotificationContext, NotificationState } from './stages.js';
 import { decideNotificationVerdict } from './verdict.js';
+import { CHECK_NOTIFICATION } from '../names.js';
 
 /** Everything `runCheckNotification` needs from outside. */
 export interface NotificationDeps extends ScenarioDeps {
@@ -26,8 +27,6 @@ export interface NotificationDeps extends ScenarioDeps {
   provisioner?: Provisioner;
   /** Finds the public address; reads the settings by default. */
   resolveAddress?: (signal: AbortSignal) => Promise<PublicAddress>;
-  /** Pauses between attempts of the address calls, for tests. */
-  retryDelaysMs?: readonly number[];
   /** Adds a value that output must not show, such as the public address. */
   addSecret: (value: string) => void;
   /** Host of the previous run's address, shared by the runs of a process; see `NotificationContext`. */
@@ -46,10 +45,9 @@ type Step = Array<StageSpec<NotificationContext>>;
  */
 export async function runCheckNotification(deps: NotificationDeps, options: PlanOptions): Promise<RunResult> {
   const { config, clock, receiver } = deps;
-  const { budgets } = config;
+  const { timeouts } = config;
   const settings = notificationSettings(config);
-  const plan = planRun(config, options, 'check-notification', deps.randomLetters);
-  const retry = deps.retryDelaysMs === undefined ? {} : { retryDelaysMs: deps.retryDelaysMs };
+  const plan = planRun(config, options, CHECK_NOTIFICATION, deps.randomLetters);
   const provisioner = deps.provisioner ?? createProvisioner({ api: deps.api,
     clock,
     projectId: config.hawk.projectId,
@@ -71,8 +69,7 @@ export async function runCheckNotification(deps: NotificationDeps, options: Plan
     settings,
     resolveAddress: deps.resolveAddress ?? (async signal => resolvePublicAddress(settings, { httpTimeoutMs: config.httpTimeoutMs,
       clock,
-      ...retry }, signal)),
-    ...retry,
+      retry: config.retry }, signal)),
     addSecret: deps.addSecret,
     ...deps.lastHostname === undefined ? {} : { lastHostname: deps.lastHostname },
     ...deps.addressPollMs === undefined ? {} : { addressPollMs: deps.addressPollMs },
@@ -83,17 +80,17 @@ export async function runCheckNotification(deps: NotificationDeps, options: Plan
   const timer = new AbortController();
   const unfollow = followOutsideSignal(run, deps.signal);
 
-  clock.sleep(budgets.run, timer.signal).then(() => {
+  clock.sleep(timeouts.run, timer.signal).then(() => {
     run.abort();
   }, () => undefined);
 
   const steps: Step[] = [
-    [collectorAvailabilityStage(budgets.collectorAvailability)],
-    [apiAvailabilityStage(budgets.apiAvailability)],
+    [collectorAvailabilityStage(timeouts.collectorAvailability)],
+    [apiAvailabilityStage(timeouts.apiAvailability)],
     [notificationSetupStage(settings.setupTimeoutMs)],
-    [collectorAcceptStage(budgets.collectorAccept, notificationBeforeSend(context))],
-    [eventVisibleStage(budgets.eventVisible), notificationFormedStage(settings.timeoutMs + config.httpTimeoutMs)],
-    [eventRepeatedStage(budgets.eventRepeated)],
+    [collectorAcceptStage(timeouts.collectorAccept, notificationBeforeSend(context))],
+    [eventVisibleStage(timeouts.eventVisible), notificationFormedStage(settings.timeoutMs + config.httpTimeoutMs)],
+    [eventRepeatedStage(timeouts.eventRepeated)],
   ];
   const stages: StageResult[] = [];
 
@@ -124,8 +121,8 @@ export async function runCheckNotification(deps: NotificationDeps, options: Plan
     timer.abort();
     unfollow();
 
-    // Cleanup has its own budget outside the run deadline, so its signal is never aborted by the run.
-    stages.push(await runStage(cleanupStage(budgets.cleanup), context, { clock,
+    // Cleanup has its own timeout outside the run deadline, so its signal is never aborted by the run.
+    stages.push(await runStage(cleanupStage(timeouts.cleanup), context, { clock,
       runSignal: new AbortController().signal }));
 
     if (stages.some(stage => stage.name === 'collector_accept' && stage.status !== 'skipped')) {

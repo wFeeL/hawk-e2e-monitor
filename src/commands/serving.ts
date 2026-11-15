@@ -1,7 +1,6 @@
 import type { Config } from '../config/load.js';
 import { serveLeaseOf } from '../storage/lease.js';
-
-const MS_PER_SECOND = 1000;
+import { MS_PER_SECOND } from '../time/units.js';
 
 /**
  * Tells whether a CLI command must stay out of the way of a running `serve`.
