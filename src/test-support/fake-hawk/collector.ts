@@ -105,6 +105,8 @@ export interface FakeCollectorOptions {
   validTokenKey: string;
   /** Answers 402 when it returns true. */
   blocked?: () => boolean;
+  /** Port to listen on, to come back at the address of a collector that was closed; random by default. */
+  port?: number;
 }
 
 /** Resolved answer of one message. */
@@ -448,7 +450,7 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
   });
 
   await new Promise<void>((resolve) => {
-    server.listen(0, '127.0.0.1', resolve);
+    server.listen(options.port ?? 0, '127.0.0.1', resolve);
   });
 
   const { port } = server.address() as AddressInfo;

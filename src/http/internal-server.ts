@@ -31,7 +31,7 @@ export interface InternalServerOptions {
   readiness: readonly Check[];
   /** Time limit for one check. */
   checkTimeoutMs: number;
-  /** Extra routes keyed by `${method} ${pathname}`, e.g. `POST /runs`. */
+  /** Extra routes keyed by `${method} ${pathname}`, e.g. `POST /runs`; a key that ends in `/*` serves every path below that prefix. */
   routes?: ReadonlyMap<string, RouteHandler>;
 }
 
@@ -126,6 +126,27 @@ function parsePathname(target: string | undefined): string | undefined {
 }
 
 /**
+ * Finds the handler of a request: an exact `METHOD /path` key first, then the longest `METHOD /prefix/*` key.
+ * @param routes Registered routes.
+ * @param method HTTP method.
+ * @param pathname Path of the request without the query.
+ * @returns The handler, or undefined.
+ */
+function findRoute(routes: ReadonlyMap<string, RouteHandler> | undefined, method: string, pathname: string): RouteHandler | undefined {
+  const exact = routes?.get(`${method} ${pathname}`);
+
+  if (exact !== undefined || routes === undefined) {
+    return exact;
+  }
+
+  const prefixes = [...routes.keys()]
+    .filter(key => key.startsWith(`${method} /`) && key.endsWith('/*') && pathname.startsWith(key.slice(method.length + 1, -1)))
+    .toSorted((left, right) => right.length - left.length);
+
+  return prefixes[0] === undefined ? undefined : routes.get(prefixes[0]);
+}
+
+/**
  * Creates the internal HTTP server; the caller starts and stops it.
  * @param options Checks, routes, logger and the check time limit.
  * @returns Server that is not listening yet.
@@ -167,7 +188,7 @@ export function createInternalServer(options: InternalServerOptions): Server {
       return;
     }
 
-    const route = options.routes?.get(`${method} ${pathname}`);
+    const route = findRoute(options.routes, method, pathname);
 
     if (route) {
       await route(req, res);

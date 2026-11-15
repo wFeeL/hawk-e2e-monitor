@@ -464,4 +464,55 @@ describe('provision', () => {
     await clock.advance(WARMUP_MS);
     expect(same.warmupRemainingMs()).toBe(0);
   });
+
+  describe('warmup that survives a restart', () => {
+    it('counts the warmup from the stored time of the last change', () => {
+      const stored = clock.wallTime().getTime() - 10_000;
+
+      expect(provisioner({ lastMatchChangeAtWallMs: stored }).warmupRemainingMs()).toBe(WARMUP_MS - 10_000);
+    });
+
+    it('has no warmup left when the stored time is older than the warmup', () => {
+      const stored = clock.wallTime().getTime() - WARMUP_MS - 1;
+
+      expect(provisioner({ lastMatchChangeAtWallMs: stored }).warmupRemainingMs()).toBe(0);
+    });
+
+    it('never waits longer than the warmup when the stored time is in the future', () => {
+      const stored = clock.wallTime().getTime() + 600_000;
+
+      expect(provisioner({ lastMatchChangeAtWallMs: stored }).warmupRemainingMs()).toBe(WARMUP_MS);
+    });
+
+    it('goes on counting down on the monotonic clock after the start', async () => {
+      const same = provisioner({ lastMatchChangeAtWallMs: clock.wallTime().getTime() - 10_000 });
+
+      await clock.advance(5000);
+      expect(same.warmupRemainingMs()).toBe(WARMUP_MS - 15_000);
+    });
+
+    it('reports the wall time of a change that affects matching, not of one that does not', async () => {
+      const changes: number[] = [];
+      const same = provisioner({ onMatchChange: (wallMs) => {
+        changes.push(wallMs);
+      } });
+
+      await same.provision(address(), signal);
+      expect(new Set(changes)).toEqual(new Set([clock.wallTime().getTime()]));
+
+      const count = changes.length;
+
+      await clock.advance(1000);
+      await same.provision(address('two.example.com'), signal);
+      expect(changes).toHaveLength(count);
+    });
+
+    it('a failing callback does not break provisioning', async () => {
+      const same = provisioner({ onMatchChange: () => {
+        throw new Error('disk full');
+      } });
+
+      expect((await same.provision(address(), signal)).action).toBe('created');
+    });
+  });
 });

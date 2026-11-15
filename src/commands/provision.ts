@@ -17,11 +17,9 @@ import type { CheckIo } from './check.js';
 import { refusalWhileServing } from './serving.js';
 import { openDatabase } from '../storage/database.js';
 import { createHistory } from '../storage/history.js';
+import { MATCH_CHANGED_KEY } from '../storage/keys.js';
 
 const MS_PER_SECOND = 1000;
-
-/** Key in `kv` that holds the time the rule last changed matching. */
-export const MATCH_CHANGED_KEY = 'rule_match_changed_at';
 
 /** Replacements for the default dependencies, for tests. */
 export interface ProvisionDeps {

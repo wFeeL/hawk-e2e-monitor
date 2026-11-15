@@ -272,6 +272,68 @@ describe('notificationSetupStage', () => {
   });
 });
 
+describe('notificationSetupStage after the address changed', () => {
+  it('waits until the new address answers the self-check, then provisions and remembers the host', async () => {
+    const parts = await scenario({ preProvision: false });
+    const server = await probeServer(hit => Promise.resolve(hit < 3 ? 'not the receiver' : parts.receiver.nonce));
+
+    parts.context.resolveAddress = () => Promise.resolve(server.address);
+    parts.context.lastHostname = { value: 'old.example.test' };
+    parts.context.addressPollMs = 20;
+
+    const result = await run(notificationSetupStage(BUDGET_MS), parts.context);
+
+    expect(result.status).toBe('ok');
+    expect(server.hits()).toBe(3);
+    expect(parts.context.lastHostname.value).toBe(server.address.hostname);
+    expect(parts.context.notification.provisioning?.action).toBe('created');
+  });
+
+  it('fails with the last self-check error when the budget ends first, and leaves the rule and the remembered host alone', async () => {
+    const parts = await scenario({ preProvision: false });
+    const server = await probeServer(() => Promise.resolve('not the receiver'));
+    const before = hawk.rules.version(hawk.projectId);
+
+    parts.context.resolveAddress = () => Promise.resolve(server.address);
+    parts.context.lastHostname = { value: 'old.example.test' };
+    parts.context.addressPollMs = 20;
+
+    const result = await run(notificationSetupStage(400), parts.context);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'receiver_unreachable' });
+    expect(server.hits()).toBeGreaterThan(1);
+    expect(hawk.rules.version(hawk.projectId)).toBe(before);
+    expect(parts.context.lastHostname.value).toBe('old.example.test');
+  });
+
+  it('does not wait for the first address of the process and remembers it', async () => {
+    const parts = await scenario();
+
+    parts.context.lastHostname = {};
+
+    const result = await run(notificationSetupStage(BUDGET_MS), parts.context);
+
+    expect(result.status).toBe('ok');
+    expect(parts.context.lastHostname.value).toBe(parts.address.hostname);
+  });
+
+  it('does not wait when the host is the same as before', async () => {
+    const parts = await scenario({ env: { HTTP_TIMEOUT_MS: '300' } });
+    const server = await probeServer(() => Promise.resolve('not the receiver'));
+
+    parts.context.resolveAddress = () => Promise.resolve(server.address);
+    parts.context.lastHostname = { value: server.address.hostname };
+
+    const result = await run(notificationSetupStage(BUDGET_MS), parts.context);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'receiver_unreachable' });
+    // The ordinary probe, not the waiting loop, judged it.
+    expect(server.hits()).toBeLessThanOrEqual(3);
+  });
+});
+
 describe('notificationBeforeSend', () => {
   it('registers the run before the event is sent and notes no warmup for an unchanged rule', async () => {
     const parts = await scenario();

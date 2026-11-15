@@ -200,6 +200,33 @@ describe('internal server', () => {
     expect(await res.text()).toBe('ok');
   });
 
+  it('a route that ends in /* serves every path under its prefix, and an exact route wins', async () => {
+    const { call } = await start({
+      routes: new Map([
+        ['GET /runs/*', (req, res) => {
+          res.writeHead(200).end(`prefix ${req.url ?? ''}`);
+        }],
+        ['GET /runs', (_req, res) => {
+          res.writeHead(200).end('exact');
+        }],
+      ]),
+    });
+
+    expect(await (await call('/runs')).text()).toBe('exact');
+    expect(await (await call('/runs/rabc')).text()).toBe('prefix /runs/rabc');
+    expect(await (await call('/runs/rabc?x=1')).text()).toBe('prefix /runs/rabc?x=1');
+    expect((await call('/runsx')).status).toBe(404);
+    expect((await call('/other/runs/1')).status).toBe(404);
+  });
+
+  it('a prefix route does not answer other methods', async () => {
+    const { call } = await start({ routes: new Map([['GET /runs/*', (_req, res) => {
+      res.writeHead(200).end('ok');
+    }]]) });
+
+    expect((await call('/runs/rabc', { method: 'POST' })).status).toBe(404);
+  });
+
   it('handler failure is 500 and logged', async () => {
     const logger = memoryLogger();
     const { call } = await start({

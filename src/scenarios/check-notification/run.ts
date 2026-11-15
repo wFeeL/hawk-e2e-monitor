@@ -15,7 +15,7 @@ import type { ScenarioDeps } from '../send-and-receive/run.js';
 import { apiAvailabilityStage, cleanupStage, collectorAcceptStage, collectorAvailabilityStage, eventRepeatedStage, eventVisibleStage } from '../send-and-receive/stages.js';
 import type { ScenarioState } from '../send-and-receive/stages.js';
 import { notificationBeforeSend, notificationFormedStage, notificationSetupStage } from './stages.js';
-import type { NotificationContext, NotificationState } from './stages.js';
+import type { LastHostname, NotificationContext, NotificationState } from './stages.js';
 import { decideNotificationVerdict } from './verdict.js';
 
 /** Everything `runCheckNotification` needs from outside. */
@@ -30,6 +30,10 @@ export interface NotificationDeps extends ScenarioDeps {
   retryDelaysMs?: readonly number[];
   /** Adds a value that output must not show, such as the public address. */
   addSecret: (value: string) => void;
+  /** Host of the previous run's address, shared by the runs of a process; see `NotificationContext`. */
+  lastHostname?: LastHostname;
+  /** Pause between self-checks while waiting for a new address, for tests. */
+  addressPollMs?: number;
 }
 
 type Step = Array<StageSpec<NotificationContext>>;
@@ -70,6 +74,8 @@ export async function runCheckNotification(deps: NotificationDeps, options: Plan
       ...retry }, signal)),
     ...retry,
     addSecret: deps.addSecret,
+    ...deps.lastHostname === undefined ? {} : { lastHostname: deps.lastHostname },
+    ...deps.addressPollMs === undefined ? {} : { addressPollMs: deps.addressPollMs },
     notification };
   const startedAt = clock.wallTime().toISOString();
   const t0 = clock.monotonicMs();

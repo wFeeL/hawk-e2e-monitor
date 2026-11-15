@@ -658,4 +658,20 @@ describe('fake collector WebSocket', () => {
 
     expect(collector.wsClients()).toBe(0);
   });
+
+  it('can be started again on the port it released', async () => {
+    const { collector, store } = await start();
+    const { port } = new URL(collector.url);
+
+    await collector.close();
+
+    const again = await startFakeCollector({ store,
+      projectId: PROJECT,
+      validTokenKey: TOKEN_KEY,
+      port: Number(port) });
+
+    collectors.push(again);
+    expect(again.url).toBe(collector.url);
+    expect((await post(again, JSON.stringify(validMessage()))).status).toBe(200);
+  });
 });
