@@ -5,6 +5,7 @@ import { isCheckError } from '../errors/taxonomy.js';
 import type { Logger } from '../log/logger.js';
 import type { ScenarioName } from '../scenarios/names.js';
 import type { AlertStateRow, History } from '../storage/history.js';
+import { ALERT_STORAGE_PROBE_KEY } from '../storage/keys.js';
 import type { RunRow } from '../storage/types.js';
 import type { Clock } from '../time/clock.js';
 import { sendNotify } from './notify.js';
@@ -122,9 +123,14 @@ export function createAlerter(deps: AlerterDeps): Alerter {
   let storageFailures = 0;
 
   const nowIso = (): string => clock.wallTime().toISOString();
-  const storageFailed = (error: unknown, what: string): void => {
+  // A health probe only reads; it raises the flag but is not a failed write, so it stays out of the counter.
+  const storageFailed = (error: unknown, what: string, counted = true): void => {
     storageFailing = true;
-    storageFailures += 1;
+
+    if (counted) {
+      storageFailures += 1;
+    }
+
     logger.error(`alert storage failed: ${what}`, { error });
   };
   const storageWorked = (): void => {
@@ -329,9 +335,9 @@ export function createAlerter(deps: AlerterDeps): Alerter {
             : { text,
                 runId: row.runId,
                 at: now });
+          // Only a real write proves the storage works; an unchanged state touches nothing.
+          storageWorked();
         }
-
-        storageWorked();
       } catch (error) {
         storageFailed(error, 'save');
 
@@ -387,8 +393,14 @@ export function createAlerter(deps: AlerterDeps): Alerter {
       const oldest = history.oldestUnsentAlert();
 
       backlogAgeMs = oldest === undefined ? null : Date.parse(nowIso()) - Date.parse(oldest);
+
+      // Runs with an unchanged state write nothing, so after a passing fault only a probe write can clear the flag.
+      if (storageFailing) {
+        history.setKv(ALERT_STORAGE_PROBE_KEY, nowIso());
+        storageWorked();
+      }
     } catch (error) {
-      storageFailed(error, 'health');
+      storageFailed(error, 'health', false);
     }
 
     return { backlogAgeMs,

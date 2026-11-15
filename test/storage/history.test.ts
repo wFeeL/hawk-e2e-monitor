@@ -637,6 +637,40 @@ describe('alerts', () => {
     history.setKv('k', 'two');
     expect(history.getKv('k')).toBe('two');
   });
+
+  it('updateKv hands the current value to decide and writes what it returns', () => {
+    const history = memoryHistory();
+
+    expect(history.updateKv('k', (current) => {
+      expect(current).toBeUndefined();
+
+      return 'one';
+    })).toBeUndefined();
+    expect(history.getKv('k')).toBe('one');
+    expect(history.updateKv('k', () => 'two')).toBe('one');
+    expect(history.getKv('k')).toBe('two');
+  });
+
+  it('updateKv leaves the value when decide returns undefined and deletes it on null', () => {
+    const history = memoryHistory();
+
+    history.setKv('k', 'one');
+    expect(history.updateKv('k', () => undefined)).toBe('one');
+    expect(history.getKv('k')).toBe('one');
+    expect(history.updateKv('k', () => null)).toBe('one');
+    expect(history.getKv('k')).toBeUndefined();
+  });
+
+  it('updateKv rolls back and rethrows when decide throws', () => {
+    const history = memoryHistory();
+
+    history.setKv('k', 'one');
+    expect(() => history.updateKv('k', () => {
+      throw new Error('boom');
+    })).toThrow('boom');
+    expect(history.getKv('k')).toBe('one');
+    expect(history.updateKv('k', () => 'two')).toBe('one');
+  });
 });
 
 describe('list without scenarios', () => {

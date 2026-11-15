@@ -292,6 +292,13 @@ export interface History {
    */
   setKv(key: string, value: string): void;
   /**
+   * Reads a key and writes the value `decide` returns, in one immediate transaction.
+   * @param key Key in `kv`.
+   * @param decide Gets the current value; returns the value to write, `null` to delete the key, or undefined to leave it.
+   * @returns The value before the call.
+   */
+  updateKv(key: string, decide: (current: string | undefined) => string | null | undefined): string | undefined;
+  /**
    * Removes a stored value.
    * @param key Key the value is kept under.
    */
@@ -705,6 +712,21 @@ export function createHistory(db: DatabaseSync): History {
     run('DELETE FROM kv WHERE key = ?', key);
   };
 
+  const updateKv: History['updateKv'] = (key, decide) => {
+    return transaction(() => {
+      const current = getKv(key);
+      const next = decide(current);
+
+      if (next === null) {
+        deleteKv(key);
+      } else if (next !== undefined) {
+        setKv(key, next);
+      }
+
+      return current;
+    });
+  };
+
   const prune: History['prune'] = (before, options = {}) => {
     return transaction(() => {
       if (options.scenario === undefined && options.exceptScenarios !== undefined) {
@@ -756,6 +778,7 @@ export function createHistory(db: DatabaseSync): History {
     oldestUnsentAlert,
     getKv,
     setKv,
+    updateKv,
     deleteKv,
     prune,
     close,

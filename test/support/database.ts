@@ -29,14 +29,18 @@ export async function tempDatabase(): Promise<TempDatabase> {
       force: true }) };
 }
 
+/** A lease for `seedLease`; the nonce is optional. */
+export type SeededLease = Omit<Lease, 'nonce'> & Partial<Pick<Lease, 'nonce'>>;
+
 /**
  * Writes a lease into a database file, creating the file when needed.
  * @param path Path of the history file.
- * @param lease Claim to store.
+ * @param lease Claim to store; the nonce defaults to `seed`.
  */
-export function seedLease(path: string, lease: Lease): void {
+export function seedLease(path: string, lease: SeededLease): void {
   const history = createHistory(openDatabase(path));
 
-  writeLease(history, lease);
+  writeLease(history, { nonce: 'seed',
+    ...lease });
   history.close();
 }

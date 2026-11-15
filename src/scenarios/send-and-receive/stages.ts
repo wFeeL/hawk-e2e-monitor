@@ -170,7 +170,8 @@ export function collectorAcceptStage(timeoutMs: number, beforeSend?: () => void)
 
           return { status: 'uncertain',
             error: outcome.cause,
-            details: { attempts: outcome.attempts } };
+            details: { attempts: outcome.attempts,
+              warning: `The collector did not confirm the event (${outcome.cause.message}); SDKs of users may see an error` } };
         case 'rejected':
           return { status: 'failed',
             error: outcome.error,
@@ -392,7 +393,10 @@ export function eventRepeatedStage(timeoutMs: number): StageSpec<ScenarioContext
           : { status: 'ok',
               details: { pollOutcome: 'found',
                 attempts: poll.attempts,
-                repeatUncertain: outcome.kind === 'uncertain' } };
+                repeatUncertain: outcome.kind === 'uncertain',
+                ...outcome.kind === 'uncertain'
+                  ? { warning: `The collector did not confirm the repeated event (${outcome.cause.message}); SDKs of users may see an error` }
+                  : {} } };
       }
 
       const waitedMs = Math.round(clock.monotonicMs() - poll.startedAtMs);

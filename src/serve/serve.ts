@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { hostname as osHostname } from 'node:os';
 import process from 'node:process';
 import { ALERT_BACKLOG_LIMIT_MS, createAlerter } from '../alerting/alerter.js';
@@ -21,7 +22,8 @@ import type { Scheduler } from '../scheduler/scheduler.js';
 import { openDatabase } from '../storage/database.js';
 import { createHistory } from '../storage/history.js';
 import type { History } from '../storage/history.js';
-import { LEASE_REFRESH_MS, liveLease, releaseLease, writeLease } from '../storage/lease.js';
+import { claimLease, LEASE_REFRESH_MS, LEASE_TWIN_MARGIN_MS, releaseLease } from '../storage/lease.js';
+import type { Lease } from '../storage/lease.js';
 import { systemClock } from '../time/clock.js';
 import type { Clock } from '../time/clock.js';
 import { scenarioSettings } from '../config/scenario.js';
@@ -29,6 +31,7 @@ import { SCENARIO_NAMES } from '../scenarios/names.js';
 import { createMetrics } from '../metrics/metrics.js';
 import { SERVICE_VERSION } from '../version.js';
 import { createServeHeartbeat } from './heartbeat-setup.js';
+import { leaseRenewer } from './lease-keeper.js';
 import { createMasking } from './masking.js';
 import { createRoutes } from './routes.js';
 import { buildRunners } from './runners.js';
@@ -52,6 +55,8 @@ export interface ServeOverrides extends RunnerOverrides {
 
 /** Who runs this `serve`, for its lease. */
 export interface ProcessIdentity {
+  /** Random value of this start; a new one by default. */
+  nonce?: string;
   /** Host name of the machine or container. */
   hostname: string;
   /** Process id. */
@@ -223,8 +228,10 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
   const { monitoring } = config;
   const clock = deps.clock ?? systemClock;
   const overrides = deps.overrides ?? {};
-  const identity = deps.identity ?? { hostname: osHostname(),
-    pid: process.pid };
+  const identity = { hostname: osHostname(),
+    pid: process.pid,
+    nonce: randomUUID(),
+    ...deps.identity };
   const masking = createMasking(config);
   const logger = maskedLogger(deps.logger, masking);
   const exit = deps.exit ?? ((code: number): void => {
@@ -242,10 +249,21 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
 
   try {
     const now = clock.wallTime();
-    const lease = liveLease(history, now);
+    const ownLease = (): Lease => ({ pid: identity.pid,
+      hostname: identity.hostname,
+      nonce: identity.nonce,
+      at: clock.wallTime().toISOString() });
+    let claim = claimLease(history, ownLease(), now);
 
-    if (lease !== undefined && (lease.hostname !== identity.hostname || lease.pid !== identity.pid)) {
-      throw new StartupError(`Another serve (pid ${String(lease.pid)}) is running for DATABASE_PATH ${monitoring.databasePath}`);
+    if (claim.kind === 'twin') {
+      // After a container restart the predecessor has the same pid and host name; a live twin renews within one period.
+      logger.warn('a lease with the same pid and hostname exists; waiting one renewal period', { pid: claim.lease.pid });
+      await clock.sleep(LEASE_REFRESH_MS + LEASE_TWIN_MARGIN_MS, background.signal);
+      claim = claimLease(history, ownLease(), clock.wallTime(), { staleAt: claim.lease.at });
+    }
+
+    if (claim.kind !== 'claimed') {
+      throw new StartupError(`Another serve (pid ${String(claim.lease.pid)}) is running for DATABASE_PATH ${monitoring.databasePath}`);
     }
 
     const aborted = history.abortRunning('monitor_restarted', now.toISOString());
@@ -256,13 +274,11 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
 
     pruneHistory(history, config, now);
 
-    const renew = (): void => {
-      writeLease(history, { pid: identity.pid,
-        hostname: identity.hostname,
-        at: clock.wallTime().toISOString() });
-    };
-
-    renew();
+    const renew = leaseRenewer({ history,
+      lease: ownLease,
+      logger,
+      exit,
+      databasePath: monitoring.databasePath });
 
     const workers: Array<Promise<void>> = [
       every(clock, LEASE_REFRESH_MS, background.signal, renew, (error) => {
@@ -278,7 +294,7 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
     closers.push(async () => {
       background.abort();
       await Promise.all(workers);
-      releaseLease(history);
+      releaseLease(history, ownLease());
     });
 
     const clients = createClients(config, clock);
