@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CheckError } from '../../src/errors/taxonomy.js';
 import type { ErrorClass } from '../../src/errors/taxonomy.js';
 import { collectorEndpoints, decodeIntegrationToken } from '../../src/hawk/token.js';
+import { startEndlessServer } from '../support/endless-server.js';
 import { startFakeCollector } from '../support/fake-hawk/collector.js';
 import type { FakeCollector } from '../support/fake-hawk/collector.js';
 import { createFakeStore } from '../support/fake-hawk/store.js';
@@ -361,6 +362,16 @@ describe('send over WebSocket', () => {
 });
 
 describe('health', () => {
+  it('stops reading an endless body at the limit and calls it an unexpected response', async () => {
+    const endless = await startEndlessServer();
+
+    try {
+      expect((await checkError(clientFor(1000, endless.url).health(signal))).errorClass).toBe('collector_unexpected_response');
+    } finally {
+      await endless.close();
+    }
+  });
+
   it('health ok', async () => {
     await expect(clientFor().health(signal)).resolves.toBeUndefined();
   });

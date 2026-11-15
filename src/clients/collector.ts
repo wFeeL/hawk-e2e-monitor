@@ -13,6 +13,9 @@ import { TOKEN_INVALID_PREFIX } from '../errors/redact.js';
 import { HttpStatus } from '../net/http-status.js';
 
 const SNIPPET_LENGTH = 200;
+
+/** Largest collector answer the client reads (64 KiB); its answers are a few hundred bytes. */
+export const MAX_COLLECTOR_BODY_BYTES = 65_536;
 const PROBE_ID = '00000000-0000-4000-8000-000000000000';
 
 /** Ways an event can travel to the collector. */
@@ -329,6 +332,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
       result = await requestWithRetry({ url: endpoints.healthUrl,
         method: 'GET',
         timeoutMs: httpTimeoutMs,
+        maxBytes: MAX_COLLECTOR_BODY_BYTES,
         signal }, 'collector', { attempts: maxAttempts,
         delaysMs,
         clock,
@@ -412,6 +416,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
         headers: JSON_HEADERS,
         body: JSON.stringify(message),
         timeoutMs: httpTimeoutMs,
+        maxBytes: MAX_COLLECTOR_BODY_BYTES,
         signal }, 'collector', { attempts: maxAttempts,
         delaysMs,
         clock,

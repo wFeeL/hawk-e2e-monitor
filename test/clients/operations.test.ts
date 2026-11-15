@@ -7,6 +7,7 @@ import type { OperationDefinitionNode } from 'graphql';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { isCheckError } from '../../src/errors/taxonomy.js';
 import type { CheckError, ErrorClass } from '../../src/errors/taxonomy.js';
+import { startEndlessServer } from '../support/endless-server.js';
 import { startFakeHawk } from '../support/fake-hawk/index.js';
 import type { FakeApiError, FakeHawk } from '../support/fake-hawk/index.js';
 import { systemClock } from '../../src/time/clock.js';
@@ -203,6 +204,16 @@ describe('graphql transport', () => {
 
     expect(error.facts.status).toBe(404);
     expect(error.culprit).toBe('hawk');
+  });
+
+  it('stops reading an endless body at the limit and calls it an unexpected response', async () => {
+    const endless = await startEndlessServer();
+
+    try {
+      checkError(await failureOf(transportFor(`${endless.url}/graphql`).request(PROJECT_TOKEN, { projectId: hawk.projectId }, 'x', signal)), 'api_unexpected_response');
+    } finally {
+      await endless.close();
+    }
   });
 
   describe('against a server that is not a GraphQL API', () => {
