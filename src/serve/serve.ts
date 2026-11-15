@@ -1,6 +1,7 @@
 import { hostname as osHostname } from 'node:os';
 import process from 'node:process';
 import { createAlerter } from '../alerting/alerter.js';
+import { createSweeper } from '../cleanup/sweep.js';
 import type { sendNotify } from '../alerting/notify.js';
 import { startApp, StartupError } from '../app.js';
 import { createCollectorClient } from '../clients/collector.js';
@@ -60,6 +61,8 @@ export interface ServeOverrides {
   addressPollMs?: number;
   /** Pause between self-checks while the tunnel starts, 2000 ms by default. */
   tunnelPollMs?: number;
+  /** Wait before the first sweep of leftover events, 5 minutes by default. */
+  sweepFirstDelayMs?: number;
 }
 
 /** Who runs this `serve`, for its lease. */
@@ -535,6 +538,13 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
       }],
       projectedEventsPer30Days: projectedEventsPer30Days(config),
       exit });
+    const sweeper = createSweeper({ api,
+      history,
+      clock,
+      logger,
+      config,
+      activeRunIds: () => scheduler.activeRunIds(),
+      ...overrides.sweepFirstDelayMs === undefined ? {} : { firstPassDelayMs: overrides.sweepFirstDelayMs } });
     const liveness: Check[] = [
       { name: 'scheduler',
         run: async () => Promise.resolve(scheduler.health().scheduler) },
@@ -567,11 +577,13 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
         clock,
         scheduler,
         alerter,
-        sweepFailures: () => 0 }) });
+        sweepFailures: () => sweeper.failures() }) });
 
     closers.push(async () => app.stop());
     closers.push(async () => scheduler.stop());
+    closers.push(async () => sweeper.stop());
     scheduler.start();
+    sweeper.start();
     logger.info('serve started', { scenarios: monitoring.scenarios,
       intervalMs: monitoring.intervalMs,
       databasePath: monitoring.databasePath });

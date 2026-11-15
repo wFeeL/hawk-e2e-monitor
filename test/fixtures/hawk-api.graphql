@@ -64,6 +64,7 @@ type Event {
   totalCount: Int!
   payload: EventPayload!
   originalEventId: ID!
+  timestamp: Float!
 }
 
 type DailyEvent {

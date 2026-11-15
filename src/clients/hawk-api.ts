@@ -14,6 +14,9 @@ const SECOND_RETRY_DELAY_MS = 500;
 const DEFAULT_RETRY_DELAYS_MS = [FIRST_RETRY_DELAY_MS, SECOND_RETRY_DELAY_MS] as const;
 const NOT_FOUND_PREFIX = 'Event not found for eventId';
 const RETRYABLE_CLASSES: ReadonlySet<ErrorClass> = new Set<ErrorClass>(['api_unavailable', 'dns_error', 'network_error', 'tls_error']);
+const MS_PER_SECOND = 1000;
+// Unix seconds stay below this until the year 5138; anything above is already milliseconds.
+const MILLISECONDS_THRESHOLD = 1e11;
 
 /** Workspace of the project with its event limit. */
 export interface WorkspaceQuota {
@@ -41,6 +44,8 @@ export interface FoundEvent {
   title: string;
   /** Context object as Hawk returns it, null when absent. */
   context: unknown;
+  /** When the event first arrived, in milliseconds; absent when Hawk gave no time. */
+  timestamp?: number;
 }
 
 /** Event card; the same shape as a search row. */
@@ -225,6 +230,8 @@ interface RawEvent {
   totalCount: number;
   /** Catcher type. */
   catcherType: string;
+  /** Arrival time, in Unix seconds. */
+  timestamp?: number | null;
   /** Title and context. */
   payload: RawPayload;
 }
@@ -300,6 +307,15 @@ interface RawPlan {
 }
 
 /**
+ * Reads a time of Hawk, which is in Unix seconds.
+ * @param value Number from the API.
+ * @returns Milliseconds; a value above 1e11 is taken to be milliseconds already.
+ */
+function toMilliseconds(value: number): number {
+  return value > MILLISECONDS_THRESHOLD ? value : value * MS_PER_SECOND;
+}
+
+/**
  * Converts a raw event.
  * @param event Event of an answer.
  * @returns Event with the original id resolved.
@@ -310,7 +326,8 @@ function toFoundEvent(event: RawEvent): FoundEvent {
     totalCount: event.totalCount,
     catcherType: event.catcherType,
     title: event.payload.title,
-    context: event.payload.context ?? null };
+    context: event.payload.context ?? null,
+    ...typeof event.timestamp === 'number' ? { timestamp: toMilliseconds(event.timestamp) } : {} };
 }
 
 /**

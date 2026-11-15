@@ -486,6 +486,38 @@ describe('fake api project operations', () => {
   });
 });
 
+describe('fake api search pages', () => {
+  it('FindEvents returns at most 50 events, like the limit of the query', async () => {
+    const { api, store } = await start();
+    const { accessToken } = await login(api);
+
+    for (let index = 0; index < 60; index += 1) {
+      store.ingest(PROJECT, 'errors/nodejs', { title: `[e2e:page] item ${String(index)}` });
+    }
+
+    const rows = dataOf(await gql(api, 'FindEvents', { projectId: PROJECT,
+      search: '[e2e:page]' }, accessToken)).project.dailyEventsPortion.dailyEvents;
+
+    expect(rows).toHaveLength(50);
+  });
+
+  it('FindEvents and EventCard show the timestamp of the event in seconds', async () => {
+    const { api, store } = await start();
+    const { accessToken } = await login(api);
+    const stored = store.ingest(PROJECT, 'errors/nodejs', { title: '[e2e:stamp] one' });
+
+    store.setTimestamp(PROJECT, stored.id, 1_794_699_912);
+
+    const { project } = dataOf(await gql(api, 'FindEvents', { projectId: PROJECT,
+      search: '[e2e:stamp]' }, accessToken));
+    const card = dataOf(await gql(api, 'EventCard', { projectId: PROJECT,
+      eventId: stored.id }, accessToken));
+
+    expect(head(project.dailyEventsPortion.dailyEvents).event).toMatchObject({ timestamp: 1_794_699_912 });
+    expect(card.project.event).toMatchObject({ timestamp: 1_794_699_912 });
+  });
+});
+
 describe('fake api access rules', () => {
   it('requires a valid access token except for Login and RefreshTokens', async () => {
     const { api } = await start();

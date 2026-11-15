@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 
 const SEARCH_LIMIT = 50;
+const MS_PER_SECOND = 1000;
 
 /** Event as the fake grouper keeps it. */
 export interface StoredEvent {
@@ -18,6 +19,8 @@ export interface StoredEvent {
   repetitionIds: string[];
   /** Id of the latest repetition, if any. */
   lastRepetitionId: string | undefined;
+  /** Time the group first arrived, in Unix seconds as Hawk reports it. */
+  timestamp: number;
 }
 
 /** Called after an event was stored or repeated. */
@@ -40,6 +43,14 @@ export interface FakeStore {
    * @returns Matching events in insertion order.
    */
   search(projectId: string, text: string): StoredEvent[];
+  /**
+   * Changes the arrival time of an event, so a test can make it old.
+   * @param projectId Project the event belongs to.
+   * @param eventId Original event id.
+   * @param seconds New time in Unix seconds.
+   * @returns Whether the event exists.
+   */
+  setTimestamp(projectId: string, eventId: string, seconds: number): boolean;
   /**
    * Looks an event up by the id of the original event.
    * @param projectId Project to look in.
@@ -143,6 +154,7 @@ export function createFakeStore(newId: () => string = objectIdLike): FakeStore {
         payload,
         repetitionIds: [],
         lastRepetitionId: undefined,
+        timestamp: Math.floor(Date.now() / MS_PER_SECOND),
       };
 
       events.set(created.id, created);
@@ -163,6 +175,17 @@ export function createFakeStore(newId: () => string = objectIdLike): FakeStore {
 
         return haystacks.some(haystack => haystack.toLowerCase().includes(needle));
       });
+    },
+    setTimestamp(projectId, eventId, seconds) {
+      const event = eventsOf(projectId).get(eventId);
+
+      if (event === undefined) {
+        return false;
+      }
+
+      event.timestamp = seconds;
+
+      return true;
     },
     get: (projectId, eventId) => eventsOf(projectId).get(eventId),
     remove: (projectId, eventId) => eventsOf(projectId).delete(eventId),

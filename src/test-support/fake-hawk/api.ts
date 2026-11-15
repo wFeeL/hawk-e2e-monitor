@@ -12,6 +12,8 @@ const JSON_TYPE = 'application/json; charset=utf-8';
 const PLAIN_TYPE = 'text/plain; charset=utf-8';
 const DEFAULT_EVENTS_LIMIT = 10_000;
 const UNAUTHENTICATED_MESSAGE = 'You must be signed in to view this resource.';
+// The FindEvents query asks for 50 rows.
+const PAGE_LIMIT = 50;
 const RULE_MUTATIONS = new Set(['CreateNotificationRule', 'UpdateNotificationRule', 'DeleteNotificationRule']);
 const PROJECT_OPERATIONS = new Set(['ProjectToken', 'FindEvents', 'EventCard', 'RemoveEvent', 'NotificationRules', ...RULE_MUTATIONS]);
 const OPERATIONS = new Set(['Login', 'RefreshTokens', 'ProjectToken', 'WorkspaceQuota', 'FindEvents', 'EventCard', 'RemoveEvent', 'NotificationRules', ...RULE_MUTATIONS]);
@@ -158,6 +160,7 @@ function eventView(event: StoredEvent, eventId: string): Record<string, unknown>
     groupHash: event.groupHash,
     totalCount: event.totalCount,
     catcherType: event.catcherType,
+    timestamp: event.timestamp,
     payload: {
       title: typeof title === 'string' && title !== '' ? title : 'Unknown',
       context: typeof context === 'object' && context !== null && !Array.isArray(context) ? context : {},
@@ -252,11 +255,12 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
   };
 
   const findEvents = (search: string): Outcome => {
-    const rows: unknown[] = store.search(projectId, search).map(event => ({
-      id: event.id,
-      count: event.totalCount,
-      event: eventView(event, event.lastRepetitionId ?? event.id),
-    }));
+    const rows: unknown[] = store.search(projectId, search).slice(0, PAGE_LIMIT)
+      .map(event => ({
+        id: event.id,
+        count: event.totalCount,
+        event: eventView(event, event.lastRepetitionId ?? event.id),
+      }));
 
     if (knobs.foreignEvent === true) {
       const foreignId = objectIdLike();
