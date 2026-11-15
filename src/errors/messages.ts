@@ -165,5 +165,13 @@ export function describeError(errorClass: ErrorClass, facts: MessageFacts): stri
     case 'duplicate_notification':
       return join(ifSet(facts.channel, name => `The ${name} notification arrived`) ?? 'The notification arrived',
         [' ', ifSet(facts.count, count => `${String(count)} times`) ?? 'more than once']);
+    case 'run_hung':
+      return join('The run did not finish', [' within ', ifSet(facts.waitedMs, ms => `${String(ms)} ms`)], [' and was abandoned', '']);
+    case 'monitor_restarted':
+      return 'The monitor restarted while the run was in progress';
+    case 'monitor_stopped':
+      return 'The monitor stopped while the run was in progress';
+    case 'alert_rejected':
+      return join('codex.bot did not accept the alert', [': ', ifSet(facts.status, String)], [' ', facts.detail]);
   }
 }

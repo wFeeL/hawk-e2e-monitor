@@ -344,17 +344,21 @@ describe('fake collector knobs', () => {
   it('replyDelayMs delays the answer after accept', async () => {
     const { collector, store } = await start();
 
-    collector.knobs.replyDelayMs = 150;
+    collector.knobs.replyDelayMs = 600;
 
     const started = performance.now();
-    const pending = post(collector, JSON.stringify(validMessage()));
+    let settled = false;
+    const pending = post(collector, JSON.stringify(validMessage())).finally(() => {
+      settled = true;
+    });
 
     await vi.waitFor(() => {
       expect(store.all(PROJECT)).toHaveLength(1);
     });
-    expect(performance.now() - started).toBeLessThan(150);
+    // The event is stored while the answer is still held back; only a lower bound is read from the clock.
+    expect(settled).toBe(false);
     expect((await pending).status).toBe(200);
-    expect(performance.now() - started).toBeGreaterThanOrEqual(140);
+    expect(performance.now() - started).toBeGreaterThanOrEqual(580);
   });
 
   it('dropEvents accepts without storing, also per submission', async () => {

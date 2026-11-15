@@ -29,3 +29,22 @@ export function durationMs(defaultMs: number, options: DurationOptions = {}): z.
     )
     .default(defaultMs);
 }
+
+/**
+ * Schema for a duration in whole milliseconds that must lie in a range.
+ * @param defaultMs Value used when the variable is not set.
+ * @param min Lowest accepted value.
+ * @param max Highest accepted value.
+ * @returns Schema that outputs an integer from `min` to `max`.
+ */
+export function boundedDurationMs(defaultMs: number, min: number, max: number): z.ZodType<number> {
+  const message = `must be a whole number of milliseconds from ${String(min)} to ${String(max)}`;
+
+  return z.string()
+    .regex(/^\d+$/, message)
+    .transform(Number)
+    .pipe(z.number().int()
+      .min(min, message)
+      .max(max, message))
+    .default(defaultMs);
+}

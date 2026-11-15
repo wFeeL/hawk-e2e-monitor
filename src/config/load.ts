@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import { ENV_SHAPE, envSchema } from './schema.js';
 import type { LogLevel, ParsedEnv, TransportMode } from './schema.js';
+import type { ScenarioName } from '../scenarios/send-and-receive/plan.js';
 
 /** Address of the internal HTTP server (health, readiness). */
 export interface InternalConfig {
@@ -68,6 +69,34 @@ export interface NotificationConfig {
   ruleCacheWarmupMs: number;
 }
 
+/** Settings of the continuous monitoring: schedule, history, alerts and cleanup. */
+export interface MonitoringConfig {
+  /** Scenarios to run, in the order the variable lists them. */
+  scenarios: ScenarioName[];
+  /** Time from the start of a run to the start of the next one of the same scenario. */
+  intervalMs: number;
+  /** Time added to the run and cleanup budgets before a run counts as hung. */
+  watchdogGraceMs: number;
+  /** Delay between the first runs of consecutive scenarios. */
+  staggerMs: number;
+  /** Longest wait for the tunnel before the first notification run. */
+  tunnelReadyTimeoutMs: number;
+  /** Path of the SQLite file. */
+  databasePath: string;
+  /** Days to keep finished runs. */
+  retentionDays: number;
+  /** codex.bot notify URL; absent means alerts only go to the log. */
+  alertNotifyUrl?: string;
+  /** Failed runs in a row that raise an alert. */
+  alertAfterFailures: number;
+  /** Pause before an undelivered alert is sent again. */
+  alertRetryMs: number;
+  /** Time between sweeps of leftover events; 0 turns the sweep off. */
+  sweepIntervalMs: number;
+  /** Age a run must have before the sweep removes its event. */
+  sweepMinAgeMs: number;
+}
+
 /** Service configuration in the shape the rest of the code uses. */
 export interface Config {
   /** Id of this monitor instance. */
@@ -94,6 +123,8 @@ export interface Config {
   budgets: StageBudgets;
   /** Notification receiver and public address. */
   notifications: NotificationConfig;
+  /** Schedule, history, alerts and cleanup. */
+  monitoring: MonitoringConfig;
 }
 
 /** Validated configuration together with the parsed environment. */
@@ -224,6 +255,20 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): L
         pairWaitMs: values.NOTIFICATION_PAIR_WAIT_MS,
         setupTimeoutMs: values.NOTIFICATION_SETUP_TIMEOUT_MS,
         ruleCacheWarmupMs: values.RULE_CACHE_WARMUP_MS,
+      },
+      monitoring: {
+        scenarios: values.SCENARIOS,
+        intervalMs: values.CHECK_INTERVAL_MS,
+        watchdogGraceMs: values.WATCHDOG_GRACE_MS,
+        staggerMs: values.SCENARIO_STAGGER_MS,
+        tunnelReadyTimeoutMs: values.TUNNEL_READY_TIMEOUT_MS,
+        databasePath: values.DATABASE_PATH,
+        retentionDays: values.HISTORY_RETENTION_DAYS,
+        ...values.ALERT_NOTIFY_URL === undefined ? {} : { alertNotifyUrl: values.ALERT_NOTIFY_URL },
+        alertAfterFailures: values.ALERT_AFTER_FAILURES,
+        alertRetryMs: values.ALERT_RETRY_MS,
+        sweepIntervalMs: values.SWEEP_INTERVAL_MS,
+        sweepMinAgeMs: values.SWEEP_MIN_AGE_MS,
       },
     },
   };

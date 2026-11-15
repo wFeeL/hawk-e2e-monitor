@@ -91,6 +91,19 @@ describe('loadConfig', () => {
         setupTimeoutMs: 4000,
         ruleCacheWarmupMs: 65_000,
       },
+      monitoring: {
+        scenarios: ['send-and-receive-event'],
+        intervalMs: 600_000,
+        watchdogGraceMs: 30_000,
+        staggerMs: 30_000,
+        tunnelReadyTimeoutMs: 120_000,
+        databasePath: 'data/monitor.db',
+        retentionDays: 30,
+        alertAfterFailures: 1,
+        alertRetryMs: 60_000,
+        sweepIntervalMs: 3_600_000,
+        sweepMinAgeMs: 900_000,
+      },
     });
   });
 
@@ -234,7 +247,9 @@ describe('loadConfig', () => {
   it('RUN_TIMEOUT_MS must cover stages 1-5, cleanup not counted', () => {
     // The F2 formula is the larger one, so 315000 satisfies both.
     expectOk(loadConfig(validEnv({ RUN_TIMEOUT_MS: '315000',
-      CLEANUP_TIMEOUT_MS: '99999999' })));
+      CLEANUP_TIMEOUT_MS: '99999999',
+      CHECK_INTERVAL_MS: '200000000',
+      SWEEP_MIN_AGE_MS: '200000000' })));
 
     expect(expectErrors(loadConfig(validEnv({ RUN_TIMEOUT_MS: '279999' })))).toContainEqual({ variable: 'RUN_TIMEOUT_MS',
       message: 'must be at least the sum of the timeouts of stages 1-5 (280000 ms)' });

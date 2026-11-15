@@ -30,6 +30,18 @@ export interface ProvisionCommand {
   wait: boolean;
 }
 
+/** Print stored runs or their statistics. */
+export interface HistoryCommand {
+  /** Discriminant. */
+  kind: 'history';
+  /** Only this scenario. */
+  scenario?: ScenarioName;
+  /** Most runs to print, 1 to 1000. */
+  limit: number;
+  /** Print statistics instead of runs. */
+  stats: boolean;
+}
+
 /** Show usage and fail. */
 export interface UsageCommand {
   /** Discriminant. */
@@ -39,11 +51,13 @@ export interface UsageCommand {
 }
 
 /** Parsed command line. */
-export type Command = CheckCommand | ProvisionCommand | ServeCommand | UsageCommand;
+export type Command = CheckCommand | HistoryCommand | ProvisionCommand | ServeCommand | UsageCommand;
 
 /** Usage text printed for an unknown command. */
-export const USAGE = 'Usage: hawk-e2e-monitor [serve]\n       hawk-e2e-monitor check send-and-receive-event [--sequence <n>] [--transport http|ws] [--repeat]\n       hawk-e2e-monitor check check-notification [--sequence <n>] [--transport http|ws] [--repeat]\n       hawk-e2e-monitor provision [--no-wait]\n';
+export const USAGE = 'Usage: hawk-e2e-monitor [serve]\n       hawk-e2e-monitor check send-and-receive-event [--sequence <n>] [--transport http|ws] [--repeat]\n       hawk-e2e-monitor check check-notification [--sequence <n>] [--transport http|ws] [--repeat]\n       hawk-e2e-monitor provision [--no-wait]\n       hawk-e2e-monitor history [--scenario <name>] [--limit <n>] [--stats]\n';
 
+const DEFAULT_HISTORY_LIMIT = 20;
+const MAX_HISTORY_LIMIT = 1000;
 const SEQUENCE_PATTERN = /^[1-9]\d*$/u;
 
 /**
@@ -145,6 +159,58 @@ function parseProvision(flags: readonly string[]): ProvisionCommand | UsageComma
 }
 
 /**
+ * Parses the arguments after `history`.
+ * @param flags Flags of the command.
+ * @returns History command, or usage naming the problem.
+ */
+function parseHistory(flags: readonly string[]): HistoryCommand | UsageCommand {
+  const command: HistoryCommand = { kind: 'history',
+    limit: DEFAULT_HISTORY_LIMIT,
+    stats: false };
+  const seen = new Set<string>();
+
+  for (let i = 0; i < flags.length; i += 1) {
+    const flag = flags[i] ?? '';
+
+    if (seen.has(flag)) {
+      return invalid(`${flag} given twice`);
+    }
+
+    seen.add(flag);
+
+    if (flag === '--stats') {
+      command.stats = true;
+    } else if (flag === '--scenario') {
+      i += 1;
+
+      const value = flags[i];
+      const known = SCENARIO_NAMES.find(name => name === value);
+
+      if (known === undefined) {
+        return invalid(`unknown scenario "${value ?? ''}"`);
+      }
+
+      command.scenario = known;
+    } else if (flag === '--limit') {
+      i += 1;
+
+      const value = flags[i];
+      const limit = Number(value);
+
+      if (value === undefined || !SEQUENCE_PATTERN.test(value) || limit > MAX_HISTORY_LIMIT) {
+        return invalid(`--limit needs a whole number from 1 to ${String(MAX_HISTORY_LIMIT)}`);
+      }
+
+      command.limit = limit;
+    } else {
+      return invalid(`unknown option "${flag}"`);
+    }
+  }
+
+  return command;
+}
+
+/**
  * Parses arguments after the script name.
  * @param args Command line arguments.
  * @returns `serve` for no arguments or `serve`, `check` or `provision` with their options, usage text otherwise.
@@ -160,6 +226,10 @@ export function parseCommand(args: readonly string[]): Command {
 
   if (args[0] === 'provision') {
     return parseProvision(args.slice(1));
+  }
+
+  if (args[0] === 'history') {
+    return parseHistory(args.slice(1));
   }
 
   return { kind: 'usage',
