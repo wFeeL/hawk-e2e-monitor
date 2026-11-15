@@ -68,6 +68,8 @@ export interface FakeCollectorKnobs {
   processingDelayMs?: number;
   /** Replaces the answer of `/release`; the release is NOT taken. */
   releaseReply?: CollectorReplyOverride;
+  /** Replaces the answer of the envelope path; the envelope is NOT taken. */
+  envelopeReply?: CollectorReplyOverride;
   /** Time the release worker takes to save a release after the collector said 200, ms (real timers). */
   releaseSaveDelayMs?: number;
   /** The collector says 200 to a release and the worker never saves it. */
@@ -95,6 +97,8 @@ export interface FakeCollector {
   readonly wsMessages: number;
   /** Number of `POST /release` requests of any outcome. */
   readonly releasePosts: number;
+  /** Number of `POST /api/0/envelope/` requests of any outcome. */
+  readonly envelopePosts: number;
   /**
    * Counts open WebSocket connections.
    * @returns Size of the server's client set.
@@ -150,6 +154,74 @@ function jsonAnswer(code: number, message: string): Answer {
     delayMs: 0 };
 }
 
+/** An event the collector made of an envelope. */
+interface EnvelopeEvent {
+  /** Worker that takes the event. */
+  catcherType: string;
+  /** Hawk payload. */
+  payload: Record<string, unknown>;
+}
+
+/** The exception of a Sentry event. */
+interface SentryException {
+  /** Exceptions, the first one gives the title. */
+  values?: Array<Record<string, unknown>>;
+}
+
+/** The SDK of a Sentry event. */
+interface SentrySdk {
+  /** Name of the SDK. */
+  name?: string;
+}
+
+const JAVASCRIPT_SDKS = ['browser', 'react', 'vue', 'angular', 'capacirtor', 'electron'];
+
+/**
+ * Makes a Hawk event of a Sentry one: the title is the type and the value, `contexts` become `context`, `level` becomes `type`.
+ * @param event Sentry event.
+ * @returns Worker and payload.
+ */
+function toEvent(event: Record<string, unknown>): EnvelopeEvent {
+  const exception = ((event.exception as SentryException | undefined)?.values ?? [])[0];
+  const sdk = (event.sdk as SentrySdk | undefined)?.name ?? '';
+  const title = exception === undefined
+    ? typeof event.message === 'string' ? event.message : 'Unknown: '
+    : `${typeof exception.type === 'string' && exception.type !== '' ? exception.type : 'Unknown'}: ${typeof exception.value === 'string' ? exception.value : ''}`;
+
+  return { catcherType: JAVASCRIPT_SDKS.some(name => sdk.includes(name)) ? 'errors/javascript' : 'errors/default',
+    payload: { title,
+      type: typeof event.level === 'string' && event.level !== '' ? event.level : 'error',
+      ...event.contexts === undefined ? {} : { context: event.contexts },
+      ...typeof event.release === 'string' ? { release: event.release } : {} } };
+}
+
+/**
+ * Turns an envelope into Hawk events the way the converter of the collector does.
+ * @param raw Envelope text: a header, then item headers each followed by its payload, one JSON per line.
+ * @returns The events, or undefined when the envelope cannot be read.
+ */
+function parseEnvelope(raw: string): EnvelopeEvent[] | undefined {
+  const lines = raw.split('\n').filter(line => line.trim() !== '');
+  const events: EnvelopeEvent[] = [];
+
+  try {
+    JSON.parse(lines[0] ?? '');
+
+    for (let index = 1; index < lines.length; index += 2) {
+      const header = JSON.parse(lines[index] ?? '') as Record<string, unknown>;
+      const body = JSON.parse(lines[index + 1] ?? '') as Record<string, unknown>;
+
+      if (header.type === 'event') {
+        events.push(toEvent(body));
+      }
+    }
+  } catch {
+    return undefined;
+  }
+
+  return events;
+}
+
 /**
  * Finds the bundle a map describes, as the release worker does.
  * @param mapName Name of the map file.
@@ -195,6 +267,7 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
   let posts = 0;
   let wsMessages = 0;
   let releasePosts = 0;
+  let envelopePosts = 0;
   let submissions = 0;
 
   const later = (action: () => void, delayMs: number): void => {
@@ -442,6 +515,47 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
       delayMs: knobs.replyDelayMs ?? 0 };
   };
 
+  /**
+   * Answers a Sentry envelope the way the Sentry handler of the collector does: events are made into Hawk events, other items are skipped.
+   * @param raw Request body.
+   * @param url Address of the request, whose query may carry the key.
+   * @param headers Request headers, which may carry the key.
+   * @returns Answer to send.
+   */
+  const handleEnvelope = (raw: string, url: URL, headers: IncomingMessage['headers']): Answer => {
+    const authKey = /sentry_key=([^,\s]+)/u.exec(String(headers['x-sentry-auth'] ?? ''))?.[1];
+    const key = url.searchParams.get('sentry_key') ?? authKey;
+
+    if (key === undefined) {
+      return jsonAnswer(400, 'X-Sentry-Auth header is missing');
+    }
+
+    const target = key === validTokenKey ? projectId : options.projects?.byTokenKey(key)?.id;
+
+    if (target === undefined) {
+      return jsonAnswer(400, `Integration token invalid: ${key}`);
+    }
+
+    const events = parseEnvelope(raw);
+
+    if (events === undefined) {
+      return jsonAnswer(400, 'Failed to process Sentry envelope');
+    }
+
+    if (options.blocked?.() === true && events.length > 0) {
+      return jsonAnswer(402, 'Project has exceeded the events limit');
+    }
+
+    if (knobs.dropEvents !== true) {
+      for (const event of events) {
+        ingest(target, event.catcherType, event.payload);
+      }
+    }
+
+    return { ...jsonAnswer(200, 'OK'),
+      delayMs: knobs.replyDelayMs ?? 0 };
+  };
+
   const notFound = (response: ServerResponse): void => {
     send(response, { status: 404,
       body: 'Not found',
@@ -493,6 +607,26 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
             contentType: PLAIN_TYPE,
             delayMs: 0 });
         });
+      });
+
+      return;
+    }
+
+    if (pathname === '/api/0/envelope/' && request.method === 'POST') {
+      envelopePosts += 1;
+
+      const parts: Buffer[] = [];
+
+      request.on('data', (chunk: Buffer) => parts.push(chunk));
+      request.on('end', () => {
+        const override = knobs.envelopeReply;
+
+        send(response, override
+          ? { status: override.status,
+              body: override.body,
+              contentType: override.contentType ?? JSON_TYPE,
+              delayMs: 0 }
+          : handleEnvelope(Buffer.concat(parts).toString('utf8'), new URL(request.url ?? '/', 'http://127.0.0.1'), request.headers));
       });
 
       return;
@@ -605,6 +739,9 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
     },
     get releasePosts() {
       return releasePosts;
+    },
+    get envelopePosts() {
+      return envelopePosts;
     },
     wsClients: () => wss.clients.size,
     async close() {

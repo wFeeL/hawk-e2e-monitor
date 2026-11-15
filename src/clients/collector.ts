@@ -96,6 +96,15 @@ export interface CollectorClient {
    * @returns Whether the collector took the release; a refusal that is not a known class is `release_rejected`.
    */
   uploadRelease(token: string, release: string, file: ReleaseFile, signal: AbortSignal): Promise<SendOutcome>;
+  /**
+   * Posts a Sentry envelope to the collector.
+   * A 200 says nothing about the event: an envelope with no event gets it too.
+   * @param sentryKey Key of the integration token without dashes, which goes into the address.
+   * @param body Envelope text.
+   * @param signal Aborts the request.
+   * @returns Whether the collector took the envelope; a refusal that is not a known class is `sentry_rejected`.
+   */
+  sendEnvelope(sentryKey: string, body: string, signal: AbortSignal): Promise<SendOutcome>;
 }
 
 /** A source map file to upload with a release. */
@@ -249,6 +258,23 @@ export function classifyCollectorReply(status: number, body: string): ReplyVerdi
     default:
       return unexpected();
   }
+}
+
+/**
+ * Turns the refusal of a collector endpoint into a taxonomy error.
+ * The classes of an event refusal that mean the same for any endpoint stay; the rest says only that this endpoint refused.
+ * @param verdict Rejected verdict of `classifyCollectorReply`.
+ * @param url Address of the endpoint, without a secret.
+ * @param status HTTP status of the answer.
+ * @param fallback Class for a refusal that has no class of its own.
+ * @returns Error with the class, the status and the text of the collector.
+ */
+function refusalOf(verdict: ReplyRejected, url: string, status: number, fallback: ErrorClass): CheckError {
+  const keeps: readonly ErrorClass[] = ['auth_invalid_token', 'quota_exhausted', 'rate_limited', 'unknown_402', 'collector_dependency_error', 'ip_blacklisted'];
+
+  return new CheckError(keeps.includes(verdict.errorClass) ? verdict.errorClass : fallback, { url,
+    status,
+    detail: verdict.message });
 }
 
 /**
@@ -547,22 +573,71 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
         attempts };
     }
 
-    // The classes of an event refusal that mean the same for a release stay; the rest says only that the upload was refused.
-    const keeps: readonly ErrorClass[] = ['auth_invalid_token', 'quota_exhausted', 'rate_limited', 'unknown_402', 'collector_dependency_error', 'ip_blacklisted'];
-
     return { kind: 'rejected',
-      error: keeps.includes(verdict.errorClass)
-        ? new CheckError(verdict.errorClass, { url: endpoints.releaseUrl,
-          status: response.status,
-          detail: verdict.message })
-        : new CheckError('release_rejected', { url: endpoints.releaseUrl,
-          status: response.status,
-          detail: verdict.message }),
+      error: refusalOf(verdict, endpoints.releaseUrl, response.status, 'release_rejected'),
       attempts };
+  };
+
+  const sendEnvelope: CollectorClient['sendEnvelope'] = async (sentryKey, body, signal) => {
+    const startedMs = clock.monotonicMs();
+    // The key is a secret and sits in the query, so the address in the facts is the one without it.
+    const facts = (): MessageFacts => ({ url: endpoints.envelopeUrl,
+      waitedMs: Math.round(clock.monotonicMs() - startedMs) });
+    const url = new URL(endpoints.envelopeUrl);
+
+    url.searchParams.set('sentry_key', sentryKey);
+
+    let result;
+
+    try {
+      result = await requestWithRetry({ url: url.href,
+        method: 'POST',
+        headers: Object.fromEntries([['content-type', 'application/x-sentry-envelope']]),
+        body,
+        timeoutMs: httpTimeoutMs,
+        signal }, 'collector', { attempts: maxAttempts,
+        delaysMs,
+        clock,
+        retryStatus: () => false,
+        retryNetwork: failure => failure.beforeSend });
+    } catch (error) {
+      if (!(error instanceof NetworkError)) {
+        throw error;
+      }
+
+      const checkError = networkFailureToCheckError(error, facts());
+
+      return error.failure.beforeSend
+        ? { kind: 'rejected',
+            error: checkError,
+            attempts: error.attempts }
+        : { kind: 'uncertain',
+            cause: checkError,
+            attempts: error.attempts };
+    }
+
+    const { response, attempts } = result;
+
+    if (response.status >= HttpStatus.internalServerError) {
+      return { kind: 'uncertain',
+        cause: new CheckError('collector_unavailable', { ...facts(),
+          status: response.status }),
+        attempts };
+    }
+
+    const verdict = classifyCollectorReply(response.status, response.text);
+
+    return verdict.kind === 'accepted'
+      ? { kind: 'accepted',
+          attempts }
+      : { kind: 'rejected',
+          error: refusalOf(verdict, endpoints.envelopeUrl, response.status, 'sentry_rejected'),
+          attempts };
   };
 
   return { health,
     probeInvalidToken,
     uploadRelease,
+    sendEnvelope,
     send: async (message, transport, signal) => transport === 'http' ? sendHttp(message, signal) : sendWs(message, signal) };
 }

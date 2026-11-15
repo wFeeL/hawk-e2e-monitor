@@ -492,3 +492,93 @@ describe('uploadRelease', () => {
     expect(outcome.attempts).toBe(1);
   });
 });
+
+const SENT_AT_LINE = JSON.stringify(Object.fromEntries([['sent_at', '2026-11-15T12:00:00.000Z']]));
+const ENVELOPE = [
+  SENT_AT_LINE,
+  JSON.stringify({ type: 'event' }),
+  JSON.stringify({ exception: { values: [{ type: 'E2eMonitorCheck',
+    value: '[e2e:t] rabc sentry-envelope' }] },
+  level: 'error',
+  sdk: { name: 'sentry.python',
+    version: '1.0.0' },
+  contexts: { e2e: { runId: 'rabc',
+    instanceId: 't' } } }),
+  '',
+].join('\n');
+const KEY = decodeTokenKey(VALID_TOKEN) ?? '';
+
+describe('sendEnvelope', () => {
+  it('posts the envelope to the Sentry path with the key in the query, and the event arrives with a title of type and value', async () => {
+    const outcome = accepted(await clientFor().sendEnvelope(KEY, ENVELOPE, signal));
+    const [event] = store.all(PROJECT_ID);
+
+    expect(outcome.attempts).toBe(1);
+    expect(collector.envelopePosts).toBe(1);
+    expect(collector.posts).toBe(0);
+    expect(event).toMatchObject({ catcherType: 'errors/default' });
+    expect(event?.payload).toMatchObject({ title: 'E2eMonitorCheck: [e2e:t] rabc sentry-envelope',
+      type: 'error',
+      context: { e2e: { runId: 'rabc',
+        instanceId: 't' } } });
+  });
+
+  it('an envelope with no event is answered 200 and stores nothing', async () => {
+    const outcome = accepted(await clientFor().sendEnvelope(KEY, `${SENT_AT_LINE}\n${JSON.stringify({ type: 'client_report' })}\n{}\n`, signal));
+
+    expect(outcome.attempts).toBe(1);
+    expect(store.all(PROJECT_ID)).toHaveLength(0);
+  });
+
+  it('an unknown key is auth_invalid_token, without the key in the text', async () => {
+    const other = decodeTokenKey(encodeToken(randomUUID(), randomUUID())) ?? '';
+    const outcome = rejected(await clientFor().sendEnvelope(other, ENVELOPE, signal));
+
+    expect(outcome.error.errorClass).toBe('auth_invalid_token');
+    expect(outcome.error.message).not.toContain(other);
+  });
+
+  it('keeps the key out of the facts of every failure', async () => {
+    collector.knobs.envelopeReply = { status: 400,
+      body: '{"code":400,"error":true,"message":"Failed to process Sentry envelope"}' };
+
+    const outcome = rejected(await clientFor().sendEnvelope(KEY, ENVELOPE, signal));
+
+    expect(JSON.stringify(outcome.error.facts)).not.toContain(KEY);
+    expect(JSON.stringify(outcome.error.facts)).not.toContain('sentry_key');
+  });
+
+  it.each([
+    ['a refusal of the envelope', 400, '{"code":400,"error":true,"message":"Failed to process Sentry envelope"}', 'sentry_rejected'],
+    ['a plain 400', 400, 'Bad request', 'sentry_rejected'],
+    ['the event limit', 402, '{"code":402,"error":true,"message":"Project has exceeded the events limit"}', 'quota_exhausted'],
+    ['an unexpected status', 404, 'Not found', 'sentry_rejected'],
+    ['a 200 that says error', 200, '{"code":200,"error":true,"message":"x"}', 'sentry_rejected'],
+  ] as const)('%s is %s', async (_name, status, body, expected) => {
+    collector.knobs.envelopeReply = { status,
+      body };
+
+    const outcome = rejected(await clientFor().sendEnvelope(KEY, ENVELOPE, signal));
+
+    expect(outcome.error.errorClass).toBe(expected);
+
+    if (expected === 'sentry_rejected') {
+      expect(outcome.error.facts.status).toBe(status);
+    }
+  });
+
+  it('a 5xx answer is uncertain', async () => {
+    collector.knobs.envelopeReply = { status: 503,
+      body: 'down' };
+
+    expect(uncertain(await clientFor().sendEnvelope(KEY, ENVELOPE, signal)).cause.errorClass).toBe('collector_unavailable');
+  });
+
+  it('a collector that is not there is rejected before the send', async () => {
+    const url = await closeCollector();
+    const outcome = rejected(await clientFor(1000, url).sendEnvelope(KEY, ENVELOPE, signal));
+
+    expect(outcome.error.errorClass).toBe('collector_unavailable');
+    expect(outcome.attempts).toBe(3);
+  });
+});
