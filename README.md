@@ -12,7 +12,7 @@ next.
 
 ## Running one check
 
-Requirements: Node.js 24 and a Hawk instance prepared as described in
+Requirements: Node.js 26 and a Hawk instance prepared as described in
 [About this test assignment](#about-this-test-assignment).
 
 ```sh
