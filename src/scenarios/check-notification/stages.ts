@@ -10,7 +10,6 @@ import type { Arrival, Arrivals, Receiver } from '../../receiver/server.js';
 import type { ScenarioContext } from '../send-and-receive/stages.js';
 import { MS_PER_SECOND } from '../../time/units.js';
 
-const PROBE_ATTEMPTS = 3;
 const DEFAULT_ADDRESS_POLL_MS = 2000;
 const WEBHOOK_AGENT = 'Hawk-Webhook/1.0';
 const WEBHOOK_KIND = 'event';
@@ -47,8 +46,6 @@ export interface NotificationContext extends ScenarioContext {
   address?: PublicAddress;
   /** Finds the public address. */
   resolveAddress: (signal: AbortSignal) => Promise<PublicAddress>;
-  /** Pauses between attempts of the address calls, for tests. */
-  retryDelaysMs?: readonly number[];
   /** Adds a value to the secrets that output must not show. */
   addSecret: (value: string) => void;
   /** Host of the address of the previous run, shared by the runs of a process; a new host is waited for before the rule is changed. */
@@ -253,7 +250,7 @@ async function waitForAddress(context: NotificationContext, address: PublicAddre
       await probeReceiver(address, settings.receiverSecret, receiver.nonce, { httpTimeoutMs: config.httpTimeoutMs,
         clock,
         attempts: 1,
-        ...context.retryDelaysMs === undefined ? {} : { retryDelaysMs: context.retryDelaysMs } }, signal);
+        retry: config.retry }, signal);
 
       return;
     } catch (error) {
@@ -298,8 +295,8 @@ export function notificationSetupStage(timeoutMs: number): StageSpec<Notificatio
       } else {
         await probeReceiver(address, settings.receiverSecret, receiver.nonce, { httpTimeoutMs: config.httpTimeoutMs,
           clock,
-          attempts: PROBE_ATTEMPTS,
-          ...context.retryDelaysMs === undefined ? {} : { retryDelaysMs: context.retryDelaysMs } }, signal);
+          attempts: config.retry.attempts,
+          retry: config.retry }, signal);
       }
 
       if (context.lastHostname !== undefined) {
@@ -374,7 +371,7 @@ export function notificationFormedStage(timeoutMs: number): StageSpec<Notificati
           await probeReceiver(address, settings.receiverSecret, receiver.nonce, { httpTimeoutMs: config.httpTimeoutMs,
             clock,
             attempts: 1,
-            ...context.retryDelaysMs === undefined ? {} : { retryDelaysMs: context.retryDelaysMs } }, signal);
+            retry: config.retry }, signal);
         } catch (error) {
           if (isCheckError(error)) {
             return { status: 'failed',

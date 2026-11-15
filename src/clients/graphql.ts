@@ -1,14 +1,9 @@
 import { CheckError } from '../errors/taxonomy.js';
-import { NetworkError, networkFailureToCheckError, requestWithRetry } from '../net/http.js';
+import { JSON_HEADERS, NetworkError, networkFailureToCheckError, requestWithRetry } from '../net/http.js';
+import type { RetryPolicy } from '../net/retry.js';
 import type { HttpResponse } from '../net/http.js';
 import type { Clock } from '../time/clock.js';
 import { HttpStatus } from '../net/http-status.js';
-import { JSON_HEADERS } from '../net/http.js';
-
-const ATTEMPTS = 3;
-const FIRST_RETRY_DELAY_MS = 200;
-const SECOND_RETRY_DELAY_MS = 500;
-const DEFAULT_RETRY_DELAYS_MS = [FIRST_RETRY_DELAY_MS, SECOND_RETRY_DELAY_MS] as const;
 
 /** Hawk code for an expired access token. */
 export const ACCESS_EXPIRED = 'ACCESS_TOKEN_EXPIRED_ERROR';
@@ -71,8 +66,8 @@ export interface GraphqlTransportOptions {
   httpTimeoutMs: number;
   /** Clock for waits between attempts and for `waitedMs`. */
   clock: Clock;
-  /** Waits between attempts, `[200, 500]` by default. */
-  retryDelaysMs?: readonly number[];
+  /** Attempts and waits between them; only idempotent operations are repeated. */
+  retry: RetryPolicy;
 }
 
 /** One element of the GraphQL `errors` array. */
@@ -119,7 +114,7 @@ function parseObject(text: string): GraphqlBody | undefined {
  */
 export function createGraphqlTransport(options: GraphqlTransportOptions): GraphqlTransport {
   const { url, httpTimeoutMs, clock } = options;
-  const delaysMs = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+  const { attempts, delaysMs } = options.retry;
 
   const send = async (
     operation: GraphqlOperation,
@@ -143,7 +138,7 @@ export function createGraphqlTransport(options: GraphqlTransportOptions): Graphq
           query: operation.document,
           variables }),
         timeoutMs: httpTimeoutMs,
-        signal }, 'api', { attempts: operation.idempotent ? ATTEMPTS : 1,
+        signal }, 'api', { attempts: operation.idempotent ? attempts : 1,
         delaysMs,
         clock,
         retryStatus: status => operation.idempotent && status >= HttpStatus.internalServerError,

@@ -26,8 +26,6 @@ export interface ProvisionDeps {
   api: HawkApi;
   /** Clock of the warmup wait. */
   clock: Clock;
-  /** Pauses between attempts of repeated calls. */
-  retryDelaysMs: readonly number[];
   /** Finds the public address instead of reading it from the settings. */
   resolveAddress: (signal: AbortSignal) => Promise<PublicAddress>;
 }
@@ -83,14 +81,15 @@ export async function runProvisionCommand(command: ProvisionCommand, config: Con
     const api = deps.api ?? createHawkApi({ transport: createGraphqlTransport({ url: config.hawk.apiUrl,
       httpTimeoutMs: config.httpTimeoutMs,
       clock: systemClock,
-      ...deps.retryDelaysMs === undefined ? {} : { retryDelaysMs: deps.retryDelaysMs } }),
+      retry: config.retry }),
     email: config.hawk.email,
     password: config.hawk.password,
-    clock: systemClock });
+    clock: systemClock,
+    retry: config.retry });
     const address = deps.resolveAddress === undefined
       ? await resolvePublicAddress(settings, { httpTimeoutMs: config.httpTimeoutMs,
         clock: systemClock,
-        ...deps.retryDelaysMs === undefined ? {} : { retryDelaysMs: deps.retryDelaysMs } }, signal)
+        retry: config.retry }, signal)
       : await deps.resolveAddress(signal);
 
     add(address.baseUrl);

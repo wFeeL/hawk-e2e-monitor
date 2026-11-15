@@ -230,7 +230,6 @@ async function launch(options: LaunchOptions = {}, hawk?: FakeHawk): Promise<Har
     overrides: { api: deps.api,
       collector: deps.collector,
       pollScheduleMs: [20, 40],
-      retryDelaysMs: [5, 10],
       ...options.addressPollMs === undefined ? {} : { addressPollMs: options.addressPollMs },
       ...options.sweepFirstDelayMs === undefined ? {} : { sweepFirstDelayMs: options.sweepFirstDelayMs },
       ...options.resolveAddress === undefined ? {} : { resolveAddress: async () => resolveFor(options.resolveAddress, options.receiverPort ?? 0) } } });

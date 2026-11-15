@@ -55,8 +55,6 @@ export interface ServeOverrides {
   resolveAddress?: typeof resolvePublicAddress;
   /** Poll schedule of the search for the event, short in tests. */
   pollScheduleMs?: readonly number[];
-  /** Pauses between attempts of address calls, short in tests. */
-  retryDelaysMs?: readonly number[];
   /** Pause between self-checks while a new tunnel address is awaited, 2000 ms by default. */
   addressPollMs?: number;
   /** Pause between self-checks while the tunnel starts, 2000 ms by default. */
@@ -206,13 +204,16 @@ function createClients(config: Config, clock: Clock): HawkClients {
   return {
     collector: createCollectorClient({ endpoints: collectorEndpoints(token, config.hawk.collectorUrl),
       httpTimeoutMs: config.httpTimeoutMs,
-      clock }),
+      clock,
+      retry: config.retry }),
     api: createHawkApi({ transport: createGraphqlTransport({ url: config.hawk.apiUrl,
       httpTimeoutMs: config.httpTimeoutMs,
-      clock }),
+      clock,
+      retry: config.retry }),
     email: config.hawk.email,
     password: config.hawk.password,
-    clock }),
+    clock,
+    retry: config.retry }),
   };
 }
 
@@ -296,8 +297,6 @@ interface TunnelWait {
   signal: AbortSignal;
   /** Pause between tries. */
   pollMs: number;
-  /** Pauses between attempts of address calls. */
-  retryDelaysMs?: readonly number[];
 }
 
 /**
@@ -324,7 +323,7 @@ async function waitForTunnel(wait: TunnelWait): Promise<void> {
       await probeReceiver(address, wait.secret, wait.receiver.nonce, { httpTimeoutMs: config.httpTimeoutMs,
         clock,
         attempts: 1,
-        ...wait.retryDelaysMs === undefined ? {} : { retryDelaysMs: wait.retryDelaysMs } }, signal);
+        retry: config.retry }, signal);
       logger.info('tunnel is ready');
 
       return;
@@ -370,7 +369,6 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
   });
   const background = new AbortController();
   const closers: Closer[] = [];
-  const retry = overrides.retryDelaysMs === undefined ? {} : { retryDelaysMs: overrides.retryDelaysMs };
 
   const history = openHistory(config);
 
@@ -498,7 +496,7 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
       const resolve = overrides.resolveAddress ?? resolvePublicAddress;
       const findAddress = async (signal: AbortSignal): Promise<PublicAddress> => resolve(settings, { httpTimeoutMs: config.httpTimeoutMs,
         clock,
-        ...retry }, signal);
+        retry: config.retry }, signal);
       const lastHostname: LastHostname = {};
 
       runners['check-notification'] = async ({ runId, sequence, signal }) => runCheckNotification({ ...base,
@@ -508,7 +506,6 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
         resolveAddress: findAddress,
         addSecret: masking.add,
         lastHostname,
-        ...retry,
         ...overrides.addressPollMs === undefined ? {} : { addressPollMs: overrides.addressPollMs } }, { sequence,
         runId });
 
@@ -521,8 +518,7 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
           logger,
           masking,
           signal,
-          pollMs: overrides.tunnelPollMs ?? TUNNEL_POLL_MS,
-          ...retry });
+          pollMs: overrides.tunnelPollMs ?? TUNNEL_POLL_MS });
       };
     }
 

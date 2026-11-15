@@ -23,6 +23,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     NOTIFICATION_PAIR_WAIT_MS: '100',
     NOTIFICATION_SETUP_TIMEOUT_MS: '600',
     RULE_CACHE_WARMUP_MS: '50',
+    RETRY_DELAYS_MS: '5,10',
   })));
 
   return {

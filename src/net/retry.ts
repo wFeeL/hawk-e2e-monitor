@@ -1,5 +1,13 @@
 import type { Clock } from '../time/clock.js';
 
+/** How often and how slowly a call is repeated. */
+export interface RetryPolicy {
+  /** Total number of attempts, the first one included. */
+  attempts: number;
+  /** Waits between attempts, one fewer than the attempts; the last value repeats if there are more attempts. */
+  delaysMs: readonly number[];
+}
+
 /** Attempts, delays and rules for `withRetry`. */
 export interface RetryOptions {
   /** Total number of attempts, the first one included. */

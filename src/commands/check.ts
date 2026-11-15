@@ -51,14 +51,17 @@ function defaultDeps(config: Config, io: CheckIo, masking: MutableRedactor): Sce
     redact: masking.redact,
     collector: createCollectorClient({ endpoints: collectorEndpoints(token, config.hawk.collectorUrl),
       httpTimeoutMs: config.httpTimeoutMs,
-      clock }),
+      clock,
+      retry: config.retry }),
     api: createHawkApi({
       transport: createGraphqlTransport({ url: config.hawk.apiUrl,
         httpTimeoutMs: config.httpTimeoutMs,
-        clock }),
+        clock,
+        retry: config.retry }),
       email: config.hawk.email,
       password: config.hawk.password,
       clock,
+      retry: config.retry,
     }),
   };
 }

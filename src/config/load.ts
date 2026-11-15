@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import { ENV_SHAPE, envSchema } from './schema.js';
 import type { LogLevel, ParsedEnv, TransportMode } from './schema.js';
+import type { RetryPolicy } from '../net/retry.js';
 import type { ScenarioName } from '../scenarios/send-and-receive/plan.js';
 
 /** Address of the internal HTTP server (health, readiness). */
@@ -117,6 +118,8 @@ export interface Config {
   repeatEveryNRuns: number;
   /** Time limit of one HTTP request or WebSocket exchange. */
   httpTimeoutMs: number;
+  /** Attempts and pauses for requests that fail on the network or with a 5xx answer. */
+  retry: RetryPolicy;
   /** Pause before cleanup rechecks the event count; 0 turns it off. */
   lateDuplicateWaitMs: number;
   /** Time limits of the stages and the run. */
@@ -234,6 +237,8 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): L
       transportMode: values.TRANSPORT_MODE,
       repeatEveryNRuns: values.REPEAT_EVERY_N_RUNS,
       httpTimeoutMs: values.HTTP_TIMEOUT_MS,
+      retry: { attempts: values.RETRY_ATTEMPTS,
+        delaysMs: values.RETRY_DELAYS_MS },
       lateDuplicateWaitMs: values.LATE_DUPLICATE_WAIT_MS,
       timeouts: {
         collectorAvailability: values.COLLECTOR_AVAILABILITY_TIMEOUT_MS,

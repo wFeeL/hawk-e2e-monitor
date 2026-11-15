@@ -3,19 +3,15 @@ import { CheckError } from '../errors/taxonomy.js';
 import type { ErrorClass, MessageFacts } from '../errors/taxonomy.js';
 import { stripTokenSecret } from '../errors/redact.js';
 import type { CollectorEndpoints } from '../hawk/token.js';
-import { NetworkError, networkFailureToCheckError, requestWithRetry } from '../net/http.js';
+import { JSON_HEADERS, NetworkError, networkFailureToCheckError, requestWithRetry } from '../net/http.js';
 import { withRetry } from '../net/retry.js';
+import type { RetryPolicy } from '../net/retry.js';
 import { sendOverWebSocket } from '../net/ws.js';
 import type { WsOutcome } from '../net/ws.js';
 import type { Clock } from '../time/clock.js';
 import { TOKEN_INVALID_PREFIX } from '../errors/redact.js';
 import { HttpStatus } from '../net/http-status.js';
-import { JSON_HEADERS } from '../net/http.js';
 
-const ATTEMPTS = 3;
-const FIRST_RETRY_DELAY_MS = 200;
-const SECOND_RETRY_DELAY_MS = 500;
-const DEFAULT_RETRY_DELAYS_MS = [FIRST_RETRY_DELAY_MS, SECOND_RETRY_DELAY_MS] as const;
 const SNIPPET_LENGTH = 200;
 const PROBE_ID = '00000000-0000-4000-8000-000000000000';
 
@@ -97,8 +93,8 @@ export interface CollectorClientOptions {
   httpTimeoutMs: number;
   /** Clock for waits and durations. */
   clock: Clock;
-  /** Waits between attempts, `[200, 500]` by default. */
-  retryDelaysMs?: readonly number[];
+  /** Attempts and waits between them. */
+  retry: RetryPolicy;
 }
 
 /** The collector took the message. */
@@ -236,12 +232,12 @@ export function classifyCollectorReply(status: number, body: string): ReplyVerdi
 
 /**
  * Builds the client of the collector.
- * @param options Addresses, timeout, clock and retry delays.
+ * @param options Addresses, timeout, clock and retry policy.
  * @returns Client with `health`, `probeInvalidToken` and `send`.
  */
 export function createCollectorClient(options: CollectorClientOptions): CollectorClient {
   const { endpoints, httpTimeoutMs, clock } = options;
-  const delaysMs = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+  const { attempts: maxAttempts, delaysMs } = options.retry;
 
   /**
    * Opens a socket per attempt; a failed handshake is tried again.
@@ -264,7 +260,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
         }
 
         return outcome;
-      }, { attempts: ATTEMPTS,
+      }, { attempts: maxAttempts,
         delaysMs,
         clock,
         signal,
@@ -311,7 +307,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
       result = await requestWithRetry({ url: endpoints.healthUrl,
         method: 'GET',
         timeoutMs: httpTimeoutMs,
-        signal }, 'collector', { attempts: ATTEMPTS,
+        signal }, 'collector', { attempts: maxAttempts,
         delaysMs,
         clock,
         retryStatus: (status, text) => status >= HttpStatus.internalServerError && parseObject(text) === undefined,
@@ -394,7 +390,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
         headers: JSON_HEADERS,
         body: JSON.stringify(message),
         timeoutMs: httpTimeoutMs,
-        signal }, 'collector', { attempts: ATTEMPTS,
+        signal }, 'collector', { attempts: maxAttempts,
         delaysMs,
         clock,
         retryStatus: () => false,

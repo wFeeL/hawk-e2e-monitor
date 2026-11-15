@@ -51,6 +51,8 @@ describe('loadConfig', () => {
       NOTIFICATION_TIMEOUT_MS: '3000',
       NOTIFICATION_PAIR_WAIT_MS: '1000',
       NOTIFICATION_SETUP_TIMEOUT_MS: '4000',
+      RETRY_ATTEMPTS: '2',
+      RETRY_DELAYS_MS: '300',
     })));
 
     expect(config).toEqual({
@@ -71,6 +73,8 @@ describe('loadConfig', () => {
       transportMode: 'ws',
       repeatEveryNRuns: 0,
       httpTimeoutMs: 1000,
+      retry: { attempts: 2,
+        delaysMs: [300] },
       lateDuplicateWaitMs: 1234,
       timeouts: {
         collectorAvailability: 2000,

@@ -29,7 +29,6 @@ import { fakeHawkEnv } from './fake-hawk/index.js';
 import type { FakeHawk } from './fake-hawk/index.js';
 import { expectOk } from './result.js';
 
-const RETRY_DELAYS_MS = [5, 10];
 const FAKE_LETTER = 'a';
 const POLL_SCHEDULE_MS = [20, 40];
 const PRE_PROVISION_TIMEOUT_MS = 5000;
@@ -48,6 +47,7 @@ const SHORT_LIMITS: Record<string, string> = {
   NOTIFICATION_TIMEOUT_MS: '2000',
   NOTIFICATION_PAIR_WAIT_MS: '500',
   NOTIFICATION_SETUP_TIMEOUT_MS: '2000',
+  RETRY_DELAYS_MS: '5,10',
 };
 
 /** Tight limits for tests that make a timeout happen on purpose (delays of 300 ms and more). */
@@ -102,16 +102,16 @@ export function createTestDeps(hawk: FakeHawk, options: TestDepsOptions = {}): T
   const collector = createCollectorClient({ endpoints: collectorEndpoints(token, config.hawk.collectorUrl),
     httpTimeoutMs: config.httpTimeoutMs,
     clock,
-    retryDelaysMs: RETRY_DELAYS_MS });
+    retry: config.retry });
   const api = createHawkApi({
     transport: createGraphqlTransport({ url: config.hawk.apiUrl,
       httpTimeoutMs: config.httpTimeoutMs,
       clock,
-      retryDelaysMs: RETRY_DELAYS_MS }),
+      retry: config.retry }),
     email: config.hawk.email,
     password: config.hawk.password,
     clock,
-    retryDelaysMs: RETRY_DELAYS_MS,
+    retry: config.retry,
   });
   const logger = memoryLogger();
 
@@ -206,8 +206,6 @@ export interface NotificationTestDeps {
   provisioner: Provisioner;
   /** Finds the address. */
   resolveAddress: (signal: AbortSignal) => Promise<PublicAddress>;
-  /** Pauses between attempts of the address calls. */
-  retryDelaysMs: readonly number[];
   /** Values the run asked to mask. */
   secrets: string[];
   /** Adds a value to `secrets`. */
@@ -267,14 +265,12 @@ export async function createNotificationTestDeps(hawk: FakeHawk, options: Notifi
       receiver,
       provisioner,
       resolveAddress,
-      retryDelaysMs: RETRY_DELAYS_MS,
       addSecret },
     logger,
     receiver,
     address,
     provisioner,
     resolveAddress,
-    retryDelaysMs: RETRY_DELAYS_MS,
     secrets,
     addSecret,
     close: async () => receiver.close(),
@@ -316,7 +312,6 @@ export async function createNotificationTestScenario(hawk: FakeHawk, options: No
       provisioner: parts.provisioner,
       settings: notificationSettings(config),
       resolveAddress: parts.resolveAddress,
-      retryDelaysMs: parts.retryDelaysMs,
       addSecret: parts.addSecret,
       notification: { warmup: false } },
   };

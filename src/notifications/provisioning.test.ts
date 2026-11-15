@@ -42,11 +42,13 @@ function apiFor(httpTimeoutMs = 1000): HawkApi {
   return createHawkApi({ transport: createGraphqlTransport({ url: hawk.api.url,
     httpTimeoutMs,
     clock: systemClock,
-    retryDelaysMs: [1, 1] }),
+    retry: { attempts: 3,
+      delaysMs: [1, 1] } }),
   email: hawk.email,
   password: hawk.password,
   clock: systemClock,
-  retryDelaysMs: [1] });
+  retry: { attempts: 3,
+    delaysMs: [1] } });
 }
 
 /**

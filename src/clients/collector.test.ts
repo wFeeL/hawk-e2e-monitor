@@ -8,6 +8,7 @@ import type { FakeCollector } from '../test-support/fake-hawk/collector.js';
 import { createFakeStore } from '../test-support/fake-hawk/store.js';
 import type { FakeStore } from '../test-support/fake-hawk/store.js';
 import { decodeTokenKey, encodeToken } from '../test-support/fake-hawk/token.js';
+import type { RetryPolicy } from '../net/retry.js';
 import { systemClock } from '../time/clock.js';
 import { PROBE_TOKEN, classifyCollectorReply, createCollectorClient } from './collector.js';
 import type { CollectorClient, CollectorMessage, SendAccepted, SendOutcome, SendRejected, SendUncertain } from './collector.js';
@@ -35,9 +36,11 @@ function message(title = 'collector test'): CollectorMessage {
  * Builds a client for the running fake.
  * @param httpTimeoutMs Request deadline.
  * @param url Collector base URL.
- * @returns Client with 1 ms retry delays.
+ * @param retry Attempts and pauses, 3 attempts with 1 ms pauses by default.
+ * @returns Client with the given retry policy.
  */
-function clientFor(httpTimeoutMs = 1000, url = collector.url): CollectorClient {
+function clientFor(httpTimeoutMs = 1000, url = collector.url, retry: RetryPolicy = { attempts: 3,
+  delaysMs: [1, 1] }): CollectorClient {
   const token = decodeIntegrationToken(VALID_TOKEN);
 
   if (!token) {
@@ -47,7 +50,7 @@ function clientFor(httpTimeoutMs = 1000, url = collector.url): CollectorClient {
   return createCollectorClient({ endpoints: collectorEndpoints(token, url),
     httpTimeoutMs,
     clock: systemClock,
-    retryDelaysMs: [1, 1] });
+    retry });
 }
 
 /**
@@ -228,6 +231,16 @@ describe('send over HTTP', () => {
     expect(outcome.error.errorClass).toBe('collector_unavailable');
     expect(outcome.error.facts.code).toBe('ECONNREFUSED');
     expect(outcome.attempts).toBe(3);
+  });
+
+  it('uses the configured number of attempts', async () => {
+    const url = await closeCollector();
+    const outcome = rejected(await clientFor(1000, url, { attempts: 5,
+      delaysMs: [1, 1, 1, 1] }).send(message(), 'http', signal));
+
+    expect(outcome.attempts).toBe(5);
+    expect(rejected(await clientFor(1000, url, { attempts: 1,
+      delaysMs: [] }).send(message(), 'http', signal)).attempts).toBe(1);
   });
 
   it('token secret never appears in outcome', async () => {

@@ -1,13 +1,10 @@
 import { CheckError } from '../errors/taxonomy.js';
 import { NetworkError, requestWithRetry } from '../net/http.js';
+import type { RetryPolicy } from '../net/retry.js';
 import type { HttpResponse } from '../net/http.js';
 import type { Clock } from '../time/clock.js';
 import { HttpStatus } from '../net/http-status.js';
 
-const FULL_ATTEMPTS = 3;
-const FIRST_RETRY_DELAY_MS = 200;
-const SECOND_RETRY_DELAY_MS = 500;
-const DEFAULT_RETRY_DELAYS_MS = [FIRST_RETRY_DELAY_MS, SECOND_RETRY_DELAY_MS] as const;
 const PROBE_PATH = '/hooks/probe/';
 
 /** Where Hawk can reach the receiver. */
@@ -34,14 +31,14 @@ export interface AddressDeps {
   httpTimeoutMs: number;
   /** Clock for the pauses between attempts. */
   clock: Clock;
-  /** Pauses between attempts, `[200, 500]` by default. */
-  retryDelaysMs?: readonly number[];
+  /** Attempts and pauses between them. */
+  retry: RetryPolicy;
 }
 
 /** Time limits of the probe, with the number of attempts. */
 export interface ProbeDeps extends AddressDeps {
-  /** One for a recheck, three for the first probe. */
-  attempts: typeof FULL_ATTEMPTS | 1;
+  /** One for a recheck, `retry.attempts` for the first probe. */
+  attempts: number;
 }
 
 /** The part of the tunnel answer that is read. */
@@ -73,7 +70,7 @@ async function get(url: string, deps: AddressDeps, attempts: number, signal: Abo
     method: 'GET',
     timeoutMs: deps.httpTimeoutMs,
     signal }, 'api', { attempts,
-    delaysMs: deps.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS,
+    delaysMs: deps.retry.delaysMs,
     clock: deps.clock,
     retryStatus: status => status >= HttpStatus.internalServerError,
     retryNetwork: () => true });
@@ -121,7 +118,7 @@ export async function resolvePublicAddress(settings: AddressSettings, deps: Addr
   let response: HttpResponse;
 
   try {
-    response = await get(url, deps, FULL_ATTEMPTS, signal);
+    response = await get(url, deps, deps.retry.attempts, signal);
   } catch (error) {
     if (error instanceof NetworkError) {
       throw new CheckError('tunnel_unavailable', { url,

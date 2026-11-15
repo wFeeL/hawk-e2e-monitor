@@ -14,7 +14,8 @@ import type { PublicAddress } from './address.js';
 const SECRET = 'address-secret-0123456789-abcdefgh';
 const DEPS = { httpTimeoutMs: 500,
   clock: systemClock,
-  retryDelaysMs: [1, 1] };
+  retry: { attempts: 3,
+    delaysMs: [1, 1] } };
 const signal = new AbortController().signal;
 
 /** A running receiver with the address that reaches it. */
@@ -146,6 +147,17 @@ describe('resolvePublicAddress', () => {
 
     expect(failing.hits()).toBe(3);
     expect(missing.hits()).toBe(1);
+  });
+
+  it('uses the configured number of attempts', async () => {
+    const failing = await tunnel(() => ({ status: 500,
+      body: '' }));
+
+    await failure(resolvePublicAddress({ tunnelMetricsUrl: failing.url }, { ...DEPS,
+      retry: { attempts: 5,
+        delaysMs: [1, 1, 1, 1] } }, signal));
+
+    expect(failing.hits()).toBe(5);
   });
 
   it('recovers when the tunnel answers on a later attempt', async () => {

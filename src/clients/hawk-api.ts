@@ -1,5 +1,6 @@
 import { CheckError, isCheckError } from '../errors/taxonomy.js';
 import type { ErrorClass } from '../errors/taxonomy.js';
+import type { RetryPolicy } from '../net/retry.js';
 import type { Clock } from '../time/clock.js';
 import { ACCESS_EXPIRED, GraphqlFailure, UNAUTHENTICATED } from './graphql.js';
 import type { GraphqlOperation, GraphqlTransport } from './graphql.js';
@@ -7,10 +8,6 @@ import type { ChannelSettings, NotificationRule, NotificationRuleInput, Notifica
 import { CREATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE, EVENT_CARD, FIND_EVENTS, LOGIN, NOTIFICATION_RULES, PROJECT_TOKEN, REFRESH_TOKENS, REMOVE_EVENT, UPDATE_NOTIFICATION_RULE, WORKSPACE_QUOTA } from './operations.js';
 import { MS_PER_SECOND } from '../time/units.js';
 
-const REMOVE_ATTEMPTS = 3;
-const FIRST_RETRY_DELAY_MS = 200;
-const SECOND_RETRY_DELAY_MS = 500;
-const DEFAULT_RETRY_DELAYS_MS = [FIRST_RETRY_DELAY_MS, SECOND_RETRY_DELAY_MS] as const;
 const NOT_FOUND_PREFIX = 'Event not found for eventId';
 const RETRYABLE_CLASSES: ReadonlySet<ErrorClass> = new Set<ErrorClass>(['api_unavailable', 'dns_error', 'network_error', 'tls_error']);
 // Unix seconds stay below this until the year 5138; anything above is already milliseconds.
@@ -59,8 +56,8 @@ export interface HawkApiOptions {
   password: string;
   /** Clock for pauses between attempts. */
   clock: Clock;
-  /** Pauses between attempts of a repeated call, `[200, 500]` by default. */
-  retryDelaysMs?: readonly number[];
+  /** Attempts and pauses of a repeated call, such as removing an event. */
+  retry: RetryPolicy;
 }
 
 /** Calls of the Hawk API that the monitor makes. */
@@ -361,7 +358,7 @@ function toRule(rule: RawRule): NotificationRule {
  */
 export function createHawkApi(options: HawkApiOptions): HawkApi {
   const { transport, email, password, clock } = options;
-  const delaysMs = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+  const { attempts, delaysMs } = options.retry;
   let session: Session | undefined;
 
   const authFailed = (detail: string): CheckError => new CheckError('api_auth_failed', { detail });
@@ -556,7 +553,7 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
             return true;
           }
 
-          if (!RETRYABLE_CLASSES.has(error.errorClass) || attempt >= REMOVE_ATTEMPTS || signal.aborted) {
+          if (!RETRYABLE_CLASSES.has(error.errorClass) || attempt >= attempts || signal.aborted) {
             throw error;
           }
 

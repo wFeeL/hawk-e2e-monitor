@@ -50,7 +50,8 @@ function transportFor(url = hawk.api.url): GraphqlTransport {
   return createGraphqlTransport({ url,
     httpTimeoutMs: 1000,
     clock: systemClock,
-    retryDelaysMs: [1, 1] });
+    retry: { attempts: 3,
+      delaysMs: [1, 1] } });
 }
 
 /**
@@ -269,11 +270,27 @@ describe('graphql transport', () => {
     }
   });
 
+  it('uses the configured number of attempts', async () => {
+    const transport = createGraphqlTransport({ url: hawk.api.url,
+      httpTimeoutMs: 1000,
+      clock: systemClock,
+      retry: { attempts: 2,
+        delaysMs: [1] } });
+    const token = await login(transport);
+
+    hawk.api.knobs.down = true;
+    hawk.api.operations.length = 0;
+
+    checkError(await failureOf(transport.request(PROJECT_TOKEN, { projectId: hawk.projectId }, token, signal)), 'api_unavailable');
+    expect(hawk.api.operations).toEqual(['ProjectToken', 'ProjectToken']);
+  });
+
   it('idempotent query is retried on 503, mutation is not', async () => {
     const transport = createGraphqlTransport({ url: hawk.api.url,
       httpTimeoutMs: 1000,
       clock: systemClock,
-      retryDelaysMs: [200] });
+      retry: { attempts: 3,
+        delaysMs: [200] } });
     const token = await login(transport);
 
     hawk.api.knobs.downForMs = 150;

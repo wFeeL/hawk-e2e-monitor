@@ -26,8 +26,6 @@ export interface NotificationDeps extends ScenarioDeps {
   provisioner?: Provisioner;
   /** Finds the public address; reads the settings by default. */
   resolveAddress?: (signal: AbortSignal) => Promise<PublicAddress>;
-  /** Pauses between attempts of the address calls, for tests. */
-  retryDelaysMs?: readonly number[];
   /** Adds a value that output must not show, such as the public address. */
   addSecret: (value: string) => void;
   /** Host of the previous run's address, shared by the runs of a process; see `NotificationContext`. */
@@ -49,7 +47,6 @@ export async function runCheckNotification(deps: NotificationDeps, options: Plan
   const { timeouts } = config;
   const settings = notificationSettings(config);
   const plan = planRun(config, options, 'check-notification', deps.randomLetters);
-  const retry = deps.retryDelaysMs === undefined ? {} : { retryDelaysMs: deps.retryDelaysMs };
   const provisioner = deps.provisioner ?? createProvisioner({ api: deps.api,
     clock,
     projectId: config.hawk.projectId,
@@ -71,8 +68,7 @@ export async function runCheckNotification(deps: NotificationDeps, options: Plan
     settings,
     resolveAddress: deps.resolveAddress ?? (async signal => resolvePublicAddress(settings, { httpTimeoutMs: config.httpTimeoutMs,
       clock,
-      ...retry }, signal)),
-    ...retry,
+      retry: config.retry }, signal)),
     addSecret: deps.addSecret,
     ...deps.lastHostname === undefined ? {} : { lastHostname: deps.lastHostname },
     ...deps.addressPollMs === undefined ? {} : { addressPollMs: deps.addressPollMs },

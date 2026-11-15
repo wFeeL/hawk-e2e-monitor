@@ -202,7 +202,6 @@ describe('runCheckCommand with check-notification', () => {
     };
     const { config, deps } = adjust(setup.deps.config, { receiver: setup.receiver,
       resolveAddress: setup.resolveAddress,
-      retryDelaysMs: setup.retryDelaysMs,
       pollScheduleMs: setup.deps.pollScheduleMs });
 
     captured.code = await runCheckCommand(NOTIFICATION_COMMAND, config, io, deps);

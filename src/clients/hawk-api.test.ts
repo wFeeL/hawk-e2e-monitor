@@ -6,6 +6,7 @@ import type { FakeApiError, FakeHawk } from '../test-support/fake-hawk/index.js'
 import { systemClock } from '../time/clock.js';
 import { createGraphqlTransport } from './graphql.js';
 import type { GraphqlOperation, GraphqlTransport } from './graphql.js';
+import type { RetryPolicy } from '../net/retry.js';
 import type { NotificationRule, NotificationRuleInput } from '../notifications/types.js';
 import { createHawkApi } from './hawk-api.js';
 import type { HawkApi } from './hawk-api.js';
@@ -17,17 +18,20 @@ let signal: AbortSignal;
  * Builds a client for the running fake.
  * @param password Account password, the right one by default.
  * @param httpTimeoutMs Deadline of one request.
+ * @param removeRetry Attempts and pauses of removing an event, 3 attempts with 1 ms pauses by default.
  * @returns Client with 1 ms retry delays.
  */
-function apiFor(password = hawk.password, httpTimeoutMs = 1000): HawkApi {
+function apiFor(password = hawk.password, httpTimeoutMs = 1000, removeRetry: RetryPolicy = { attempts: 3,
+  delaysMs: [1] }): HawkApi {
   return createHawkApi({ transport: createGraphqlTransport({ url: hawk.api.url,
     httpTimeoutMs,
     clock: systemClock,
-    retryDelaysMs: [1, 1] }),
+    retry: { attempts: 3,
+      delaysMs: [1, 1] } }),
   email: hawk.email,
   password,
   clock: systemClock,
-  retryDelaysMs: [1] });
+  retry: removeRetry });
 }
 
 /**
@@ -374,6 +378,19 @@ describe('hawk api queries', () => {
     expect((await checkErrorOf(api.removeEvent(hawk.projectId, stored.id, signal))).errorClass).toBe('api_unavailable');
     expect(hawk.api.operations.filter(name => name === 'RemoveEvent')).toHaveLength(3);
   });
+
+  it('remove uses the configured number of attempts', async () => {
+    const stored = hawk.store.ingest(hawk.projectId, 'errors/nodejs', eventPayload('down'));
+    const api = apiFor(hawk.password, 1000, { attempts: 2,
+      delaysMs: [1] });
+
+    await api.ensureSession(signal);
+    hawk.api.knobs.down = true;
+    hawk.api.operations.length = 0;
+
+    expect((await checkErrorOf(api.removeEvent(hawk.projectId, stored.id, signal))).errorClass).toBe('api_unavailable');
+    expect(hawk.api.operations.filter(name => name === 'RemoveEvent')).toHaveLength(2);
+  });
 });
 
 describe('notification rules', () => {
@@ -455,7 +472,9 @@ describe('notification rules', () => {
     const api = createHawkApi({ transport,
       email: 'e',
       password: 'p',
-      clock: systemClock });
+      clock: systemClock,
+      retry: { attempts: 3,
+        delaysMs: [1] } });
 
     expect((await checkErrorOf(api.notificationRules(hawk.projectId, signal))).errorClass).toBe('api_forbidden');
   });
