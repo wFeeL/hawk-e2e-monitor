@@ -22,8 +22,8 @@ import { collectorAcceptStage } from '../send-and-receive/stages.js';
 import { checkNotificationAgainstEvent, notificationBeforeSend, notificationFormedStage, notificationSetupStage } from './stages.js';
 import type { NotificationContext } from './stages.js';
 
-const BUDGET_MS = 3000;
-const FORMED_BUDGET_MS = 3000;
+const TIMEOUT_MS = 3000;
+const FORMED_TIMEOUT_MS = 3000;
 
 let hawk: FakeHawk;
 let current: NotificationTestScenario | undefined;
@@ -74,7 +74,7 @@ async function sendEvent(context: NotificationContext): Promise<StageResult> {
   // Tests of the formed stage skip the setup stage, which would have found the address.
   context.address ??= current?.address;
 
-  return run(collectorAcceptStage(BUDGET_MS, notificationBeforeSend(context)), context);
+  return run(collectorAcceptStage(TIMEOUT_MS, notificationBeforeSend(context)), context);
 }
 
 /**
@@ -201,7 +201,7 @@ async function deadPort(): Promise<number> {
 describe('notificationSetupStage', () => {
   it('creates the rule, remembers the address and asks to mask it', async () => {
     const parts = await scenario({ preProvision: false });
-    const result = await run(notificationSetupStage(BUDGET_MS), parts.context);
+    const result = await run(notificationSetupStage(TIMEOUT_MS), parts.context);
 
     expect(result).toMatchObject({ status: 'ok',
       details: { provisioning: { action: 'created',
@@ -217,7 +217,7 @@ describe('notificationSetupStage', () => {
 
   it('is a no-op for a rule that is already right', async () => {
     const parts = await scenario();
-    const result = await run(notificationSetupStage(BUDGET_MS), parts.context);
+    const result = await run(notificationSetupStage(TIMEOUT_MS), parts.context);
 
     expect(result.details?.provisioning).toMatchObject({ action: 'none',
       matchChanged: false });
@@ -227,7 +227,7 @@ describe('notificationSetupStage', () => {
     const parts = await scenario({ preProvision: false,
       resolveAddress: () => Promise.reject(new CheckError('tunnel_unavailable', { detail: 'down' })) });
     const before = hawk.rules.version(hawk.projectId);
-    const result = await run(notificationSetupStage(BUDGET_MS), parts.context);
+    const result = await run(notificationSetupStage(TIMEOUT_MS), parts.context);
 
     expect(result).toMatchObject({ status: 'failed',
       errorClass: 'tunnel_unavailable' });
@@ -240,7 +240,7 @@ describe('notificationSetupStage', () => {
     const parts = await scenario({ preProvision: false,
       resolveAddress: () => Promise.resolve(dead) });
     const before = hawk.rules.version(hawk.projectId);
-    const result = await run(notificationSetupStage(BUDGET_MS), parts.context);
+    const result = await run(notificationSetupStage(TIMEOUT_MS), parts.context);
 
     expect(result).toMatchObject({ status: 'failed',
       errorClass: 'receiver_unreachable' });
@@ -253,7 +253,7 @@ describe('notificationSetupStage', () => {
 
     parts.context.resolveAddress = () => Promise.resolve(slow.address);
 
-    const result = await run(notificationSetupStage(BUDGET_MS), parts.context);
+    const result = await run(notificationSetupStage(TIMEOUT_MS), parts.context);
 
     expect(result.status).toBe('ok');
     expect(slow.hits()).toBe(2);
@@ -265,7 +265,7 @@ describe('notificationSetupStage', () => {
     parts.context.provisioner = { provision: () => Promise.reject(new CheckError('provisioning_conflict', { detail: 'parallel' })),
       warmupRemainingMs: () => 0 };
 
-    const result = await run(notificationSetupStage(BUDGET_MS), parts.context);
+    const result = await run(notificationSetupStage(TIMEOUT_MS), parts.context);
 
     expect(result).toMatchObject({ status: 'failed',
       errorClass: 'provisioning_conflict' });
@@ -281,7 +281,7 @@ describe('notificationSetupStage after the address changed', () => {
     parts.context.lastHostname = { value: 'old.example.test' };
     parts.context.addressPollMs = 20;
 
-    const result = await run(notificationSetupStage(BUDGET_MS), parts.context);
+    const result = await run(notificationSetupStage(TIMEOUT_MS), parts.context);
 
     expect(result.status).toBe('ok');
     expect(server.hits()).toBe(3);
@@ -289,7 +289,7 @@ describe('notificationSetupStage after the address changed', () => {
     expect(parts.context.notification.provisioning?.action).toBe('created');
   });
 
-  it('fails with the last self-check error when the budget ends first, and leaves the rule and the remembered host alone', async () => {
+  it('fails with the last self-check error when the timeout ends first, and leaves the rule and the remembered host alone', async () => {
     const parts = await scenario({ preProvision: false });
     const server = await probeServer(() => Promise.resolve('not the receiver'));
     const before = hawk.rules.version(hawk.projectId);
@@ -312,7 +312,7 @@ describe('notificationSetupStage after the address changed', () => {
 
     parts.context.lastHostname = {};
 
-    const result = await run(notificationSetupStage(BUDGET_MS), parts.context);
+    const result = await run(notificationSetupStage(TIMEOUT_MS), parts.context);
 
     expect(result.status).toBe('ok');
     expect(parts.context.lastHostname.value).toBe(parts.address.hostname);
@@ -325,7 +325,7 @@ describe('notificationSetupStage after the address changed', () => {
     parts.context.resolveAddress = () => Promise.resolve(server.address);
     parts.context.lastHostname = { value: server.address.hostname };
 
-    const result = await run(notificationSetupStage(BUDGET_MS), parts.context);
+    const result = await run(notificationSetupStage(TIMEOUT_MS), parts.context);
 
     expect(result).toMatchObject({ status: 'failed',
       errorClass: 'receiver_unreachable' });
@@ -358,7 +358,7 @@ describe('notificationBeforeSend', () => {
       loop: true,
       warmupMs: 65_000 });
 
-    await run(notificationSetupStage(BUDGET_MS), base.context);
+    await run(notificationSetupStage(TIMEOUT_MS), base.context);
     await clock.advance(3000);
     notificationBeforeSend(base.context)();
 
@@ -373,7 +373,7 @@ describe('notificationFormedStage', () => {
 
     await sendEvent(parts.context);
 
-    const result = await run(notificationFormedStage(FORMED_BUDGET_MS), parts.context);
+    const result = await run(notificationFormedStage(FORMED_TIMEOUT_MS), parts.context);
     const [stored] = hawk.store.all(hawk.projectId);
     const latency = result.details?.latencyMs as Record<string, number>;
 
@@ -391,7 +391,7 @@ describe('notificationFormedStage', () => {
 
     await sendEvent(parts.context);
 
-    const result = await run(notificationFormedStage(FORMED_BUDGET_MS), parts.context);
+    const result = await run(notificationFormedStage(FORMED_TIMEOUT_MS), parts.context);
 
     expect(result.status).toBe('ok');
     expect(result.details?.warning).toBeUndefined();
@@ -407,7 +407,7 @@ describe('notificationFormedStage', () => {
     hawk.notifier.knobs[knob] = true;
     await sendEvent(parts.context);
 
-    const result = await run(notificationFormedStage(FORMED_BUDGET_MS), parts.context);
+    const result = await run(notificationFormedStage(FORMED_TIMEOUT_MS), parts.context);
 
     expect(result.status).toBe('ok');
     expect(result.details?.warning).toMatch(new RegExp(`^Only the ${arrived} notification arrived; the ${missing} sender did not deliver within \\d+ ms$`, 'u'));
@@ -421,7 +421,7 @@ describe('notificationFormedStage', () => {
     hawk.notifier.knobs.off = true;
     await sendEvent(parts.context);
 
-    const result = await run(notificationFormedStage(FORMED_BUDGET_MS), parts.context);
+    const result = await run(notificationFormedStage(FORMED_TIMEOUT_MS), parts.context);
 
     expect(result).toMatchObject({ status: 'failed',
       errorClass: 'notification_timeout',
@@ -436,7 +436,7 @@ describe('notificationFormedStage', () => {
     hawk.notifier.knobs.off = true;
     await sendEvent(parts.context);
 
-    const result = await run(notificationFormedStage(FORMED_BUDGET_MS), parts.context);
+    const result = await run(notificationFormedStage(FORMED_TIMEOUT_MS), parts.context);
 
     expect(result.errorClass).toBe('notification_timeout');
     expect(result.message).toContain('with the loop channel off');
@@ -449,7 +449,7 @@ describe('notificationFormedStage', () => {
     await sendEvent(parts.context);
     await parts.receiver.close();
 
-    const result = await run(notificationFormedStage(FORMED_BUDGET_MS), parts.context);
+    const result = await run(notificationFormedStage(FORMED_TIMEOUT_MS), parts.context);
 
     expect(result).toMatchObject({ status: 'failed',
       errorClass: 'receiver_unreachable',
@@ -469,7 +469,7 @@ describe('notificationFormedStage', () => {
     await sendEvent(parts.context);
     parts.context.address = slow.address;
 
-    const result = await run(notificationFormedStage(FORMED_BUDGET_MS), parts.context);
+    const result = await run(notificationFormedStage(FORMED_TIMEOUT_MS), parts.context);
 
     expect(result.errorClass).toBe('notification_timeout');
     expect(slow.hits()).toBe(1);
@@ -487,11 +487,11 @@ describe('notificationFormedStage', () => {
       loop: true,
       warmupMs: 65_000 });
 
-    await run(notificationSetupStage(BUDGET_MS), parts.context);
+    await run(notificationSetupStage(TIMEOUT_MS), parts.context);
     await clock.advance(2500);
     await sendEvent(parts.context);
 
-    const result = await run(notificationFormedStage(FORMED_BUDGET_MS), parts.context);
+    const result = await run(notificationFormedStage(FORMED_TIMEOUT_MS), parts.context);
 
     expect(result.status).toBe('skipped');
     expect(result.details).toMatchObject({ reason: 'rule_cache_warmup',
@@ -523,7 +523,7 @@ describe('notificationFormedStage', () => {
       }
 
       return { parts: scene,
-        result: await run(notificationFormedStage(FORMED_BUDGET_MS), scene.context) };
+        result: await run(notificationFormedStage(FORMED_TIMEOUT_MS), scene.context) };
     }
 
     const goodLoop = (parts: NotificationTestScenario): string => JSON.stringify({ text: `**${parts.plan.title}**` });
@@ -612,7 +612,7 @@ describe('notificationFormedStage', () => {
       await post(parts, 'webhook', webhookBody(parts), GOOD_HEADERS);
       await post(parts, 'loop', goodLoop(parts));
 
-      const result = await run(notificationFormedStage(FORMED_BUDGET_MS), parts.context);
+      const result = await run(notificationFormedStage(FORMED_TIMEOUT_MS), parts.context);
 
       expect(result.status).toBe('ok');
       expect(result.details?.unmatched).toBe(1);

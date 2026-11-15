@@ -79,7 +79,7 @@ export const TRANSPORT_MODES = ['alternate', 'http', 'ws'] as const;
 /** One of `TRANSPORT_MODES`. */
 export type TransportMode = (typeof TRANSPORT_MODES)[number];
 
-/** Stage time limits, as environment variable and the key `Config.budgets` stores it under. */
+/** Stage time limits, as environment variable and the key `Config.timeouts` stores it under. */
 export const STAGE_TIMEOUT_VARS = [
   ['COLLECTOR_AVAILABILITY_TIMEOUT_MS', 'collectorAvailability'],
   ['API_AVAILABILITY_TIMEOUT_MS', 'apiAvailability'],
@@ -239,7 +239,7 @@ export const ENV_SHAPE = {
  * @param env Parsed variables with usable numbers.
  * @param ctx Collects the issues.
  */
-function checkNotificationBudget(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx): void {
+function checkNotificationTimeout(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx): void {
   if (env.NOTIFICATION_PAIR_WAIT_MS >= env.NOTIFICATION_TIMEOUT_MS) {
     ctx.addIssue({ code: 'custom',
       path: ['NOTIFICATION_PAIR_WAIT_MS'],
@@ -353,7 +353,7 @@ function checkCombinations(env: z.output<typeof baseSchema>, ctx: z.RefinementCt
       message: `must be at least the sum of the timeouts of stages 1-5 (${String(stagesTotal)} ms)` });
   }
 
-  checkNotificationBudget(env, ctx);
+  checkNotificationTimeout(env, ctx);
   checkMonitoring(env, ctx);
 
   const hostname = new URL(env.HAWK_API_URL).hostname;

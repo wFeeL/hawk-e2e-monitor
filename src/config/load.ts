@@ -28,7 +28,7 @@ export interface HawkConfig {
 }
 
 /** Time limits of the stages and of the whole run. */
-export interface StageBudgets {
+export interface StageTimeouts {
   /** Stage `collector_availability`. */
   collectorAvailability: number;
   /** Stage `api_availability`. */
@@ -75,7 +75,7 @@ export interface MonitoringConfig {
   scenarios: ScenarioName[];
   /** Time from the start of a run to the start of the next one of the same scenario. */
   intervalMs: number;
-  /** Time added to the run and cleanup budgets before a run counts as hung. */
+  /** Time added to the run and cleanup timeouts before a run counts as hung. */
   watchdogGraceMs: number;
   /** Delay between the first runs of consecutive scenarios. */
   staggerMs: number;
@@ -120,7 +120,7 @@ export interface Config {
   /** Pause before cleanup rechecks the event count; 0 turns it off. */
   lateDuplicateWaitMs: number;
   /** Time limits of the stages and the run. */
-  budgets: StageBudgets;
+  timeouts: StageTimeouts;
   /** Notification receiver and public address. */
   notifications: NotificationConfig;
   /** Schedule, history, alerts and cleanup. */
@@ -235,7 +235,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): L
       repeatEveryNRuns: values.REPEAT_EVERY_N_RUNS,
       httpTimeoutMs: values.HTTP_TIMEOUT_MS,
       lateDuplicateWaitMs: values.LATE_DUPLICATE_WAIT_MS,
-      budgets: {
+      timeouts: {
         collectorAvailability: values.COLLECTOR_AVAILABILITY_TIMEOUT_MS,
         apiAvailability: values.API_AVAILABILITY_TIMEOUT_MS,
         collectorAccept: values.COLLECTOR_ACCEPT_TIMEOUT_MS,

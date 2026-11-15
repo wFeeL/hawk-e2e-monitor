@@ -488,7 +488,7 @@ describe('failures', () => {
     const result = await runSendAndReceive({ ...deps,
       collector: slowCollector,
       config: { ...deps.config,
-        budgets: { ...deps.config.budgets,
+        timeouts: { ...deps.config.timeouts,
           run: 30 } } }, { sequence: 1 });
 
     expect(stageOf(result, 'api_availability')).toMatchObject({ status: 'failed',
@@ -671,7 +671,7 @@ describe('late duplicate', () => {
     const result = await runSendAndReceive({ ...deps,
       config: { ...deps.config,
         lateDuplicateWaitMs: 5000,
-        budgets: { ...deps.config.budgets,
+        timeouts: { ...deps.config.timeouts,
           cleanup: 100 } } }, { sequence: 1 });
 
     expect(stageOf(result, 'cleanup').details).toMatchObject({ recheck: 'skipped' });

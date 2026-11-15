@@ -34,7 +34,7 @@ export interface ScenarioDeps {
   randomLetters?: RandomLetters;
   /** Poll schedule override, for tests. */
   pollScheduleMs?: readonly number[];
-  /** Cancels the run from outside like its own deadline does; cleanup still runs with its own budget. */
+  /** Cancels the run from outside like its own deadline does; cleanup still runs with its own timeout. */
   signal?: AbortSignal;
 }
 
@@ -145,7 +145,7 @@ export function toCleanupResult(stage: StageResult): CleanupResult {
  */
 export async function runSendAndReceive(deps: ScenarioDeps, options: PlanOptions): Promise<RunResult> {
   const { config, clock } = deps;
-  const { budgets } = config;
+  const { timeouts } = config;
   const plan = planRun(config, options, SCENARIO_NAME, deps.randomLetters);
   const state: ScenarioState = { sendMayHaveReached: false };
   const context: ScenarioContext = { config,
@@ -161,16 +161,16 @@ export async function runSendAndReceive(deps: ScenarioDeps, options: PlanOptions
   const timer = new AbortController();
   const unfollow = followOutsideSignal(run, deps.signal);
 
-  clock.sleep(budgets.run, timer.signal).then(() => {
+  clock.sleep(timeouts.run, timer.signal).then(() => {
     run.abort();
   }, () => undefined);
 
   const specs: Array<StageSpec<ScenarioContext>> = [
-    collectorAvailabilityStage(budgets.collectorAvailability),
-    apiAvailabilityStage(budgets.apiAvailability),
-    collectorAcceptStage(budgets.collectorAccept),
-    eventVisibleStage(budgets.eventVisible),
-    eventRepeatedStage(budgets.eventRepeated),
+    collectorAvailabilityStage(timeouts.collectorAvailability),
+    apiAvailabilityStage(timeouts.apiAvailability),
+    collectorAcceptStage(timeouts.collectorAccept),
+    eventVisibleStage(timeouts.eventVisible),
+    eventRepeatedStage(timeouts.eventRepeated),
   ];
   const stages: StageResult[] = [];
   let skipRest = false;
@@ -194,8 +194,8 @@ export async function runSendAndReceive(deps: ScenarioDeps, options: PlanOptions
   timer.abort();
   unfollow();
 
-  // Cleanup has its own budget outside the run deadline, so its signal is never aborted by the run.
-  stages.push(await runStage(cleanupStage(budgets.cleanup), context, { clock,
+  // Cleanup has its own timeout outside the run deadline, so its signal is never aborted by the run.
+  stages.push(await runStage(cleanupStage(timeouts.cleanup), context, { clock,
     runSignal: new AbortController().signal }));
 
   const verdict = decideVerdict(stages, state);

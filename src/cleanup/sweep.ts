@@ -7,7 +7,7 @@ import type { Clock } from '../time/clock.js';
 
 const PAGE_SIZE = 50;
 const MAX_PAGES = 10;
-const BUDGET_FACTOR = 4;
+const TIMEOUT_FACTOR = 4;
 const FIRST_PASS_DELAY_MS = 300_000;
 const RUN_ID_PATTERN = /^[a-z]{16}$/u;
 
@@ -192,11 +192,11 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
       skipped: 0,
       lateMarked: 0,
       pages: 0 };
-    const budget = new AbortController();
-    const signal = AbortSignal.any([outer, budget.signal]);
+    const timeout = new AbortController();
+    const signal = AbortSignal.any([outer, timeout.signal]);
 
-    clock.sleep(config.budgets.cleanup * BUDGET_FACTOR, budget.signal).then(() => {
-      budget.abort();
+    clock.sleep(config.timeouts.cleanup * TIMEOUT_FACTOR, timeout.signal).then(() => {
+      timeout.abort();
     }, () => undefined);
 
     try {
@@ -229,7 +229,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
       logger.warn('sweep failed', { error: report.error,
         ...report });
     } finally {
-      budget.abort();
+      timeout.abort();
     }
 
     if (report.error === undefined && (report.removed > 0 || report.lateMarked > 0)) {

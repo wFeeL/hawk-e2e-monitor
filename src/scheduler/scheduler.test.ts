@@ -526,7 +526,7 @@ describe('failures of the runner', () => {
     expect(rowOf(history, 'raaaaaaaaaaaaaaa').status).toBe('aborted');
   });
 
-  it('keeps the scenario busy for the cleanup budget after the abort, then a tick runs again', async () => {
+  it('keeps the scenario busy for the cleanup timeout after the abort, then a tick runs again', async () => {
     const { scheduler, clock, runners, history } = setup({ scenarios: [SEND] });
 
     scheduler.start();

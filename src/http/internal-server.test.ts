@@ -8,7 +8,7 @@ import { createInternalServer } from './internal-server.js';
 import type { InternalServerOptions } from './internal-server.js';
 
 const HUNG_TIMEOUT_MS = 50;
-const HANG_BUDGET_MS = 1000;
+const HANG_TIMEOUT_MS = 1000;
 
 const servers: Server[] = [];
 
@@ -108,7 +108,7 @@ describe('internal server', () => {
     const res = await call('/readyz');
 
     expect(res.status).toBe(503);
-    expect(performance.now() - started).toBeLessThan(HANG_BUDGET_MS);
+    expect(performance.now() - started).toBeLessThan(HANG_TIMEOUT_MS);
     expect(seen?.aborted).toBe(true);
   });
 

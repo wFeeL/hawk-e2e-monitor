@@ -18,7 +18,7 @@ describe('loadConfig', () => {
     expect(config.repeatEveryNRuns).toBe(6);
     expect(config.httpTimeoutMs).toBe(5000);
     expect(config.lateDuplicateWaitMs).toBe(5000);
-    expect(config.budgets).toEqual({
+    expect(config.timeouts).toEqual({
       collectorAvailability: 15_000,
       apiAvailability: 15_000,
       collectorAccept: 10_000,
@@ -72,7 +72,7 @@ describe('loadConfig', () => {
       repeatEveryNRuns: 0,
       httpTimeoutMs: 1000,
       lateDuplicateWaitMs: 1234,
-      budgets: {
+      timeouts: {
         collectorAvailability: 2000,
         apiAvailability: 3000,
         collectorAccept: 4000,
@@ -213,7 +213,7 @@ describe('loadConfig', () => {
       message: 'must be a whole number, 0 or more' }]);
   });
 
-  it('HTTP_TIMEOUT_MS must be less than every stage budget', () => {
+  it('HTTP_TIMEOUT_MS must be less than every stage timeout', () => {
     const errors = expectErrors(loadConfig(validEnv({ HTTP_TIMEOUT_MS: '10000',
       CLEANUP_TIMEOUT_MS: '10000' }))).filter(error => error.variable === 'HTTP_TIMEOUT_MS');
 

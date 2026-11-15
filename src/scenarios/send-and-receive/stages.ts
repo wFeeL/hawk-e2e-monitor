@@ -70,13 +70,13 @@ export function eventMessage(context: ScenarioContext): CollectorMessage {
 
 /**
  * Stage 1: the collector answers `/health` and rejects an unknown token over WebSocket.
- * @param budgetMs Time limit of the stage.
+ * @param timeoutMs Time limit of the stage.
  * @returns Stage spec.
  */
-export function collectorAvailabilityStage(budgetMs: number): StageSpec<ScenarioContext> {
+export function collectorAvailabilityStage(timeoutMs: number): StageSpec<ScenarioContext> {
   return {
     name: 'collector_availability',
-    budgetMs,
+    timeoutMs,
     run: async ({ collector }, signal) => {
       await collector.health(signal);
       await collector.probeInvalidToken(signal);
@@ -88,13 +88,13 @@ export function collectorAvailabilityStage(budgetMs: number): StageSpec<Scenario
 
 /**
  * Stage 2: the monitor can sign in, the token belongs to the project and the workspace has quota.
- * @param budgetMs Time limit of the stage.
+ * @param timeoutMs Time limit of the stage.
  * @returns Stage spec.
  */
-export function apiAvailabilityStage(budgetMs: number): StageSpec<ScenarioContext> {
+export function apiAvailabilityStage(timeoutMs: number): StageSpec<ScenarioContext> {
   return {
     name: 'api_availability',
-    budgetMs,
+    timeoutMs,
     run: async ({ api, config }, signal): Promise<StageOutcome> => {
       const { projectId, integrationToken } = config.hawk;
 
@@ -135,14 +135,14 @@ export function apiAvailabilityStage(budgetMs: number): StageSpec<ScenarioContex
 
 /**
  * Stage 3: sends the event over the planned transport.
- * @param budgetMs Time limit of the stage.
+ * @param timeoutMs Time limit of the stage.
  * @param beforeSend Called right before the first send, for what must be in place before the event leaves.
  * @returns Stage spec.
  */
-export function collectorAcceptStage(budgetMs: number, beforeSend?: () => void): StageSpec<ScenarioContext> {
+export function collectorAcceptStage(timeoutMs: number, beforeSend?: () => void): StageSpec<ScenarioContext> {
   return {
     name: 'collector_accept',
-    budgetMs,
+    timeoutMs,
     run: async (context, signal): Promise<StageOutcome> => {
       const { collector, clock, plan, state } = context;
 
@@ -247,13 +247,13 @@ export function isOurEvent(event: FoundEvent, plan: RunPlan, instanceId: string)
 
 /**
  * Stage 4: waits until the event is visible in the API and checks its fields.
- * @param budgetMs Time limit of the stage.
+ * @param timeoutMs Time limit of the stage.
  * @returns Stage spec.
  */
-export function eventVisibleStage(budgetMs: number): StageSpec<ScenarioContext> {
+export function eventVisibleStage(timeoutMs: number): StageSpec<ScenarioContext> {
   return {
     name: 'event_visible',
-    budgetMs,
+    timeoutMs,
     run: async (context, signal): Promise<StageOutcome> => {
       const { api, clock, config, plan, state } = context;
       const { projectId } = config.hawk;
@@ -326,13 +326,13 @@ export function eventVisibleStage(budgetMs: number): StageSpec<ScenarioContext> 
 
 /**
  * Stage 5: sends the event again and waits until Hawk counts it twice.
- * @param budgetMs Time limit of the stage.
+ * @param timeoutMs Time limit of the stage.
  * @returns Stage spec.
  */
-export function eventRepeatedStage(budgetMs: number): StageSpec<ScenarioContext> {
+export function eventRepeatedStage(timeoutMs: number): StageSpec<ScenarioContext> {
   return {
     name: 'event_repeated',
-    budgetMs,
+    timeoutMs,
     run: async (context, signal): Promise<StageOutcome> => {
       const { api, clock, collector, config, plan, state } = context;
       const { projectId } = config.hawk;
@@ -431,13 +431,13 @@ function cleanupFailure(error: unknown): unknown {
 
 /**
  * Stage 6: removes the test event when it is ours.
- * @param budgetMs Time limit of the stage.
+ * @param timeoutMs Time limit of the stage.
  * @returns Stage spec.
  */
-export function cleanupStage(budgetMs: number): StageSpec<ScenarioContext> {
+export function cleanupStage(timeoutMs: number): StageSpec<ScenarioContext> {
   return {
     name: 'cleanup',
-    budgetMs,
+    timeoutMs,
     run: async ({ api, clock, config, plan, state }, signal): Promise<StageOutcome> => {
       const { projectId } = config.hawk;
       const refuse = (event: FoundEvent): CheckError => new CheckError('cleanup_refused', { detail: `"${event.title}" (${event.originalEventId})` });
@@ -492,7 +492,7 @@ export function cleanupStage(budgetMs: number): StageSpec<ScenarioContext> {
         }
 
         if (cut) {
-          // The budget ran out during the pause; removal still gets its try.
+          // The timeout ran out during the pause; removal still gets its try.
           details.recheck = 'skipped';
           details.warning = 'The event count was not rechecked: the cleanup time limit cut the wait';
         } else {

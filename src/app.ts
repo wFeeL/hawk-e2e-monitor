@@ -87,7 +87,7 @@ export async function startApp(config: Config, deps: AppDeps): Promise<AppHandle
     port: (server.address() as AddressInfo).port,
     stop: () => {
       stopPromise ??= new Promise<void>((resolve, reject) => {
-        // Connections still busy after the budget are cut so shutdown ends.
+        // Connections still busy after the timeout are cut so shutdown ends.
         const timer = setTimeout(() => {
           server.closeAllConnections();
         }, config.shutdownTimeoutMs);

@@ -130,7 +130,7 @@ describe('F2 variables', () => {
 });
 
 describe('F2 combinations', () => {
-  it('the default timeouts pass both budget formulas', () => {
+  it('the default timeouts pass both timeout formulas', () => {
     // F2: 15000 + 15000 + 30000 + 10000 + max(120000, 125000) + 120000 = 315000; F1 is 280000.
     expectOk(loadConfig(validEnv()));
   });

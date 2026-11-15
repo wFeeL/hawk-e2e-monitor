@@ -17,7 +17,7 @@ describe('runStage', () => {
   it('ok stage records duration', async () => {
     const clock = createFakeClock();
     const spec: StageSpec<undefined> = { name: 'api_availability',
-      budgetMs: 1000,
+      timeoutMs: 1000,
       run: async () => {
         await clock.sleep(250);
 
@@ -41,7 +41,7 @@ describe('runStage', () => {
     const clock = createFakeClock();
     const error = new CheckError('quota_exhausted', { detail: '10/10' });
     const result = await runStage({ name: 'api_availability',
-      budgetMs: 1000,
+      timeoutMs: 1000,
       run: () => Promise.resolve({ status: 'failed',
         error }) }, undefined, { clock,
       runSignal: neverAbort() });
@@ -55,7 +55,7 @@ describe('runStage', () => {
   it('uncertain keeps the cause class', async () => {
     const clock = createFakeClock();
     const result = await runStage({ name: 'collector_accept',
-      budgetMs: 1000,
+      timeoutMs: 1000,
       run: () => Promise.resolve({ status: 'uncertain',
         error: new CheckError('collector_unavailable', { code: 'TIMEOUT' }) }) }, undefined, { clock,
       runSignal: neverAbort() });
@@ -68,7 +68,7 @@ describe('runStage', () => {
   it('failed without an error is monitor_internal', async () => {
     const clock = createFakeClock();
     const result = await runStage({ name: 'cleanup',
-      budgetMs: 1000,
+      timeoutMs: 1000,
       run: () => Promise.resolve({ status: 'failed' }) }, undefined, { clock,
       runSignal: neverAbort() });
 
@@ -79,7 +79,7 @@ describe('runStage', () => {
   it('skipped from run is recorded as is', async () => {
     const clock = createFakeClock();
     const result = await runStage({ name: 'event_repeated',
-      budgetMs: 1000,
+      timeoutMs: 1000,
       run: () => Promise.resolve({ status: 'skipped' }) }, undefined, { clock,
       runSignal: neverAbort() });
 
@@ -90,17 +90,17 @@ describe('runStage', () => {
   it('throwing non-CheckError is monitor_internal', async () => {
     const clock = createFakeClock();
     const thrown = await runStage({ name: 'cleanup',
-      budgetMs: 1000,
+      timeoutMs: 1000,
       run: () => Promise.reject(new Error('boom')) }, undefined, { clock,
       runSignal: neverAbort() });
     const sync = await runStage({ name: 'cleanup',
-      budgetMs: 1000,
+      timeoutMs: 1000,
       run: () => {
         throw new TypeError('sync boom');
       } }, undefined, { clock,
       runSignal: neverAbort() });
     const stringy = await runStage({ name: 'cleanup',
-      budgetMs: 1000,
+      timeoutMs: 1000,
       run: () => Promise.reject(new Error('unused')).catch(() => Promise.reject('plain text')) }, undefined, { clock,
       runSignal: neverAbort() });
 
@@ -115,7 +115,7 @@ describe('runStage', () => {
   it('a thrown CheckError keeps its class', async () => {
     const clock = createFakeClock();
     const result = await runStage({ name: 'cleanup',
-      budgetMs: 1000,
+      timeoutMs: 1000,
       run: () => Promise.reject(new CheckError('api_forbidden')) }, undefined, { clock,
       runSignal: neverAbort() });
 
@@ -128,7 +128,7 @@ describe('runStage', () => {
   ] as const)('stage ignoring abort becomes monitor_internal after grace, %s', async (_name, steps) => {
     const clock = createFakeClock();
     const running = runStage({ name: 'event_visible',
-      budgetMs: 1000,
+      timeoutMs: 1000,
       run: never }, undefined, { clock,
       runSignal: neverAbort(),
       graceMs: 500 });
@@ -146,10 +146,10 @@ describe('runStage', () => {
     expect(clock.pending()).toBe(0);
   });
 
-  it('a stage that honors the budget abort keeps its own result', async () => {
+  it('a stage that honors the timeout abort keeps its own result', async () => {
     const clock = createFakeClock();
     const running = runStage({ name: 'event_visible',
-      budgetMs: 1000,
+      timeoutMs: 1000,
       run: (_context, signal) => new Promise<StageOutcome>((resolve) => {
         signal.addEventListener('abort', () => {
           resolve({ status: 'failed',
@@ -168,12 +168,12 @@ describe('runStage', () => {
     const clock = createFakeClock();
     const controller = new AbortController();
     const ignoring = runStage({ name: 'event_visible',
-      budgetMs: 100_000,
+      timeoutMs: 100_000,
       run: never }, undefined, { clock,
       runSignal: controller.signal,
       graceMs: 500 });
     const honoring = runStage({ name: 'event_visible',
-      budgetMs: 100_000,
+      timeoutMs: 100_000,
       run: (_context, signal) => new Promise<StageOutcome>((resolve) => {
         signal.addEventListener('abort', () => {
           resolve({ status: 'failed',
@@ -195,7 +195,7 @@ describe('runStage', () => {
     const clock = createFakeClock();
     const controller = new AbortController();
     const running = runStage({ name: 'event_visible',
-      budgetMs: 100_000,
+      timeoutMs: 100_000,
       run: never }, undefined, { clock,
       runSignal: controller.signal,
       graceMs: 500 });
@@ -211,7 +211,7 @@ describe('runStage', () => {
     const clock = createFakeClock();
     const controller = new AbortController();
     const running = runStage({ name: 'api_availability',
-      budgetMs: 100_000,
+      timeoutMs: 100_000,
       run: (_context, signal) => new Promise<StageOutcome>((_resolve, reject) => {
         signal.addEventListener('abort', () => {
           reject(new CheckError('api_unavailable', { code: 'TIMEOUT' }));
@@ -228,10 +228,10 @@ describe('runStage', () => {
       culprit: 'monitor' });
   });
 
-  it('a stage that throws after its own budget keeps the thrown class', async () => {
+  it('a stage that throws after its own timeout keeps the thrown class', async () => {
     const clock = createFakeClock();
     const running = runStage({ name: 'api_availability',
-      budgetMs: 1000,
+      timeoutMs: 1000,
       run: (_context, signal) => new Promise<StageOutcome>((_resolve, reject) => {
         signal.addEventListener('abort', () => {
           reject(new CheckError('api_unavailable', { code: 'TIMEOUT' }));
@@ -252,7 +252,7 @@ describe('runStage', () => {
 
     controller.abort();
     const running = runStage({ name: 'cleanup',
-      budgetMs: 1000,
+      timeoutMs: 1000,
       run: (_context, signal) => Promise.resolve({ status: signal.aborted ? 'failed' : 'ok',
         error: new CheckError('api_unavailable') }) }, undefined, { clock,
       runSignal: controller.signal });
@@ -266,7 +266,7 @@ describe('runStage', () => {
     const clock = createFakeClock();
     const controller = new AbortController();
     const result = await runStage({ name: 'cleanup',
-      budgetMs: 1000,
+      timeoutMs: 1000,
       run: () => Promise.resolve({ status: 'ok' }) }, undefined, { clock,
       runSignal: controller.signal });
 
@@ -287,7 +287,7 @@ describe('runStage', () => {
 
     try {
       const running = runStage({ name: 'event_visible',
-        budgetMs: 100,
+        timeoutMs: 100,
         run: () => new Promise<StageOutcome>((_resolve, reject) => {
           rejectLate = reject;
         }) }, undefined, { clock,
@@ -312,7 +312,7 @@ describe('runStageGroup', () => {
   it('group runs in parallel and keeps order', async () => {
     const clock = createFakeClock();
     const sleeper = (name: 'event_visible' | 'event_repeated', ms: number): StageSpec<undefined> => ({ name,
-      budgetMs: 10_000,
+      timeoutMs: 10_000,
       run: async () => {
         await clock.sleep(ms);
 

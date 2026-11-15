@@ -27,7 +27,7 @@ const QUOTA_REFUSAL: CollectorReplyOverride = { status: 402,
   body: JSON.stringify({ code: 402,
     error: true,
     message: 'Project has exceeded the events limit' }) };
-// Short budgets for tests that wait for a stage to give up; the HTTP timeout stays below each of them.
+// Short timeouts for tests that wait for a stage to give up; the HTTP timeout stays below each of them.
 const IMPATIENT = { HTTP_TIMEOUT_MS: '300',
   EVENT_VISIBLE_TIMEOUT_MS: '800' };
 

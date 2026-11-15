@@ -34,7 +34,7 @@ const FAKE_LETTER = 'a';
 const POLL_SCHEDULE_MS = [20, 40];
 const PRE_PROVISION_TIMEOUT_MS = 5000;
 
-/** Limits for healthy-path tests: far above what a loaded CI machine needs, so a slow start never fails a run. `HTTP_TIMEOUT_MS` stays below every budget. */
+/** Limits for healthy-path tests: far above what a loaded CI machine needs, so a slow start never fails a run. `HTTP_TIMEOUT_MS` stays below every timeout. */
 const SHORT_LIMITS: Record<string, string> = {
   HTTP_TIMEOUT_MS: '1000',
   COLLECTOR_AVAILABILITY_TIMEOUT_MS: '2000',

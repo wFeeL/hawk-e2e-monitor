@@ -6,7 +6,7 @@ import type { AppHandle } from './app.js';
 import { testConfig } from './test-support/config.js';
 import { memoryLogger } from './test-support/logger.js';
 
-const BUDGET_MS = 200;
+const TIMEOUT_MS = 200;
 const SETTLE_MS = 50;
 const MIN_STOP_MS = 150;
 const MAX_STOP_MS = 1000;
@@ -59,8 +59,8 @@ describe('startApp', () => {
     await expect(Promise.all([first, second])).resolves.toBeDefined();
   });
 
-  it('stop does not wait for hanging connections longer than the budget', async () => {
-    const app = await launch({ shutdownTimeoutMs: BUDGET_MS });
+  it('stop does not wait for hanging connections longer than the timeout', async () => {
+    const app = await launch({ shutdownTimeoutMs: TIMEOUT_MS });
     const socket = net.connect(app.port, '127.0.0.1');
     const noop = (): void => undefined;
 

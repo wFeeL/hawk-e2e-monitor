@@ -46,7 +46,7 @@ type Step = Array<StageSpec<NotificationContext>>;
  */
 export async function runCheckNotification(deps: NotificationDeps, options: PlanOptions): Promise<RunResult> {
   const { config, clock, receiver } = deps;
-  const { budgets } = config;
+  const { timeouts } = config;
   const settings = notificationSettings(config);
   const plan = planRun(config, options, 'check-notification', deps.randomLetters);
   const retry = deps.retryDelaysMs === undefined ? {} : { retryDelaysMs: deps.retryDelaysMs };
@@ -83,17 +83,17 @@ export async function runCheckNotification(deps: NotificationDeps, options: Plan
   const timer = new AbortController();
   const unfollow = followOutsideSignal(run, deps.signal);
 
-  clock.sleep(budgets.run, timer.signal).then(() => {
+  clock.sleep(timeouts.run, timer.signal).then(() => {
     run.abort();
   }, () => undefined);
 
   const steps: Step[] = [
-    [collectorAvailabilityStage(budgets.collectorAvailability)],
-    [apiAvailabilityStage(budgets.apiAvailability)],
+    [collectorAvailabilityStage(timeouts.collectorAvailability)],
+    [apiAvailabilityStage(timeouts.apiAvailability)],
     [notificationSetupStage(settings.setupTimeoutMs)],
-    [collectorAcceptStage(budgets.collectorAccept, notificationBeforeSend(context))],
-    [eventVisibleStage(budgets.eventVisible), notificationFormedStage(settings.timeoutMs + config.httpTimeoutMs)],
-    [eventRepeatedStage(budgets.eventRepeated)],
+    [collectorAcceptStage(timeouts.collectorAccept, notificationBeforeSend(context))],
+    [eventVisibleStage(timeouts.eventVisible), notificationFormedStage(settings.timeoutMs + config.httpTimeoutMs)],
+    [eventRepeatedStage(timeouts.eventRepeated)],
   ];
   const stages: StageResult[] = [];
 
@@ -124,8 +124,8 @@ export async function runCheckNotification(deps: NotificationDeps, options: Plan
     timer.abort();
     unfollow();
 
-    // Cleanup has its own budget outside the run deadline, so its signal is never aborted by the run.
-    stages.push(await runStage(cleanupStage(budgets.cleanup), context, { clock,
+    // Cleanup has its own timeout outside the run deadline, so its signal is never aborted by the run.
+    stages.push(await runStage(cleanupStage(timeouts.cleanup), context, { clock,
       runSignal: new AbortController().signal }));
 
     if (stages.some(stage => stage.name === 'collector_accept' && stage.status !== 'skipped')) {

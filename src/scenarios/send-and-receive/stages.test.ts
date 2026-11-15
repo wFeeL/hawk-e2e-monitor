@@ -13,7 +13,7 @@ import { planRun } from './plan.js';
 import { apiAvailabilityStage, checkEventFields, cleanupStage, collectorAcceptStage, collectorAvailabilityStage, eventVisibleStage, isOurEvent } from './stages.js';
 import type { ScenarioContext } from './stages.js';
 
-const BUDGET_MS = 2000;
+const TIMEOUT_MS = 2000;
 const QUOTA_REFUSAL = JSON.stringify({ code: 402,
   error: true,
   message: 'Project has exceeded the events limit' });
@@ -50,7 +50,7 @@ function scenario(options: TestScenarioOptions = {}): ReturnType<typeof createTe
 
 describe('collectorAvailabilityStage', () => {
   it('is ok on a healthy collector', async () => {
-    const result = await run(collectorAvailabilityStage(BUDGET_MS), scenario().context);
+    const result = await run(collectorAvailabilityStage(TIMEOUT_MS), scenario().context);
 
     expect(result.status).toBe('ok');
   });
@@ -60,7 +60,7 @@ describe('collectorAvailabilityStage', () => {
       redis: false,
       mongo: true };
 
-    const result = await run(collectorAvailabilityStage(BUDGET_MS), scenario().context);
+    const result = await run(collectorAvailabilityStage(TIMEOUT_MS), scenario().context);
 
     expect(result).toMatchObject({ status: 'failed',
       errorClass: 'collector_dependency_error',
@@ -73,7 +73,7 @@ describe('collectorAvailabilityStage', () => {
         error: false,
         message: 'OK' }) });
 
-    const result = await run(collectorAvailabilityStage(BUDGET_MS), scenario().context);
+    const result = await run(collectorAvailabilityStage(TIMEOUT_MS), scenario().context);
 
     expect(result.errorClass).toBe('collector_unexpected_response');
   });
@@ -82,7 +82,7 @@ describe('collectorAvailabilityStage', () => {
 describe('apiAvailabilityStage', () => {
   it('is ok on a healthy API', async () => {
     const { context } = scenario();
-    const result = await run(apiAvailabilityStage(BUDGET_MS), context);
+    const result = await run(apiAvailabilityStage(TIMEOUT_MS), context);
 
     expect(result.status).toBe('ok');
     expect(result.details?.warning).toBeUndefined();
@@ -93,7 +93,7 @@ describe('apiAvailabilityStage', () => {
       eventsLimit: 1000,
       billingPeriodEventsCount: 12 };
 
-    const result = await run(apiAvailabilityStage(BUDGET_MS), scenario().context);
+    const result = await run(apiAvailabilityStage(TIMEOUT_MS), scenario().context);
 
     expect(result.details?.quota).toEqual({ eventsCount: 12,
       eventsLimit: 1000 });
@@ -104,7 +104,7 @@ describe('apiAvailabilityStage', () => {
       eventsLimit: 100,
       billingPeriodEventsCount: 95 };
 
-    const result = await run(apiAvailabilityStage(BUDGET_MS), scenario().context);
+    const result = await run(apiAvailabilityStage(TIMEOUT_MS), scenario().context);
 
     expect(result.details).toEqual({ warning: 'Event quota is almost used: 95/100',
       quota: { eventsCount: 95,
@@ -114,7 +114,7 @@ describe('apiAvailabilityStage', () => {
   it('token_mismatch when the project has another token', async () => {
     hawk.api.knobs.projectToken = encodeToken('11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222');
 
-    const result = await run(apiAvailabilityStage(BUDGET_MS), scenario().context);
+    const result = await run(apiAvailabilityStage(TIMEOUT_MS), scenario().context);
 
     expect(result).toMatchObject({ status: 'failed',
       errorClass: 'token_mismatch',
@@ -124,7 +124,7 @@ describe('apiAvailabilityStage', () => {
   it('token_mismatch when the API token does not decode', async () => {
     hawk.api.knobs.projectToken = 'not a token';
 
-    const result = await run(apiAvailabilityStage(BUDGET_MS), scenario().context);
+    const result = await run(apiAvailabilityStage(TIMEOUT_MS), scenario().context);
 
     expect(result.errorClass).toBe('token_mismatch');
   });
@@ -134,7 +134,7 @@ describe('apiAvailabilityStage', () => {
       eventsLimit: 100,
       billingPeriodEventsCount: 0 };
 
-    const result = await run(apiAvailabilityStage(BUDGET_MS), scenario().context);
+    const result = await run(apiAvailabilityStage(TIMEOUT_MS), scenario().context);
 
     expect(result).toMatchObject({ status: 'failed',
       errorClass: 'workspace_blocked',
@@ -146,7 +146,7 @@ describe('apiAvailabilityStage', () => {
       eventsLimit: 100,
       billingPeriodEventsCount: 100 };
 
-    const result = await run(apiAvailabilityStage(BUDGET_MS), scenario().context);
+    const result = await run(apiAvailabilityStage(TIMEOUT_MS), scenario().context);
 
     expect(result).toMatchObject({ status: 'failed',
       errorClass: 'quota_exhausted',
@@ -159,7 +159,7 @@ describe('apiAvailabilityStage', () => {
       eventsLimit: 100,
       billingPeriodEventsCount: 95 };
 
-    const result = await run(apiAvailabilityStage(BUDGET_MS), scenario().context);
+    const result = await run(apiAvailabilityStage(TIMEOUT_MS), scenario().context);
 
     expect(result.status).toBe('ok');
     expect(result.details?.warning).toBe('Event quota is almost used: 95/100');
@@ -170,7 +170,7 @@ describe('apiAvailabilityStage', () => {
       eventsLimit: 100,
       billingPeriodEventsCount: 90 };
 
-    const result = await run(apiAvailabilityStage(BUDGET_MS), scenario().context);
+    const result = await run(apiAvailabilityStage(TIMEOUT_MS), scenario().context);
 
     expect(result.details?.warning).toBeUndefined();
   });
@@ -178,7 +178,7 @@ describe('apiAvailabilityStage', () => {
   it('api_unavailable when the API is down', async () => {
     hawk.api.knobs.down = true;
 
-    const result = await run(apiAvailabilityStage(BUDGET_MS), scenario().context);
+    const result = await run(apiAvailabilityStage(TIMEOUT_MS), scenario().context);
 
     expect(result).toMatchObject({ status: 'failed',
       errorClass: 'api_unavailable' });
@@ -188,7 +188,7 @@ describe('apiAvailabilityStage', () => {
 describe('collectorAcceptStage', () => {
   it.each(['http', 'ws'] as const)('is ok over %s and the event reaches the store', async (transport) => {
     const { context, plan } = scenario({ transport });
-    const result = await run(collectorAcceptStage(BUDGET_MS), context);
+    const result = await run(collectorAcceptStage(TIMEOUT_MS), context);
 
     expect(result.status).toBe('ok');
     expect(context.state.sendOutcome?.kind).toBe('accepted');
@@ -211,7 +211,7 @@ describe('collectorAcceptStage', () => {
   it('calls beforeSend before the event reaches the collector', async () => {
     const { context } = scenario();
     let postsAtHook = -1;
-    const result = await run(collectorAcceptStage(BUDGET_MS, () => {
+    const result = await run(collectorAcceptStage(TIMEOUT_MS, () => {
       postsAtHook = hawk.collector.posts;
     }), context);
 
@@ -223,7 +223,7 @@ describe('collectorAcceptStage', () => {
   it('payload carries one backtrace frame', async () => {
     const { context } = scenario();
 
-    await run(collectorAcceptStage(BUDGET_MS), context);
+    await run(collectorAcceptStage(TIMEOUT_MS), context);
 
     const [stored] = hawk.store.all(hawk.projectId);
 
@@ -238,7 +238,7 @@ describe('collectorAcceptStage', () => {
       body: QUOTA_REFUSAL });
 
     const { context } = scenario();
-    const result = await run(collectorAcceptStage(BUDGET_MS), context);
+    const result = await run(collectorAcceptStage(TIMEOUT_MS), context);
 
     expect(result).toMatchObject({ status: 'failed',
       errorClass: 'quota_exhausted',
@@ -251,7 +251,7 @@ describe('collectorAcceptStage', () => {
 
     const { context } = scenario({ env: TIMEOUT_LIMITS });
     const before = context.clock.monotonicMs();
-    const result = await run(collectorAcceptStage(BUDGET_MS), context);
+    const result = await run(collectorAcceptStage(TIMEOUT_MS), context);
 
     expect(result).toMatchObject({ status: 'uncertain',
       errorClass: 'collector_unavailable',
@@ -361,11 +361,11 @@ describe('isOurEvent', () => {
 });
 
 describe('cleanupStage pause', () => {
-  it('skips the recheck when the pause is cut by the budget, and still tries to remove', async () => {
+  it('skips the recheck when the pause is cut by the timeout, and still tries to remove', async () => {
     const { context } = scenario();
 
-    await run(collectorAcceptStage(BUDGET_MS), context);
-    await run(eventVisibleStage(BUDGET_MS), context);
+    await run(collectorAcceptStage(TIMEOUT_MS), context);
+    await run(eventVisibleStage(TIMEOUT_MS), context);
 
     const slow: ScenarioContext = { ...context,
       config: { ...context.config,

@@ -40,7 +40,7 @@ export interface SchedulerDeps {
   clock: Clock;
   /** Log. */
   logger: Logger;
-  /** Configuration with the budgets and the `monitoring` settings. */
+  /** Configuration with the timeouts and the `monitoring` settings. */
   config: Config;
   /** Masks secrets in the text of an exception of a scenario. */
   redact: Redactor;
@@ -133,7 +133,7 @@ export interface Scheduler {
   health(nowMonoMs?: number): SchedulerHealth;
   /**
    * Lists runs whose scenario may still be touching Hawk.
-   * @returns Ids of the running runs and of the abandoned ones until their cleanup budget passes.
+   * @returns Ids of the running runs and of the abandoned ones until their cleanup timeout passes.
    */
   activeRunIds(): Set<string>;
   /**
@@ -201,11 +201,11 @@ function describe(error: unknown): string {
  */
 export function createScheduler(deps: SchedulerDeps): Scheduler {
   const { history, clock, logger, config, redact } = deps;
-  const { budgets, monitoring } = config;
+  const { timeouts, monitoring } = config;
   const newRunId = deps.newRunId ?? ((): string => createRunId());
   const intervalOf = deps.intervalOf ?? ((): number => monitoring.intervalMs);
   const listeners = deps.onRunFinished === undefined ? [] : [deps.onRunFinished].flat();
-  const watchdogMs = budgets.run + budgets.cleanup + monitoring.watchdogGraceMs;
+  const watchdogMs = timeouts.run + timeouts.cleanup + monitoring.watchdogGraceMs;
   const states = new Map<ScenarioName, ScenarioState>();
   const stopper = new AbortController();
   let started = false;
@@ -378,7 +378,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
 
     // The scenario stays busy while its cleanup may still be running.
-    after(budgets.cleanup, handle.timers.signal, () => {
+    after(timeouts.cleanup, handle.timers.signal, () => {
       release(state, handle);
     });
   };

@@ -65,13 +65,13 @@ function escapedLength(text: string): number {
 }
 
 /**
- * Cuts a text so that its escaped form fits a budget, never inside an entity.
+ * Cuts a text so that its escaped form fits a limit, never inside an entity.
  * @param text Plain text.
- * @param budget Characters allowed after escaping.
+ * @param limit Characters allowed after escaping.
  * @returns The text, or its start followed by an ellipsis.
  */
-function fit(text: string, budget: number): string {
-  if (escapedLength(text) <= budget) {
+function fit(text: string, limit: number): string {
+  if (escapedLength(text) <= limit) {
     return text;
   }
 
@@ -81,7 +81,7 @@ function fit(text: string, budget: number): string {
   for (const char of text) {
     used += (ESCAPES.get(char) ?? char).length;
 
-    if (used > budget) {
+    if (used > limit) {
       break;
     }
 
