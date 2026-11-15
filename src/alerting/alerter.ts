@@ -295,7 +295,10 @@ export function createAlerter(deps: AlerterDeps): Alerter {
       const decision = decideAlert(previous, row, monitoring, now);
       const { kind } = decision;
 
-      memory.set(row.scenario, decision.state);
+      // A state derived without the stored one would hide the real episode from every later run, so it is not kept.
+      if (readError === undefined) {
+        memory.set(row.scenario, decision.state);
+      }
 
       const text = kind === undefined
         ? undefined
