@@ -909,6 +909,37 @@ describe('storage failure', () => {
   });
 });
 
+describe('sequence while the history cannot be written', () => {
+  it('keeps counting runs when startRun fails, so the transport still alternates', async () => {
+    const control = { broken: true };
+    const real = createHistory(openDatabase(':memory:'));
+    const { scheduler, clock, runners } = setup({ scenarios: [SEND],
+      history: { ...real,
+        startRun: (start) => {
+          if (control.broken) {
+            throw new Error('disk full');
+          }
+
+          real.startRun(start);
+        } } });
+
+    scheduler.start();
+    await settle(clock);
+    callOf(runners[SEND], 0).resolve();
+    await clock.advance(INTERVAL_MS);
+    callOf(runners[SEND], 1).resolve();
+    await clock.advance(INTERVAL_MS);
+    expect([0, 1, 2].map(index => callOf(runners[SEND], index).sequence)).toEqual([1, 2, 3]);
+    control.broken = false;
+    callOf(runners[SEND], 2).resolve();
+    await clock.advance(INTERVAL_MS);
+    expect(callOf(runners[SEND], 3).sequence).toBe(4);
+    callOf(runners[SEND], 3).resolve();
+    await clock.advance(INTERVAL_MS);
+    expect(callOf(runners[SEND], 4).sequence).toBe(5);
+  });
+});
+
 describe('subscribers', () => {
   it('calls every subscriber in its own try, and an error of one does not stop the others', async () => {
     const seen: string[] = [];

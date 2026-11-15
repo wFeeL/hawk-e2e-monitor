@@ -183,6 +183,8 @@ interface ScenarioState {
   hungStreak: number;
   /** Last number given, for a failing history. */
   lastSequence: number;
+  /** Number of the last run whose start the history could not store; the next number must follow it. */
+  unwritten?: number;
 }
 
 /**
@@ -263,7 +265,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     let sequence: number;
 
     try {
-      sequence = history.nextSequence(state.name);
+      // A run that never reached the history leaves the stored maximum behind, so the counter in memory must lead.
+      sequence = Math.max(history.nextSequence(state.name), state.unwritten === undefined ? 0 : state.unwritten + 1);
     } catch (error) {
       writeFailed('nextSequence', error);
       sequence = state.lastSequence + 1;
@@ -416,8 +419,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     try {
       history.startRun(start);
       storageFailed = false;
+      state.unwritten = undefined;
     } catch (error) {
       writeFailed('startRun', error);
+      state.unwritten = sequence;
     }
 
     state.running = handle;
