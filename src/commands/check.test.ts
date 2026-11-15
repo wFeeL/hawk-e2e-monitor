@@ -14,6 +14,9 @@ import type { Config } from '../config/load.js';
 import type { NotificationDeps } from '../scenarios/check-notification/run.js';
 import { runCheckCommand } from './check.js';
 import type { CheckIo } from './check.js';
+import { seedLease, tempDatabase } from '../test-support/database.js';
+import type { TempDatabase } from '../test-support/database.js';
+import { LEASE_TTL_MS } from '../storage/lease.js';
 
 const COMMAND: CheckCommand = { kind: 'check',
   scenario: 'send-and-receive-event',
@@ -331,5 +334,62 @@ describe('runCheckCommand with check-notification', () => {
     expect(stdout).toBe('');
     expect(stderr).toContain('failed monitor_internal:');
     expect(hawk.collector.posts).toBe(0);
+  });
+});
+
+describe('runCheckCommand next to a running serve', () => {
+  let database: TempDatabase;
+
+  beforeEach(async () => {
+    database = await tempDatabase();
+  });
+
+  afterEach(async () => {
+    await database.remove();
+  });
+
+  /**
+   * Runs the command with the lease of a `serve` written `ageMs` ago.
+   * @param ageMs How long ago the lease was renewed.
+   * @returns Exit code and what was written.
+   */
+  async function runWithLease(ageMs: number): Promise<Captured> {
+    const { deps } = createTestDeps(hawk);
+    const config = { ...deps.config,
+      monitoring: { ...deps.config.monitoring,
+        databasePath: database.path } };
+    const captured: Captured = { code: -1,
+      stdout: '',
+      stderr: '' };
+
+    seedLease(database.path, { pid: 4242,
+      hostname: 'box',
+      at: new Date(Date.now() - ageMs).toISOString() });
+    captured.code = await runCheckCommand(COMMAND, config, {
+      stdout: (text) => {
+        captured.stdout += text;
+      },
+      stderr: (text) => {
+        captured.stderr += text;
+      },
+    }, { pollScheduleMs: deps.pollScheduleMs });
+
+    return captured;
+  }
+
+  it('refuses while the lease is alive and sends nothing', async () => {
+    const { code, stdout, stderr } = await runWithLease(1000);
+
+    expect(code).toBe(1);
+    expect(stdout).toBe('');
+    expect(stderr).toMatch(/^serve is running for .+monitor\.db \(lease \d+ s old, pid 4242\); stop it first or start the run through serve\n$/u);
+    expect(hawk.collector.posts).toBe(0);
+    expect(hawk.api.operations).toHaveLength(0);
+  });
+
+  it('works when the lease is older than the TTL', async () => {
+    const { code } = await runWithLease(LEASE_TTL_MS + 10_000);
+
+    expect(code).toBe(0);
   });
 });

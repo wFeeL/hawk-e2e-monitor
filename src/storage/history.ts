@@ -272,6 +272,11 @@ export interface History {
    */
   setKv(key: string, value: string): void;
   /**
+   * Removes a stored value.
+   * @param key Key the value is kept under.
+   */
+  deleteKv(key: string): void;
+  /**
    * Deletes old data.
    * @param before ISO time.
    * @returns Number of runs deleted, those that finished before it; delivered or dropped alerts before it go too.
@@ -634,6 +639,9 @@ export function createHistory(db: DatabaseSync): History {
     },
     setKv(key, value) {
       run('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)', key, value);
+    },
+    deleteKv(key) {
+      run('DELETE FROM kv WHERE key = ?', key);
     },
     prune(before) {
       return transaction(() => {

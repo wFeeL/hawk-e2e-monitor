@@ -8,6 +8,11 @@ import type { FakeHawk } from '../test-support/fake-hawk/index.js';
 import { TEST_RECEIVER_SECRET } from '../test-support/env.js';
 import { createTestDeps } from '../test-support/scenario.js';
 import type { CheckIo } from './check.js';
+import { seedLease, tempDatabase } from '../test-support/database.js';
+import type { TempDatabase } from '../test-support/database.js';
+import { openDatabase } from '../storage/database.js';
+import { createHistory } from '../storage/history.js';
+import { LEASE_TTL_MS } from '../storage/lease.js';
 import { runProvisionCommand } from './provision.js';
 
 const WAIT: ProvisionCommand = { kind: 'provision',
@@ -175,5 +180,73 @@ describe('runProvisionCommand', () => {
       notifications: rest }, io)).toBe(1);
     expect(captured.stderr).toContain('RECEIVER_SECRET: is required for this command');
     expect(captured.stdout).toBe('');
+  });
+});
+
+describe('runProvisionCommand and the history file', () => {
+  let database: TempDatabase;
+
+  beforeEach(async () => {
+    database = await tempDatabase();
+    config = { ...config,
+      monitoring: { ...config.monitoring,
+        databasePath: database.path } };
+  });
+
+  afterEach(async () => {
+    await database.remove();
+  });
+
+  it('refuses while a serve lease is alive and calls nothing', async () => {
+    seedLease(database.path, { pid: 4242,
+      hostname: 'box',
+      at: new Date(Date.now() - 1000).toISOString() });
+
+    const { captured, io } = capture();
+
+    expect(await runProvisionCommand(NO_WAIT, config, io, { resolveAddress: async () => Promise.resolve(address()) })).toBe(1);
+    expect(captured.stderr).toMatch(/^serve is running for .+monitor\.db \(lease \d+ s old, pid 4242\); stop it first or start the run through serve\n$/u);
+    expect(captured.stdout).toBe('');
+    expect(hawk.api.operations).toHaveLength(0);
+  });
+
+  it('works when the lease is older than the TTL', async () => {
+    seedLease(database.path, { pid: 4242,
+      hostname: 'box',
+      at: new Date(Date.now() - LEASE_TTL_MS - 10_000).toISOString() });
+
+    expect(await runProvisionCommand(NO_WAIT, config, capture().io, { resolveAddress: async () => Promise.resolve(address()) })).toBe(0);
+  });
+
+  it('records rule_match_changed_at when the match changed, creating the file', async () => {
+    const clock = createFakeClock({ wall: new Date('2026-03-10T12:00:00.000Z') });
+
+    expect(await runProvisionCommand(NO_WAIT, config, capture().io, { clock,
+      resolveAddress: async () => Promise.resolve(address()) })).toBe(0);
+
+    const history = createHistory(openDatabase(database.path, { readOnly: true }));
+
+    expect(history.getKv('rule_match_changed_at')).toBe('2026-03-10T12:00:00.000Z');
+    history.close();
+  });
+
+  it('writes nothing when the match did not change', async () => {
+    const resolveAddress = async (): Promise<PublicAddress> => Promise.resolve(address());
+    const clock = createFakeClock({ wall: new Date('2026-03-10T12:00:00.000Z') });
+
+    await runProvisionCommand(NO_WAIT, config, capture().io, { clock,
+      resolveAddress });
+
+    const history = createHistory(openDatabase(database.path));
+
+    history.setKv('rule_match_changed_at', 'earlier');
+    history.close();
+    await runProvisionCommand(NO_WAIT, config, capture().io, { clock,
+      resolveAddress });
+
+    const reread = createHistory(openDatabase(database.path, { readOnly: true }));
+
+    expect(reread.getKv('rule_match_changed_at')).toBe('earlier');
+    reread.close();
   });
 });

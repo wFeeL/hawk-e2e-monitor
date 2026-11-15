@@ -14,8 +14,14 @@ import { scenarioSecrets } from '../scenarios/send-and-receive/run.js';
 import { systemClock } from '../time/clock.js';
 import type { Clock } from '../time/clock.js';
 import type { CheckIo } from './check.js';
+import { refusalWhileServing } from './serving.js';
+import { openDatabase } from '../storage/database.js';
+import { createHistory } from '../storage/history.js';
 
 const MS_PER_SECOND = 1000;
+
+/** Key in `kv` that holds the time the rule last changed matching. */
+export const MATCH_CHANGED_KEY = 'rule_match_changed_at';
 
 /** Replacements for the default dependencies, for tests. */
 export interface ProvisionDeps {
@@ -30,6 +36,27 @@ export interface ProvisionDeps {
 }
 
 /**
+ * Tells `serve` when matching changed, so it does not trust the old rule after a restart.
+ * A failed write is only reported: the rule itself was changed.
+ * @param config Validated configuration.
+ * @param at Time of the change.
+ * @param io Output streams.
+ */
+function recordMatchChange(config: Config, at: Date, io: CheckIo): void {
+  try {
+    const history = createHistory(openDatabase(config.monitoring.databasePath));
+
+    try {
+      history.setKv(MATCH_CHANGED_KEY, at.toISOString());
+    } finally {
+      history.close();
+    }
+  } catch (error) {
+    io.stderr(`could not record the rule change in ${config.monitoring.databasePath}: ${error instanceof Error ? error.message : String(error)}\n`);
+  }
+}
+
+/**
  * Brings the notification rule of the instance to the wanted state and prints the result.
  * @param command Parsed `provision` command.
  * @param config Validated configuration.
@@ -40,6 +67,14 @@ export interface ProvisionDeps {
 export async function runProvisionCommand(command: ProvisionCommand, config: Config, io: CheckIo, deps: Partial<ProvisionDeps> = {}): Promise<number> {
   const { redact, add } = createMutableRedactor(scenarioSecrets(config));
   const clock = deps.clock ?? systemClock;
+  const refusal = refusalWhileServing(config, clock.wallTime());
+
+  if (refusal !== undefined) {
+    io.stderr(refusal);
+
+    return 1;
+  }
+
   const logger = createLogger({ level: config.logLevel,
     write: (line) => {
       io.stderr(`${redact(line)}\n`);
@@ -75,6 +110,10 @@ export async function runProvisionCommand(command: ProvisionCommand, config: Con
 
     logger.info('provisioned', { ...result });
     io.stdout(`${redact(JSON.stringify(result))}\n`);
+
+    if (result.matchChanged) {
+      recordMatchChange(config, clock.wallTime(), io);
+    }
 
     if (result.matchChanged && command.wait) {
       const remainingMs = provisioner.warmupRemainingMs();

@@ -15,6 +15,7 @@ import type { NotificationDeps } from '../scenarios/check-notification/run.js';
 import { runSendAndReceive, scenarioSecrets } from '../scenarios/send-and-receive/run.js';
 import type { ScenarioDeps } from '../scenarios/send-and-receive/run.js';
 import { systemClock } from '../time/clock.js';
+import { refusalWhileServing } from './serving.js';
 
 /** Where the command writes. */
 export interface CheckIo {
@@ -142,6 +143,14 @@ async function runNotificationCommand(command: CheckCommand, config: Config, io:
  * @returns Exit code: 0 when the run is ok, 1 when it failed.
  */
 export async function runCheckCommand(command: CheckCommand, config: Config, io: CheckIo, deps: Partial<NotificationDeps> = {}): Promise<number> {
+  const refusal = refusalWhileServing(config, deps.clock?.wallTime() ?? new Date());
+
+  if (refusal !== undefined) {
+    io.stderr(refusal);
+
+    return 1;
+  }
+
   const masking = createMutableRedactor(scenarioSecrets(config));
 
   if (command.scenario === 'check-notification') {

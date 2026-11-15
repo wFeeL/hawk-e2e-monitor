@@ -112,4 +112,36 @@ describe('parseCommand', () => {
   it('serve with extra arguments is usage', () => {
     expect(parseCommand(['serve', 'extra']).kind).toBe('usage');
   });
+
+  it('history defaults to the last 20 runs', () => {
+    expect(parseCommand(['history'])).toEqual({ kind: 'history',
+      limit: 20,
+      stats: false });
+  });
+
+  it('history takes a scenario, a limit and --stats', () => {
+    expect(parseCommand(['history', '--scenario', 'check-notification', '--limit', '1000', '--stats'])).toEqual({ kind: 'history',
+      scenario: 'check-notification',
+      limit: 1000,
+      stats: true });
+    expect(parseCommand(['history', '--limit', '1'])).toMatchObject({ limit: 1 });
+  });
+
+  it.each([
+    [['history', '--limit', '0'], '--limit needs a whole number from 1 to 1000'],
+    [['history', '--limit', '1001'], '--limit needs a whole number from 1 to 1000'],
+    [['history', '--limit', 'abc'], '--limit needs a whole number from 1 to 1000'],
+    [['history', '--limit'], '--limit needs a whole number from 1 to 1000'],
+    [['history', '--scenario', 'nope'], 'unknown scenario "nope"'],
+    [['history', '--scenario'], 'unknown scenario'],
+    [['history', '--bogus'], 'unknown option "--bogus"'],
+    [['history', '--stats', '--stats'], '--stats given twice'],
+    [['history', 'extra'], 'unknown option "extra"'],
+  ])('history %j is usage', (args, reason) => {
+    const command = parseCommand(args);
+
+    expect(command.kind).toBe('usage');
+    expect(command.kind === 'usage' ? command.message : '').toContain(reason);
+    expect(command.kind === 'usage' ? command.message : '').toContain(USAGE);
+  });
 });
