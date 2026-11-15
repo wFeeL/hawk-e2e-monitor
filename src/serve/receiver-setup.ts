@@ -40,7 +40,7 @@ function receiverError(error: unknown, config: Config): StartupError {
 }
 
 /**
- * Reads the notification settings, which only a chosen check-notification needs.
+ * Reads the notification settings, which only a chosen notification scenario (check-notification or telegram-delivery) needs.
  * @param config Configuration to read.
  * @returns The settings with the secret present.
  * @throws StartupError naming the missing variables.

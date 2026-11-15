@@ -261,9 +261,38 @@ describe('telegram client failures', () => {
   it('keeps the description of an other 4xx in the text', async () => {
     const { client, fake } = await start();
 
-    fake.knobs.status = { getChatMember: 400 };
+    fake.knobs.status = { getMe: 400 };
 
-    expect((await failure(async () => client.chatMemberStatus('-1', 1, AbortSignal.timeout(2000)))).message).toContain('fake error 400');
+    expect((await failure(async () => client.getMe(AbortSignal.timeout(2000)))).message).toContain('fake error 400');
+  });
+
+  it('a 400 or a 403 of getChatMember is telegram_bot_misconfigured with the description and TELEGRAM_CHAT_ID, and no token', async () => {
+    const { client, fake } = await start();
+
+    for (const status of [400, 403]) {
+      fake.knobs.status = { getChatMember: status };
+
+      const error = await failure(async () => client.chatMemberStatus('-1', 1, AbortSignal.timeout(2000)));
+
+      expect(error.errorClass).toBe('telegram_bot_misconfigured');
+      expect(error.culprit).toBe('config');
+      expect(error.message).toContain(`fake error ${String(status)}`);
+      expect(error.message).toContain('TELEGRAM_CHAT_ID');
+      expect(`${error.message} ${JSON.stringify(error.facts)}`).not.toContain(fake.token);
+    }
+  });
+
+  it('other failures of getChatMember stay telegram_api_unavailable', async () => {
+    const { client, fake } = await start();
+
+    for (const status of [404, 429, 500]) {
+      fake.knobs.status = { getChatMember: status };
+
+      expect((await failure(async () => client.chatMemberStatus('-1', 1, AbortSignal.timeout(2000)))).errorClass).toBe('telegram_api_unavailable');
+    }
+
+    fake.knobs.status = { getChatMember: 401 };
+    expect((await failure(async () => client.chatMemberStatus('-1', 1, AbortSignal.timeout(2000)))).errorClass).toBe('telegram_auth_failed');
   });
 
   it('an answer that is not JSON, or not a Bot API answer, is telegram_api_unavailable', async () => {

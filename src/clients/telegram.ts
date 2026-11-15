@@ -1,4 +1,4 @@
-import { CheckError } from '../errors/taxonomy.js';
+import { CheckError, isCheckError } from '../errors/taxonomy.js';
 import type { ErrorClass, MessageFacts } from '../errors/taxonomy.js';
 import { NetworkError, httpRequest } from '../net/http.js';
 import type { HttpResponse } from '../net/http.js';
@@ -10,6 +10,8 @@ import { MS_PER_SECOND } from '../time/units.js';
 const MAX_BODY_BYTES = 4_194_304;
 const UPDATES_LIMIT = 100;
 const MAX_DESCRIPTION_CHARS = 200;
+// Answers of `getChatMember` for a chat that does not exist (400) or that the bot was removed from (403).
+const CHAT_REFUSALS: readonly number[] = [HttpStatus.badRequest, HttpStatus.forbidden];
 const JSON_HEADERS = Object.fromEntries([['content-type', 'application/json']]);
 
 /** The bot as `getMe` describes it. */
@@ -234,7 +236,18 @@ export function createTelegramClient(deps: TelegramClientDeps): TelegramClient {
   };
 
   const chatMemberStatus: TelegramClient['chatMemberStatus'] = async (chatId, userId, signal) => {
-    const result = asObject(await call('getChatMember', httpTimeoutMs, signal, Object.fromEntries([['chat_id', chatId], ['user_id', userId]]) as Json)) ?? {};
+    let result;
+
+    try {
+      result = asObject(await call('getChatMember', httpTimeoutMs, signal, Object.fromEntries([['chat_id', chatId], ['user_id', userId]]) as Json)) ?? {};
+    } catch (error) {
+      // The bot is not in the chat, or the chat does not exist: the chat setting is wrong, not the API.
+      if (isCheckError(error) && error.errorClass === 'telegram_api_unavailable' && CHAT_REFUSALS.includes(Number(error.facts.status))) {
+        throw failure('telegram_bot_misconfigured', { detail: `${error.facts.detail ?? `HTTP ${String(error.facts.status)}`}; check TELEGRAM_CHAT_ID and that the bot is a member of that chat` });
+      }
+
+      throw error;
+    }
 
     if (typeof result.status !== 'string') {
       throw failure('telegram_api_unavailable', { url: `${deps.apiUrl}/bot***/getChatMember`,

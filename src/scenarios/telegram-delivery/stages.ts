@@ -47,6 +47,16 @@ export interface TelegramState {
   formedOk?: boolean;
   /** The probe, when one was sent. */
   probe?: ProbeState;
+  /** The first message of the run that came from a sender or a chat the monitor does not expect. */
+  misdirected?: Misdirected;
+}
+
+/** A message that carries the title of the run or the probe text but fails the sender or chat filter. */
+export interface Misdirected {
+  /** Username of the sender, when it has one. */
+  fromUsername?: string;
+  /** Id of the chat. */
+  chatId: number;
 }
 
 /** Everything a Telegram stage needs. */
@@ -86,18 +96,59 @@ function firstLineOf(text: string): string {
 }
 
 /**
- * Tells whether a message is the notification of this run.
- * @param context Context with the title and the filters.
+ * Tells whether a message comes from the sender and the chat the monitor expects.
+ * @param context Context with the filters.
  * @param message Message read from the chat.
- * @returns True for a bot message from the sender, in the chat when one is set, whose first line is the title.
+ * @returns True for a bot message from `TELEGRAM_SENDER_USERNAME`, in `TELEGRAM_CHAT_ID` when that is set.
  */
-function isHawkMessage(context: TelegramContext, message: TelegramMessage): boolean {
+function fromExpectedPlace(context: TelegramContext, message: TelegramMessage): boolean {
   const { chatId, senderUsername } = context.config.scenarios.telegramDelivery;
 
   return message.fromIsBot
     && message.fromUsername === senderUsername
-    && (chatId === undefined || String(message.chatId) === chatId)
-    && firstLineOf(message.text) === context.plan.title;
+    && (chatId === undefined || String(message.chatId) === chatId);
+}
+
+/**
+ * Tells whether a message is the notification of this run.
+ * @param context Context with the title and the filters.
+ * @param message Message read from the chat.
+ * @returns True for a message from the expected place whose first line is the title.
+ */
+function isHawkMessage(context: TelegramContext, message: TelegramMessage): boolean {
+  return fromExpectedPlace(context, message) && firstLineOf(message.text) === context.plan.title;
+}
+
+/**
+ * Remembers the first message that says it belongs to the run but comes from the wrong sender or chat.
+ * A human is not remembered: only a bot can be a misconfigured sender.
+ * @param context Context with the filters and the state.
+ * @param message Message read from the chat.
+ * @param texts First lines that mark a message as one of this run.
+ */
+function noteMisdirected(context: TelegramContext, message: TelegramMessage, texts: readonly string[]): void {
+  if (message.fromIsBot && !fromExpectedPlace(context, message) && texts.includes(firstLineOf(message.text))) {
+    context.telegram.misdirected ??= { chatId: message.chatId,
+      ...message.fromUsername === undefined ? {} : { fromUsername: message.fromUsername } };
+  }
+}
+
+/**
+ * Builds the error of a stage that ended without its message while one of the run came from the wrong place.
+ * @param context Context with the filters and the state.
+ * @returns The error, or undefined when no such message was seen.
+ */
+function misdirectedFailure(context: TelegramContext): CheckError | undefined {
+  const { misdirected } = context.telegram;
+
+  if (misdirected === undefined) {
+    return undefined;
+  }
+
+  const { chatId, senderUsername } = context.config.scenarios.telegramDelivery;
+  const from = misdirected.fromUsername === undefined ? 'a sender without a username' : `@${misdirected.fromUsername}`;
+
+  return new CheckError('telegram_bot_misconfigured', {}, { message: `A message of the run came from ${from} in chat ${String(misdirected.chatId)}, but the monitor expects @${senderUsername}${chatId === undefined ? '' : ` in chat ${chatId}`}; check TELEGRAM_SENDER_USERNAME and TELEGRAM_CHAT_ID` });
 }
 
 /**
@@ -136,7 +187,7 @@ async function pauseBefore(context: TelegramContext, ms: number, deadlineMs: num
 
 /**
  * Reads the chat until `done` says so or the deadline comes, moving the offset past everything it reads.
- * A read that fails at or after the deadline was cut by it and does not count as failed.
+ * A read that fails because the stage was aborted was cut, and does not count as failed; any other failure does, whenever it comes.
  * @param context Context with the client, the clock and the state.
  * @param signal Ends the wait.
  * @param deadlineMs Monotonic time the wait ends at.
@@ -171,7 +222,8 @@ async function watch(context: TelegramContext, signal: AbortSignal, deadlineMs: 
         throw error;
       }
 
-      if (signal.aborted || clock.monotonicMs() >= deadlineMs) {
+      // Only the abort of the stage cuts a read; a failure that comes after the soft deadline is still a failed read.
+      if (signal.aborted) {
         break;
       }
 
@@ -387,6 +439,8 @@ export function telegramDeliveredStage(timeoutMs: number): StageSpec<TelegramCon
 
           if (mine) {
             foundAtMs ??= atMs;
+          } else {
+            noteMisdirected(context, message, [context.plan.title]);
           }
 
           return mine;
@@ -413,6 +467,13 @@ export function telegramDeliveredStage(timeoutMs: number): StageSpec<TelegramCon
       const details = { lastReadOk: telegram.lastReadOk,
         polls: telegram.polls,
         unmatched: telegram.unmatched };
+      const misdirected = misdirectedFailure(context);
+
+      if (misdirected) {
+        return { status: 'failed',
+          error: misdirected,
+          details };
+      }
 
       if (watched.lastReadOk === true) {
         return { status: 'failed',
@@ -436,6 +497,9 @@ function probeIsNeeded(context: TelegramContext): boolean {
   const { notification, telegram } = context;
 
   return !notification.warmup
+    // A send that was only unconfirmed, or none, gives no ground to blame the Hawk worker for the missing message.
+    && context.state.sendOutcome?.kind === 'accepted'
+    && telegram.misdirected === undefined
     && telegram.formedOk === true
     && (notification.arrivals?.telegram.length ?? 0) > 0
     && telegram.found === false
@@ -482,11 +546,13 @@ export function telegramProbeStage(timeoutMs: number): StageSpec<TelegramContext
           return true;
         }
 
-        if (message.fromIsBot && firstLineOf(message.text) === text) {
+        if (fromExpectedPlace(context, message) && firstLineOf(message.text) === text) {
           arrivedAtMs ??= atMs;
 
           return true;
         }
+
+        noteMisdirected(context, message, [text, context.plan.title]);
 
         return false;
       }, () => arrivedAtMs !== undefined || hawkAtMs !== undefined);
@@ -505,6 +571,14 @@ export function telegramProbeStage(timeoutMs: number): StageSpec<TelegramContext
 
       if (hawkAtMs !== undefined || arrivedAtMs !== undefined) {
         return { status: 'ok',
+          details };
+      }
+
+      const misdirected = misdirectedFailure(context);
+
+      if (misdirected) {
+        return { status: 'failed',
+          error: misdirected,
           details };
       }
 

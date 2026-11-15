@@ -4,6 +4,7 @@ import { createTelegramClient } from '../../../src/clients/telegram.js';
 import { runStage } from '../../../src/engine/stages.js';
 import type { StageResult } from '../../../src/engine/result.js';
 import type { StageSpec } from '../../../src/engine/stages.js';
+import { CheckError } from '../../../src/errors/taxonomy.js';
 import { planRun } from '../../../src/scenarios/send-and-receive/plan.js';
 import { notificationBeforeSend } from '../../../src/scenarios/check-notification/stages.js';
 import { probeText, telegramDeliveredStage, telegramFormedStage, telegramProbeStage, telegramReadyStage } from '../../../src/scenarios/telegram-delivery/stages.js';
@@ -253,6 +254,26 @@ describe('telegramReadyStage', () => {
       errorClass: 'telegram_bot_misconfigured' });
   });
 
+  it('a chat the bot cannot find or was kicked from is telegram_bot_misconfigured that names TELEGRAM_CHAT_ID', async () => {
+    const { context, telegram } = await world({ env: { TELEGRAM_CHAT_ID: '-1001' } });
+
+    for (const status of [400, 403]) {
+      telegram.knobs.status = { getChatMember: status };
+
+      const result = await run(telegramReadyStage(STAGE_MS), context);
+
+      expect(result).toMatchObject({ status: 'failed',
+        errorClass: 'telegram_bot_misconfigured',
+        culprit: 'config' });
+      expect(result.message).toContain('TELEGRAM_CHAT_ID');
+      expect(result.message).toContain(`fake error ${String(status)}`);
+      expect(result.message).not.toContain(telegram.token);
+    }
+
+    telegram.knobs.status = { getChatMember: 500 };
+    expect(await run(telegramReadyStage(STAGE_MS), context)).toMatchObject({ errorClass: 'telegram_api_unavailable' });
+  });
+
   it('a 409 on the drain is telegram_conflict, a 401 is telegram_auth_failed, a 500 is telegram_api_unavailable', async () => {
     const { context, telegram } = await world();
 
@@ -308,19 +329,59 @@ describe('telegramDeliveredStage', () => {
     expect(offsets.slice(1).every(offset => offset > older)).toBe(true);
   });
 
-  it('ignores a message of another sender, a human, another chat, or a title only on a later line', async () => {
+  it('ignores a human and a title that is only on a later line, as plain unmatched messages', async () => {
     const { context, telegram } = await world({ env: { TELEGRAM_CHAT_ID: '-1001' } });
 
-    pushHawk(telegram, hawkText(context), { fromUsername: 'someone_bot' });
     pushHawk(telegram, hawkText(context), { fromIsBot: false });
-    pushHawk(telegram, hawkText(context), { chatId: -1002 });
     pushHawk(telegram, `something else\n${context.plan.title}`);
+    pushHawk(telegram, 'a message of another run');
 
     const result = await run(telegramDeliveredStage(STAGE_MS), context);
 
     expect(result).toMatchObject({ status: 'failed',
       errorClass: 'telegram_not_delivered' });
-    expect(context.telegram.unmatched).toBe(4);
+    expect(context.telegram.unmatched).toBe(3);
+    expect(context.telegram.misdirected).toBeUndefined();
+  });
+
+  it('a message of the run from another sender is telegram_bot_misconfigured that names the sender and the chat', async () => {
+    const { context, telegram } = await world({ env: { TELEGRAM_CHAT_ID: '-1001' } });
+
+    pushHawk(telegram, hawkText(context), { fromUsername: 'someone_bot' });
+
+    const result = await run(telegramDeliveredStage(STAGE_MS), context);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'telegram_bot_misconfigured',
+      culprit: 'config' });
+    expect(result.message).toContain('someone_bot');
+    expect(result.message).toContain('-1001');
+    expect(result.message).toContain('TELEGRAM_SENDER_USERNAME');
+    expect(result.message).toContain('TELEGRAM_CHAT_ID');
+    expect(context.telegram.unmatched).toBe(1);
+  });
+
+  it('a message of the run in another chat is telegram_bot_misconfigured that names that chat', async () => {
+    const { context, telegram } = await world({ env: { TELEGRAM_CHAT_ID: '-1001' } });
+
+    pushHawk(telegram, hawkText(context), { chatId: -1002 });
+
+    const result = await run(telegramDeliveredStage(STAGE_MS), context);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'telegram_bot_misconfigured' });
+    expect(result.message).toContain('-1002');
+    expect(context.telegram.misdirected).toEqual({ chatId: -1002,
+      fromUsername: 'codex_bot' });
+  });
+
+  it('a misdirected message does not hide the right one: the stage is ok', async () => {
+    const { context, telegram } = await world({ env: { TELEGRAM_CHAT_ID: '-1001' } });
+
+    pushHawk(telegram, hawkText(context), { fromUsername: 'someone_bot' });
+    pushHawk(telegram, hawkText(context));
+
+    expect((await run(telegramDeliveredStage(STAGE_MS), context)).status).toBe('ok');
   });
 
   it('matches a first line that still has the Markdown escapes', async () => {
@@ -429,7 +490,27 @@ describe('telegramDeliveredStage', () => {
       errorClass: 'telegram_api_unavailable' });
   });
 
-  it('a read cut by the deadline is not a failed read', async () => {
+  it('a read cut by the abort of the stage is not a failed read', async () => {
+    const clock = createFakeClock();
+    const { context, telegram } = await world({ clock });
+
+    telegram.knobs.delayMs = 200;
+
+    // The stage limit is short, so its abort cuts the read that is in flight.
+    const running = run(telegramDeliveredStage(2000), context);
+
+    await realPause(260);
+    await vi.waitFor(() => {
+      expect(telegram.requests.length).toBeGreaterThan(1);
+    });
+    await clock.advance(2500);
+
+    expect(await running).toMatchObject({ status: 'failed',
+      errorClass: 'telegram_not_delivered',
+      details: { lastReadOk: true } });
+  });
+
+  it('a read that stalls and then fails with a 500 after the deadline is a failed read, not the probe path', async () => {
     const clock = createFakeClock();
     const { context, telegram } = await world({ clock });
 
@@ -440,7 +521,7 @@ describe('telegramDeliveredStage', () => {
     await vi.waitFor(() => {
       expect(telegram.requests.length).toBeGreaterThan(0);
     });
-    // The first read ends well; the next one fails, and it fails after the deadline.
+    // The first read ends well; the next one stalls, the deadline passes, and then it fails.
     await realPause(260);
     telegram.knobs.status = { getUpdates: 500 };
     await vi.waitFor(() => {
@@ -451,8 +532,9 @@ describe('telegramDeliveredStage', () => {
     const result = await running;
 
     expect(result).toMatchObject({ status: 'failed',
-      errorClass: 'telegram_not_delivered',
-      details: { lastReadOk: true } });
+      errorClass: 'telegram_api_unavailable',
+      details: { lastReadOk: false } });
+    expect(context.telegram.lastReadOk).toBe(false);
   });
 
   it('a 409 in the middle of the wait ends the stage at once with telegram_conflict', async () => {
@@ -512,6 +594,8 @@ describe('telegramDeliveredStage', () => {
  * @param context Context of the run.
  */
 function readyForProbe(context: TelegramContext): void {
+  context.state.sendOutcome = { kind: 'accepted',
+    attempts: 1 };
   context.telegram.formedOk = true;
   context.telegram.found = false;
   context.telegram.lastReadOk = true;
@@ -546,6 +630,23 @@ describe('telegramProbeStage', () => {
       ['delivery never decided', (context) => {
         context.telegram.found = undefined;
       }],
+      ['accept only uncertain', (context) => {
+        context.state.sendOutcome = { kind: 'uncertain',
+          cause: new CheckError('collector_unavailable', {}),
+          attempts: 1 };
+        context.state.sendMayHaveReached = true;
+      }],
+      ['accept failed', (context) => {
+        context.state.sendOutcome = { kind: 'rejected',
+          error: new CheckError('bad_request', {}),
+          attempts: 1 };
+      }],
+      ['no accept outcome', (context) => {
+        context.state.sendOutcome = undefined;
+      }],
+      ['a message of the run came from the wrong place', (context) => {
+        context.telegram.misdirected = { chatId: -1002 };
+      }],
     ];
 
     for (const [name, spoil] of cases) {
@@ -572,6 +673,30 @@ describe('telegramProbeStage', () => {
     expect(context.telegram.probe?.arrivedMs).toBeGreaterThanOrEqual(0);
     expect(context.telegram.probe?.sentAt).toMatch(/^\d{4}-/u);
     expect(context.telegram.probe?.lateHawkMessageMs).toBeUndefined();
+  });
+
+  it('a probe text from another sender or in another chat is telegram_bot_misconfigured, not a missing probe', async () => {
+    const { context, codex, telegram } = await world({ env: { TELEGRAM_CHAT_ID: '-1001' } });
+
+    readyForProbe(context);
+    codex.knobs.drop = true;
+    pushHawk(telegram, probeText(context), { fromUsername: 'someone_bot' });
+
+    const result = await run(telegramProbeStage(STAGE_MS), context);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'telegram_bot_misconfigured',
+      culprit: 'config' });
+    expect(result.message).toContain('someone_bot');
+    expect(result.message).toContain('TELEGRAM_SENDER_USERNAME');
+  });
+
+  it('a probe that arrives from the right sender in the right chat still passes', async () => {
+    const { context } = await world({ env: { TELEGRAM_CHAT_ID: '-1001' } });
+
+    readyForProbe(context);
+
+    expect((await run(telegramProbeStage(STAGE_MS), context)).status).toBe('ok');
   });
 
   it('records a message of Hawk that comes while the probe is awaited', async () => {
