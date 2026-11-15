@@ -13,6 +13,7 @@ import { createFakeClock } from '../../test-support/fake-clock.js';
 import { startFakeHawk } from '../../test-support/fake-hawk/index.js';
 import type { FakeHawk } from '../../test-support/fake-hawk/index.js';
 import { httpAddress } from '../../test-support/address.js';
+import { startDeadPort } from '../../test-support/dead-port.js';
 import { TEST_RECEIVER_SECRET } from '../../test-support/env.js';
 import { createNotificationTestScenario } from '../../test-support/scenario.js';
 import type { NotificationTestOptions, NotificationTestScenario } from '../../test-support/scenario.js';
@@ -184,25 +185,15 @@ async function probeServer(answer: (hit: number) => Promise<string | undefined>)
 }
 
 /**
- * Finds a loopback port nobody listens on.
- * @returns Free port number.
+ * Starts a port whose server resets every connection and closes it with the test.
+ * @returns Number of that port.
  */
-async function closedPort(): Promise<number> {
-  const server = createServer();
+async function deadPort(): Promise<number> {
+  const dead = await startDeadPort();
 
-  await new Promise<void>((resolve) => {
-    server.listen(0, '127.0.0.1', resolve);
-  });
+  servers.push(dead.server);
 
-  const { port } = server.address() as AddressInfo;
-
-  await new Promise<void>((resolve) => {
-    server.close(() => {
-      resolve();
-    });
-  });
-
-  return port;
+  return dead.port;
 }
 
 describe('notificationSetupStage', () => {
@@ -243,7 +234,7 @@ describe('notificationSetupStage', () => {
   });
 
   it('fails with receiver_unreachable on a closed port and does not touch the rules', async () => {
-    const dead = httpAddress(await closedPort());
+    const dead = httpAddress(await deadPort());
     const parts = await scenario({ preProvision: false,
       resolveAddress: () => Promise.resolve(dead) });
     const before = hawk.rules.version(hawk.projectId);

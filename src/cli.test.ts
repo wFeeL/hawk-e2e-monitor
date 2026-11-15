@@ -49,6 +49,29 @@ describe('parseCommand', () => {
       repeat: false });
   });
 
+  it('check-notification takes the same flags', () => {
+    expect(parseCommand(['check', 'check-notification'])).toEqual({ kind: 'check',
+      scenario: 'check-notification',
+      sequence: 1,
+      repeat: false });
+    expect(parseCommand(['check', 'check-notification', '--sequence', '2', '--transport', 'ws', '--repeat'])).toEqual({ kind: 'check',
+      scenario: 'check-notification',
+      sequence: 2,
+      transport: 'ws',
+      repeat: true });
+  });
+
+  it('check-notification rejects a bad flag like the other scenario', () => {
+    const command = parseCommand(['check', 'check-notification', '--sequence', '0']);
+
+    expect(command.kind === 'usage' ? command.message : '').toContain('--sequence');
+  });
+
+  it('usage names both scenarios', () => {
+    expect(USAGE).toContain('check send-and-receive-event');
+    expect(USAGE).toContain('check check-notification');
+  });
+
   it('check with every flag', () => {
     expect(parseCommand(['check', 'send-and-receive-event', '--sequence', '4', '--transport', 'ws', '--repeat'])).toEqual({ kind: 'check',
       scenario: 'send-and-receive-event',
