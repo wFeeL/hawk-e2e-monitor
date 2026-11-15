@@ -18,8 +18,8 @@ production.
 | `config` | Reads environment variables, validates them, produces a typed config and a log summary with secrets hidden | The only place that reads `process.env` | service skeleton |
 | `log` | Structured JSON logs, to stdout by default | Never throws, so a logging failure cannot break a check. The `check` command sends logs to stderr, so stdout carries only the result | service skeleton |
 | `http` | Internal port: `/healthz`, `/readyz`, later metrics and manual runs | Never exposed to the internet; answers about the monitor itself, not about Hawk | service skeleton |
-| `receiver` | Public port that accepts Hawk webhooks | Serves the webhook path only, on a separate port from `http` | check-notification |
-| `provisioning` | Brings the notification rule of the test project to the expected state | Idempotent, changes only what differs | check-notification |
+| `receiver` | Public port that accepts Hawk webhook and loop notifications and the monitor's own probe | Serves only `/hooks/webhook`, `/hooks/loop` and `/hooks/probe` under the secret, on a separate port from `http`; never logs paths or bodies | check-notification |
+| `notifications` | Public address of the receiver and the notification rule of the instance | Provisioning is idempotent and changes only what differs; only the rule with the instance's exact `including` is touched | check-notification |
 | `clients` | Collector, GraphQL API and notification clients with timeouts | Every external call goes through a client, and every external error becomes a named error class | send-and-receive-event |
 | `net` | HTTP requests and WebSocket exchanges with deadlines, classification of network failures, retries | Retries only when the request certainly did not leave the monitor | send-and-receive-event |
 | `errors` | Error classes with the culprit (Hawk, monitor, configuration, network) and a human-readable text; masking of secrets | Every result and log line passes through the redactor | send-and-receive-event |
@@ -61,6 +61,30 @@ closed socket), the run keeps looking for it. If the API answered and the event
 never appeared, the run is blamed on the collector, and the text names both
 facts. The result is one JSON object with every stage, its duration and, on
 failure, the stage, error class, culprit and text.
+
+## How a check-notification run works
+
+The run sends one event, like send-and-receive-event, and also waits for the
+notifications Hawk sends about it. The monitor keeps one notification rule per
+instance in the test project: it matches titles that start with
+`[e2e:<instance>]`, excludes send-and-receive-event titles, and has two
+channels pointing at the monitor's receiver, webhook and loop. The receiver
+paths carry a secret, because Hawk cannot add custom headers to notifications.
+
+| Stage | What it checks |
+|---|---|
+| `collector_availability`, `api_availability` | as in send-and-receive-event |
+| `notification_setup` | the public address of the receiver is known (a fixed `PUBLIC_BASE_URL` or the hostname of a cloudflared quick tunnel), a request through it reaches this process, and the rule has the current address. A changed rule starts a warmup of 65 s |
+| `collector_accept` | the run registers its wait at the receiver before the event is sent, so a fast notification is not lost |
+| `event_visible` and `notification_formed` | run in parallel. The notification is bound to the run by the run id in its raw body, then its headers, project id, title and event id are compared with what the API shows. One channel is enough; the second is waited for a short time and its absence is a warning |
+| `cleanup` | as in send-and-receive-event; afterwards the receiver counts notifications per channel, more than one gives `duplicate_notification` |
+
+When no notification arrives, the run probes the receiver once more through
+the public address. A failed probe means the tunnel or the receiver is down
+(`receiver_unreachable`, blamed on the monitor); a working probe means Hawk did
+not send (`notification_timeout`). During the warmup after a rule change the
+notification stage is skipped, because Hawk's notifier may still hold the old
+rules.
 
 ## Health and readiness
 
@@ -113,3 +137,10 @@ Errors inside a single HTTP request are handled locally: the request gets a
 | Durations are measured by the monitor with a monotonic clock | the event timestamp set by Hawk | the collector sets the time itself. The latency includes the network to the collector |
 | A non-`hawk.so` API with an empty `HAWK_COLLECTOR_URL` is a configuration error | a startup warning | the token would route test events of a local stand to production. Changes the behaviour of the service skeleton |
 | `HAWK_PROJECT_ID` must be 24 hex characters | any non-empty string | an invalid id makes the API answer `INTERNAL_SERVER_ERROR`, a false Hawk failure |
+| check-notification reuses the event of the send-and-receive path | a separate event for the notification | one event per run instead of two. A notification failure and a visibility failure can show up in the same run; the stages tell them apart |
+| Either of the two channels proves that Hawk formed the notification | webhook only; wait for both until the timeout | the webhook sender on hawk.so is not confirmed. A broken single sender shows up only as a warning |
+| The notification is bound to its run by the run id in the raw body | by the parsed title | a malformed body would otherwise look like a missing notification |
+| The receiver address comes from `PUBLIC_BASE_URL` or from the `/quicktunnel` route of cloudflared metrics; the monitor does not start cloudflared | starting cloudflared as a child process | a quick tunnel gets a new hostname on every restart, so the rule is checked and updated in every run |
+| The secret is part of the receiver paths | a secret header | Hawk cannot set headers. Every member of the workspace can read the rule and its address |
+| Warmup by the time of the last rule change that affects matching | wait 60 s in every run | runs within 65 s after a change skip the notification stage |
+| The rule excludes send-and-receive-event titles | a separate title prefix per scenario | every send-and-receive event would otherwise produce two notifications |
