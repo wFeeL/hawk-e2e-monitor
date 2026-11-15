@@ -78,6 +78,8 @@ interface WebhookPayload {
 
 /** The parts of a webhook body the monitor reads. */
 interface WebhookBody {
+  /** Kind of the notification. */
+  type?: unknown;
   /** Payload of the notification. */
   payload?: WebhookPayload;
 }
@@ -131,13 +133,13 @@ function webhookEventId(rawBody: string): string | undefined {
 }
 
 /**
- * Checks the headers, the project and the title of a webhook.
- * @param arrival First webhook of the run.
+ * Checks the headers, the type, the project and the title of a webhook.
+ * @param arrival Webhook POST bound to the run.
  * @param title Title that was sent.
  * @param projectId Project of the monitor.
  * @returns The first difference, or undefined.
  */
-function checkWebhook(arrival: Arrival, title: string, projectId: string): CheckError | undefined {
+export function checkWebhook(arrival: Arrival, title: string, projectId: string): CheckError | undefined {
   const headers = new Map(Object.entries(arrival.headers).map(([name, value]) => [name.toLowerCase(), value]));
 
   if (headers.get('user-agent') !== WEBHOOK_AGENT) {
@@ -154,6 +156,10 @@ function checkWebhook(arrival: Arrival, title: string, projectId: string): Check
     return mismatch('webhook.body', 'a JSON object', 'not JSON');
   }
 
+  if (body.type !== WEBHOOK_KIND) {
+    return mismatch('webhook.type', WEBHOOK_KIND, body.type);
+  }
+
   const actualProject = body.payload?.project?.id;
 
   if (actualProject !== projectId) {
@@ -163,6 +169,16 @@ function checkWebhook(arrival: Arrival, title: string, projectId: string): Check
   const actualTitle = body.payload?.events?.[0]?.event?.title;
 
   return actualTitle === title ? undefined : mismatch('webhook.title', title, actualTitle);
+}
+
+/**
+ * Checks that a loop message names the event by its title.
+ * @param arrival Loop POST bound to the run.
+ * @param title Title that was sent.
+ * @returns The difference, or undefined.
+ */
+export function checkLoop(arrival: Arrival, title: string): CheckError | undefined {
+  return arrival.rawBody.includes(title) ? undefined : mismatch('loop.title', title, 'a body without it');
 }
 
 /**
@@ -319,7 +335,7 @@ export function notificationFormedStage(budgetMs: number): StageSpec<Notificatio
       const [webhook] = arrivals.webhook;
       const [loop] = arrivals.loop;
       const problem = (webhook === undefined ? undefined : checkWebhook(webhook, plan.title, config.hawk.projectId))
-        ?? (loop === undefined || loop.rawBody.includes(plan.title) ? undefined : mismatch('loop.title', plan.title, 'a body without it'));
+        ?? (loop === undefined ? undefined : checkLoop(loop, plan.title));
 
       if (problem) {
         return { status: 'failed',

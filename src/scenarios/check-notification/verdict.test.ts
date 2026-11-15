@@ -6,8 +6,44 @@ import type { NotificationState } from './stages.js';
 import { decideNotificationVerdict } from './verdict.js';
 
 const PROJECT = 'p1';
+const TITLE = 'title-1';
 const EVENT_ID = 'event-1';
 const ACCEPTED_AT = 1000;
+const GOOD_HEADERS = Object.fromEntries([
+  ['user-agent', 'Hawk-Webhook/1.0'],
+  ['x-hawk-notification', 'event'],
+]);
+
+/** Parts of a webhook body that a test may change. */
+interface WebhookChanges {
+  /** Kind of the notification. */
+  type?: string;
+  /** Project id. */
+  projectId?: string;
+  /** Event id. */
+  id?: string;
+}
+
+/**
+ * Builds a webhook body like Hawk's.
+ * @param changes Parts that replace the good ones.
+ * @returns JSON text.
+ */
+function webhookBody(changes: WebhookChanges = {}): string {
+  return JSON.stringify({ type: changes.type ?? 'event',
+    payload: { project: { id: changes.projectId ?? PROJECT },
+      events: [{ event: { id: changes.id ?? EVENT_ID,
+        title: TITLE } }] } });
+}
+
+/**
+ * Builds a loop message like Hawk's.
+ * @param title Title in the message.
+ * @returns Text with the title and the link.
+ */
+function loopBody(title = TITLE): string {
+  return `**${title}**\n[Details](https://garage/project/${PROJECT}/event/${EVENT_ID}/)`;
+}
 
 /**
  * Builds a recorded stage.
@@ -29,16 +65,15 @@ function stage(name: StageName, status: StageResult['status'] = 'ok', extra: Par
  * @param channel Channel the POST came through.
  * @param atMs Monotonic time of arrival.
  * @param body Body text; a fitting one by default.
- * @returns Arrivals as the receiver reports them.
+ * @param headers Request headers of a webhook; the right ones by default.
+ * @returns One arrival record.
  */
-function arrival(channel: 'webhook' | 'loop', atMs: number, body?: string): Arrival {
-  const text = body ?? (channel === 'webhook'
-    ? JSON.stringify({ payload: { events: [{ event: { id: EVENT_ID } }] } })
-    : `[Details](https://garage/project/${PROJECT}/event/${EVENT_ID}/)`);
+function arrival(channel: 'webhook' | 'loop', atMs: number, body?: string, headers: Record<string, string> = GOOD_HEADERS): Arrival {
+  const text = body ?? (channel === 'webhook' ? webhookBody() : loopBody());
 
   return { channel,
     atMs,
-    headers: {},
+    headers: channel === 'webhook' ? headers : {},
     rawBody: text };
 }
 
@@ -75,7 +110,7 @@ const STATE: ScenarioState = {
     groupHash: 'g',
     totalCount: 1,
     catcherType: 'errors/nodejs',
-    title: 't',
+    title: TITLE,
     context: null },
 };
 
@@ -169,7 +204,7 @@ describe('decideNotificationVerdict', () => {
 
   describe('against the event', () => {
     it('webhook with another event id is notification_mismatch on notification_formed', () => {
-      const wrong = arrivals([arrival('webhook', 1300, JSON.stringify({ payload: { events: [{ event: { id: 'other' } }] } }))], [arrival('loop', 1500)]);
+      const wrong = arrivals([arrival('webhook', 1300, webhookBody({ id: 'other' }))], [arrival('loop', 1500)]);
       const result = decideNotificationVerdict(stages(), STATE, notification(wrong, wrong), PROJECT);
 
       expect(result.verdict).toMatchObject({ status: 'failed',
@@ -215,7 +250,7 @@ describe('decideNotificationVerdict', () => {
     });
 
     it('a mismatch wins over a repeat', () => {
-      const both = arrivals([arrival('webhook', 1300, JSON.stringify({ payload: { events: [{ event: { id: 'other' } }] } })), arrival('webhook', 1700)], [arrival('loop', 1500)]);
+      const both = arrivals([arrival('webhook', 1300, webhookBody({ id: 'other' })), arrival('webhook', 1700)], [arrival('loop', 1500)]);
       const result = decideNotificationVerdict(stages(), STATE, notification(both, both), PROJECT);
 
       expect(result.verdict.error?.errorClass).toBe('notification_mismatch');
@@ -247,6 +282,36 @@ describe('decideNotificationVerdict', () => {
 
       expect(result.warnings).toEqual([formed.details?.warning]);
       expect(result.notification?.loop).toBeUndefined();
+    });
+
+    it.each([
+      ['webhook.user-agent', arrival('webhook', 1800, undefined, Object.fromEntries([['user-agent', 'curl/8'], ['x-hawk-notification', 'event']]))],
+      ['webhook.x-hawk-notification', arrival('webhook', 1800, undefined, Object.fromEntries([['user-agent', 'Hawk-Webhook/1.0']]))],
+      ['webhook.project.id', arrival('webhook', 1800, webhookBody({ projectId: 'other' }))],
+      ['webhook.type', arrival('webhook', 1800, webhookBody({ type: 'other' }))],
+      ['webhook.body', arrival('webhook', 1800, 'not json')],
+    ])('a webhook that came late gets the full check: %s', (field, late) => {
+      const onlyLoop = arrivals([], [arrival('loop', 1300)]);
+      const warned = stage('notification_formed', 'ok', { details: { warning: 'Only the loop notification arrived; the webhook sender did not deliver within 200 ms' } });
+      const result = decideNotificationVerdict(stages(warned), STATE, notification(onlyLoop, arrivals([late], onlyLoop.loop)), PROJECT);
+
+      expect(result.verdict).toMatchObject({ status: 'failed',
+        failedStage: 'notification_formed' });
+      expect(result.verdict.error?.errorClass).toBe('notification_mismatch');
+      expect(result.verdict.error?.message).toContain(field);
+    });
+
+    it('a loop that came late without the title is notification_mismatch', () => {
+      const result = decideNotificationVerdict(stages(formed), STATE, notification(early, arrivals(early.webhook, [arrival('loop', 1800, loopBody('another title'))])), PROJECT);
+
+      expect(result.verdict.error?.errorClass).toBe('notification_mismatch');
+      expect(result.verdict.error?.message).toContain('loop.title');
+    });
+
+    it('a late channel that fits is accepted', () => {
+      const result = decideNotificationVerdict(stages(formed), STATE, notification(early, arrivals(early.webhook, [arrival('loop', 1800)])), PROJECT);
+
+      expect(result.verdict.status).toBe('ok');
     });
 
     it('is a repeat when it came twice', () => {
