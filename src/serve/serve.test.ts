@@ -123,6 +123,8 @@ interface LaunchOptions {
   resolveAddress?: (port: number) => Promise<ReturnType<typeof httpAddress>>;
   /** Wait between self-checks of a new address. */
   addressPollMs?: number;
+  /** Wait before the first sweep of leftover events. */
+  sweepFirstDelayMs?: number;
 }
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -230,6 +232,7 @@ async function launch(options: LaunchOptions = {}, hawk?: FakeHawk): Promise<Har
       pollScheduleMs: [20, 40],
       retryDelaysMs: [5, 10],
       ...options.addressPollMs === undefined ? {} : { addressPollMs: options.addressPollMs },
+      ...options.sweepFirstDelayMs === undefined ? {} : { sweepFirstDelayMs: options.sweepFirstDelayMs },
       ...options.resolveAddress === undefined ? {} : { resolveAddress: async () => resolveFor(options.resolveAddress, options.receiverPort ?? 0) } } });
 
   cleanups.push(async () => {
@@ -390,6 +393,55 @@ describe('serve: scheduled runs and the history routes', () => {
     }, WAIT);
     expect(JSON.stringify(harness.logger.lines)).not.toContain(harness.bot.token);
     expect(JSON.stringify(harness.logger.lines)).not.toContain(harness.bot.url);
+  });
+});
+
+describe('serve: sweep of leftover events', () => {
+  it('removes the event a finished run left behind, on the timer', async () => {
+    const hawk = await hawkFor();
+    const stored = hawk.store.ingest(hawk.projectId, 'errors/nodejs', { title: `[e2e:${FAKE_ID}] rtttttttttttttta ${SEND}`,
+      context: { runId: 'rtttttttttttttta',
+        instanceId: FAKE_ID } });
+
+    hawk.store.setTimestamp(hawk.projectId, stored.id, Math.floor(Date.now() / 1000) - 7200);
+
+    await launch({ intervalMs: 600_000,
+      sweepFirstDelayMs: 20,
+      seed: (history) => {
+        const startedAt = new Date(Date.now() - 3 * 3_600_000).toISOString();
+
+        history.startRun({ runId: 'rtttttttttttttta',
+          scenario: SEND,
+          sequence: 1,
+          trigger: 'schedule',
+          startedAt });
+        history.finishRun('rtttttttttttttta', { status: 'ok',
+          finishedAt: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+          durationMs: 1000,
+          degraded: [] });
+      } }, hawk);
+
+    await vi.waitFor(() => {
+      expect(hawk.store.get(hawk.projectId, stored.id)).toBeUndefined();
+    }, WAIT);
+  });
+
+  it('counts a failed sweep in /stats and keeps the process up', async () => {
+    const hawk = await hawkFor();
+
+    hawk.api.knobs.errors = Object.fromEntries([['FindEvents', { code: 'INTERNAL_SERVER_ERROR',
+      message: 'search is down' }]]);
+
+    const harness = await launch({ intervalMs: 600_000,
+      sweepFirstDelayMs: 20 }, hawk);
+
+    await vi.waitFor(async () => {
+      const stats = await (await get(harness, '/stats')).json() as StatsBody;
+
+      expect(stats.sweepFailures).toBeGreaterThanOrEqual(1);
+    }, WAIT);
+    expect((await get(harness, '/healthz')).status).toBe(200);
+    expect(harness.exit).not.toHaveBeenCalled();
   });
 });
 

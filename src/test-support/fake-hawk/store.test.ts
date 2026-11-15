@@ -171,4 +171,24 @@ describe('fake store subscribe', () => {
 
     expect(found).toBe(true);
   });
+
+  it('stamps an event with the time of its arrival in Unix seconds, and a test may change it', () => {
+    const before = Math.floor(Date.now() / 1000);
+    const store = createFakeStore();
+    const event = store.ingest(PROJECT, 'errors/nodejs', { title: 'boom' });
+
+    expect(event.timestamp).toBeGreaterThanOrEqual(before);
+    expect(event.timestamp).toBeLessThanOrEqual(before + 5);
+    expect(store.setTimestamp(PROJECT, event.id, 1000)).toBe(true);
+    expect(store.get(PROJECT, event.id)?.timestamp).toBe(1000);
+    expect(store.setTimestamp(PROJECT, 'missing', 1000)).toBe(false);
+  });
+
+  it('a repetition keeps the time of the first arrival', () => {
+    const store = createFakeStore();
+    const first = store.ingest(PROJECT, 'errors/nodejs', { title: 'boom' });
+
+    store.setTimestamp(PROJECT, first.id, 1000);
+    expect(store.ingest(PROJECT, 'errors/nodejs', { title: 'boom' }).timestamp).toBe(1000);
+  });
 });

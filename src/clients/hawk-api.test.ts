@@ -250,7 +250,38 @@ describe('hawk api queries', () => {
       totalCount: 1,
       catcherType: 'errors/nodejs',
       title: '[e2e:fake] runabc find',
-      context: { runId: 'run1' } }]);
+      context: { runId: 'run1' },
+      timestamp: stored.timestamp * 1000 }]);
+  });
+
+  it('findEvents and eventCard turn the Unix seconds of Hawk into milliseconds', async () => {
+    const stored = hawk.store.ingest(hawk.projectId, 'errors/nodejs', eventPayload('[e2e:fake] runsec'));
+
+    hawk.store.setTimestamp(hawk.projectId, stored.id, 1_794_699_912);
+
+    const [found] = await apiFor().findEvents(hawk.projectId, 'runsec', signal);
+    const card = await apiFor().eventCard(hawk.projectId, stored.id, signal);
+
+    expect(found?.timestamp).toBe(1_794_699_912_000);
+    expect(card?.timestamp).toBe(1_794_699_912_000);
+  });
+
+  it('a timestamp that is already in milliseconds is kept', async () => {
+    const stored = hawk.store.ingest(hawk.projectId, 'errors/nodejs', eventPayload('[e2e:fake] runms'));
+
+    hawk.store.setTimestamp(hawk.projectId, stored.id, 1_794_699_912_345);
+
+    const [found] = await apiFor().findEvents(hawk.projectId, 'runms', signal);
+
+    expect(found?.timestamp).toBe(1_794_699_912_345);
+  });
+
+  it('a foreign event without a timestamp has none', async () => {
+    hawk.api.knobs.foreignEvent = true;
+
+    const [found] = await apiFor().findEvents(hawk.projectId, 'runnone', signal);
+
+    expect(found?.timestamp).toBeUndefined();
   });
 
   it('findEvents returns an empty list when nothing matches', async () => {
