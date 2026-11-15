@@ -125,13 +125,21 @@ of the project that would catch the monitor's titles is reported as degraded
      your bot an administrator.
   3. Send `/notify_start` in the group. Put the address @codex_bot answers with
      into `TELEGRAM_NOTIFY_URL`, and the bot token into `TELEGRAM_BOT_TOKEN`.
-     `TELEGRAM_CHAT_ID` pins the group when the bot is in several chats.
+     Set `TELEGRAM_CHAT_ID` to the id of the group: then only messages of that
+     group count, and every run first checks that the bot is still an
+     administrator there. Without it, a bot that lost the group looks like a
+     silent @codex_bot.
+
+  Other settings: `TELEGRAM_SENDER_USERNAME` (`codex_bot`),
+  `TELEGRAM_DELIVERY_TIMEOUT_MS` (120000), `TELEGRAM_PROBE_TIMEOUT_MS` (30000)
+  and `TELEGRAM_API_URL` (`https://api.telegram.org`).
 
   One process at a time may read a bot token (Telegram answers 409 to a second
   reader), so do not share the bot between a stand and production. The
   scenario needs `RECEIVER_SECRET` and a public address, as check-notification
-  does. When the scenario is first added, the other two rules change their
-  excluding list, so check-notification skips its notification stage once for
+  does. On the first deploy of a build with this scenario, the other two rules
+  get `telegram-delivery` in their excluding list, whether the scenario is
+  selected or not, so check-notification skips its notification stage once for
   the rule cache warmup. A build older than this scenario deletes the telegram
   rule as an extra rule when it provisions.
 
@@ -148,8 +156,9 @@ after the start of its previous run, also across restarts of the monitor, so
 the first run after a restart can take up to one interval. The interval is
 `CHECK_INTERVAL_MS` for send-and-receive-event and check-notification, and the
 scenario's own variable for the others.
-check-notification first waits up to `TUNNEL_READY_TIMEOUT_MS` for the tunnel
-to report its address. A tick that comes while the previous run of the same scenario is
+check-notification and telegram-delivery first wait up to
+`TUNNEL_READY_TIMEOUT_MS` for the tunnel to report its address (once per
+process; both share one receiver). A tick that comes while the previous run of the same scenario is
 still going is recorded as skipped.
 
 With Docker Compose the monitor starts together with a cloudflared quick
@@ -362,4 +371,4 @@ TODO:
 - [x] check-notification (webhook and loop channels)
 - [x] continuous-monitoring: schedule, history, alerts, compose
 - [x] observability: Prometheus metrics, Grafana dashboard, heartbeat, manual runs, endpoints probe
-- [ ] telegram delivery
+- [x] telegram delivery: Hawk notification found in a Telegram group by a bot, with a probe through @codex_bot
