@@ -496,6 +496,12 @@ function checkCombinations(env: z.output<typeof baseSchema>, ctx: z.RefinementCt
     }
   }
 
+  if (env.EVENT_VISIBLE_TIMEOUT_MS < 2 * env.HTTP_TIMEOUT_MS) {
+    ctx.addIssue({ code: 'custom',
+      path: ['EVENT_VISIBLE_TIMEOUT_MS'],
+      message: 'must be at least twice HTTP_TIMEOUT_MS: the search needs one HTTP timeout and the card read another' });
+  }
+
   for (const [name] of STAGE_TIMEOUT_VARS.slice(0, -1)) {
     stagesTotal += env[name];
   }

@@ -211,7 +211,7 @@ describe('failures', () => {
     hawk.collector.knobs.processingDelayMs = 600;
 
     const { deps } = createTestDeps(hawk, { env: { ...TIMEOUT_LIMITS,
-      EVENT_VISIBLE_TIMEOUT_MS: '150',
+      EVENT_VISIBLE_TIMEOUT_MS: '200',
       CLEANUP_TIMEOUT_MS: '1500' } });
     let stageSignal: AbortSignal | undefined;
     const waitingFind: ScenarioDeps['api'] = { ...deps.api,
@@ -328,7 +328,7 @@ describe('failures', () => {
     hawk.collector.knobs.processingDelayMs = 600;
 
     const { deps } = createTestDeps(hawk, { env: { ...TIMEOUT_LIMITS,
-      EVENT_VISIBLE_TIMEOUT_MS: '150',
+      EVENT_VISIBLE_TIMEOUT_MS: '200',
       CLEANUP_TIMEOUT_MS: '1500' } });
     let stageSignal: AbortSignal | undefined;
     const waitingFind: ScenarioDeps['api'] = { ...deps.api,
