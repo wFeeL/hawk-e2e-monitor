@@ -3,6 +3,7 @@ export const HttpStatus = {
   ok: 200,
   accepted: 202,
   partialContent: 206,
+  multipleChoices: 300,
   badRequest: 400,
   unauthorized: 401,
   paymentRequired: 402,
