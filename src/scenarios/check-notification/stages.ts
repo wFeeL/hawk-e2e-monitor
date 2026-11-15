@@ -27,6 +27,8 @@ export interface NotificationState {
   ruleChangedAgoMs?: number;
   /** What the provisioner did in `notification_setup`. */
   provisioning?: ProvisionResult;
+  /** Threshold POSTs of the run that had arrived when the repeat was about to be sent. */
+  thresholdBeforeRepeat?: Arrival[];
 }
 
 /** Host of the address a process used for the last run. */
@@ -425,6 +427,103 @@ export function notificationFormedStage(timeoutMs: number): StageSpec<Notificati
         const first = Math.min(...[webhook, loop].flatMap(arrival => arrival === undefined ? [] : [arrival.atMs]));
 
         details.warning = `Only the ${String(present)} notification arrived; the ${absent} sender did not deliver within ${formatDuration(clock.monotonicMs() - first)}`;
+      }
+
+      return { status: 'ok',
+        details };
+    },
+  };
+}
+
+/**
+ * Builds the hook that runs right before the event is sent again.
+ * A threshold POST that is already there came before the repeat, which Hawk must not send for.
+ * @param context Context whose receiver the hook reads.
+ * @returns Hook for `eventRepeatedStage`.
+ */
+export function thresholdBeforeRepeat(context: NotificationContext): () => void {
+  return () => {
+    context.notification.thresholdBeforeRepeat = context.receiver.counts(context.plan.runId).threshold;
+  };
+}
+
+/** An entry of the events of a webhook payload, as far as the repetition goes. */
+interface RepetitionItem {
+  /** Id of the repetition, null for a first event. */
+  repetitionId?: unknown;
+}
+
+/**
+ * Reads the id of the repetition a webhook body names.
+ * @param rawBody Body text.
+ * @returns The id, `null` for a first event, undefined when the body says nothing.
+ */
+function webhookRepetitionId(rawBody: string): string | null | undefined {
+  const id = (parseWebhook(rawBody)?.payload?.events?.[0] as RepetitionItem | undefined)?.repetitionId;
+
+  return typeof id === 'string' || id === null ? id : undefined;
+}
+
+/**
+ * Stage `threshold_formed`: after the repeat, waits for the threshold notification and checks it.
+ * A POST before the repeat, or one with no repetition id, is the rule firing on the first event.
+ * @param timeoutMs Time limit of the stage.
+ * @returns Stage spec.
+ */
+export function thresholdFormedStage(timeoutMs: number): StageSpec<NotificationContext> {
+  return {
+    name: 'threshold_formed',
+    timeoutMs,
+    run: async (context, signal): Promise<StageOutcome> => {
+      const { clock, config, notification, plan, receiver, settings, state } = context;
+
+      if (!plan.repeat) {
+        return { status: 'skipped' };
+      }
+
+      if (notification.warmup) {
+        return { status: 'skipped',
+          details: { reason: 'rule_cache_warmup' } };
+      }
+
+      const early = notification.thresholdBeforeRepeat ?? [];
+
+      if (early.length > 0) {
+        return { status: 'failed',
+          error: new CheckError('threshold_early', { detail: `${String(early.length)} POST before the event was repeated` }) };
+      }
+
+      const startedMs = clock.monotonicMs();
+      const arrivals = await receiver.wait(plan.runId, { channels: ['threshold'],
+        timeoutMs: settings.timeoutMs,
+        pairWaitMs: settings.pairWaitMs,
+        signal });
+      const [arrival] = arrivals.threshold;
+
+      if (arrival === undefined) {
+        return { status: 'failed',
+          error: new CheckError('notification_timeout', { channel: 'threshold',
+            waitedMs: Math.round(clock.monotonicMs() - startedMs) }),
+          details: { unmatched: arrivals.unmatched } };
+      }
+
+      if (webhookRepetitionId(arrival.rawBody) === null) {
+        return { status: 'failed',
+          error: new CheckError('threshold_early', { detail: 'the POST names no repetition, so it was sent for the first event' }) };
+      }
+
+      const problem = checkWebhook(arrival, plan.title, config.hawk.projectId);
+
+      if (problem) {
+        return { status: 'failed',
+          error: problem };
+      }
+
+      const sentAtMs = state.repeatAcceptedAtMs ?? state.acceptedAtMs;
+      const details: Record<string, unknown> = { unmatched: arrivals.unmatched };
+
+      if (sentAtMs !== undefined) {
+        details.latencyMs = Math.round(arrival.atMs - sentAtMs);
       }
 
       return { status: 'ok',

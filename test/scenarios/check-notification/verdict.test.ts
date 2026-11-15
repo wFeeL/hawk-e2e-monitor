@@ -322,6 +322,46 @@ describe('decideNotificationVerdict', () => {
     });
   });
 
+  describe('threshold', () => {
+    const post = (atMs: number): Arrival => ({ channel: 'threshold',
+      atMs,
+      headers: GOOD_HEADERS,
+      rawBody: webhookBody() });
+    const withThreshold = (...posts: Arrival[]): Arrivals => ({ ...BOTH,
+      threshold: posts });
+
+    it('two threshold posts are duplicate_notification of the threshold channel', () => {
+      const result = decideNotificationVerdict([...stages(), stage('threshold_formed')], STATE, notification(BOTH, withThreshold(post(2000), post(2100))), PROJECT);
+
+      expect(result.verdict).toMatchObject({ status: 'failed',
+        failedStage: 'threshold_formed' });
+      expect(result.verdict.error?.message).toBe('The threshold notification arrived 2 times');
+    });
+
+    it('one threshold post is fine and its latency counts from the repeat', () => {
+      const result = decideNotificationVerdict([...stages(), stage('threshold_formed')], { ...STATE,
+        repeatAcceptedAtMs: 1800 }, notification(BOTH, withThreshold(post(2000))), PROJECT);
+
+      expect(result.verdict.status).toBe('ok');
+      expect(result.notification?.threshold).toEqual({ latencyMs: 200 });
+    });
+
+    it('a failed threshold stage is the failure of the run', () => {
+      const failed = stage('threshold_formed', 'failed', { errorClass: 'threshold_early',
+        culprit: 'hawk',
+        message: 'early' });
+      const result = decideNotificationVerdict([...stages(), failed], STATE, notification(BOTH, BOTH), PROJECT);
+
+      expect(result.verdict).toMatchObject({ status: 'failed',
+        failedStage: 'threshold_formed' });
+      expect(result.verdict.error?.errorClass).toBe('threshold_early');
+    });
+
+    it('has no threshold in the summary without a post', () => {
+      expect(decideNotificationVerdict(stages(), STATE, notification(BOTH, BOTH), PROJECT).notification?.threshold).toBeUndefined();
+    });
+  });
+
   it('reports unmatched posts from the final counts', () => {
     const result = decideNotificationVerdict(stages(), STATE, notification(BOTH, arrivals(BOTH.webhook, BOTH.loop, 2)), PROJECT);
 

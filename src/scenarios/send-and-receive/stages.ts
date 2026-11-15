@@ -103,6 +103,8 @@ export interface ScenarioState {
   acceptedAtMs?: number;
   /** Outcome of the second send. */
   repeatOutcome?: SendOutcome;
+  /** Monotonic time of the collector's answer to the second send, or of the start of that send when it is uncertain. */
+  repeatAcceptedAtMs?: number;
   /** The event found in Hawk. */
   event?: FoundEvent;
   /** Time from `acceptedAtMs` to the first sighting. */
@@ -718,9 +720,10 @@ export function eventVisibleStage(timeoutMs: number): StageSpec<ScenarioContext>
 /**
  * Stage 5: sends the event again and waits until Hawk counts it twice.
  * @param timeoutMs Time limit of the stage.
+ * @param beforeSend Called right before the second send, for what must be known before the repeat leaves.
  * @returns Stage spec.
  */
-export function eventRepeatedStage(timeoutMs: number): StageSpec<ScenarioContext> {
+export function eventRepeatedStage(timeoutMs: number, beforeSend?: () => void): StageSpec<ScenarioContext> {
   return {
     name: 'event_repeated',
     timeoutMs,
@@ -739,9 +742,13 @@ export function eventRepeatedStage(timeoutMs: number): StageSpec<ScenarioContext
         throw new CheckError('monitor_internal', { detail: 'event_repeated ran without a found event' });
       }
 
+      beforeSend?.();
+
+      const startedMs = clock.monotonicMs();
       const outcome = await collector.send(shape.message(context), plan.transport, signal);
 
       state.repeatOutcome = outcome;
+      state.repeatAcceptedAtMs = outcome.kind === 'accepted' ? clock.monotonicMs() : startedMs;
 
       if (outcome.kind === 'rejected') {
         return { status: 'failed',

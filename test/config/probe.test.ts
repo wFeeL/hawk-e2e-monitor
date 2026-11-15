@@ -137,7 +137,8 @@ describe('probe configuration', () => {
         EVENT_VISIBLE_TIMEOUT_MS: '60000',
         EVENT_REPEATED_TIMEOUT_MS: '60000',
         CLEANUP_TIMEOUT_MS: '90000',
-        RUN_TIMEOUT_MS: '480000',
+        // The check-notification stages add up to 555000 ms, the wait for the threshold notification included.
+        RUN_TIMEOUT_MS: '560000',
         CHECK_INTERVAL_MS: '700000' };
 
       expectOk(loadConfig(validEnv(env)));

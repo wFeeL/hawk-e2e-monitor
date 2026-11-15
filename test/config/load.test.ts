@@ -280,8 +280,8 @@ describe('loadConfig', () => {
   });
 
   it('RUN_TIMEOUT_MS must cover stages 1-5, cleanup not counted', () => {
-    // The check-notification sum is the larger one, so 315000 satisfies both.
-    expectOk(loadConfig(validEnv({ RUN_TIMEOUT_MS: '315000',
+    // The check-notification sum is the larger one, so 440000 satisfies both.
+    expectOk(loadConfig(validEnv({ RUN_TIMEOUT_MS: '440000',
       CLEANUP_TIMEOUT_MS: '99999999',
       CHECK_INTERVAL_MS: '200000000',
       SWEEP_MIN_AGE_MS: '200000000' })));

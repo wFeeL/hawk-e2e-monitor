@@ -95,6 +95,8 @@ function summarize(state: ScenarioState, finalArrivals: Arrivals): RunNotificati
   const [webhook] = finalArrivals.webhook;
   const [loop] = finalArrivals.loop;
   const accepted = state.acceptedAtMs;
+  const [threshold] = finalArrivals.threshold;
+  const repeated = state.repeatAcceptedAtMs;
 
   if (webhook !== undefined && accepted !== undefined) {
     summary.webhook = { latencyMs: Math.round(webhook.atMs - accepted) };
@@ -112,6 +114,10 @@ function summarize(state: ScenarioState, finalArrivals: Arrivals): RunNotificati
 
   if (loop !== undefined && accepted !== undefined) {
     summary.loop = { latencyMs: Math.round(loop.atMs - accepted) };
+  }
+
+  if (threshold !== undefined && repeated !== undefined) {
+    summary.threshold = { latencyMs: Math.round(threshold.atMs - repeated) };
   }
 
   return summary;
@@ -185,6 +191,17 @@ export function decideNotificationVerdict(stages: readonly StageResult[], state:
           count }) },
       ...rest };
     }
+  }
+
+  const thresholdStage = stages.find(stage => stage.name === 'threshold_formed');
+  const thresholdCount = finalArrivals.threshold.length;
+
+  if (thresholdStage?.status === 'ok' && thresholdCount > 1) {
+    return { verdict: { status: 'failed',
+      failedStage: 'threshold_formed',
+      error: new CheckError('duplicate_notification', { channel: 'threshold',
+        count: thresholdCount }) },
+    ...rest };
   }
 
   return { verdict: base,
