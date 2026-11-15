@@ -16,6 +16,7 @@ import { runSendAndReceive, scenarioSecrets } from '../scenarios/send-and-receiv
 import type { ScenarioDeps } from '../scenarios/send-and-receive/run.js';
 import { systemClock } from '../time/clock.js';
 import { refusalWhileServing } from './serving.js';
+import { CHECK_NOTIFICATION } from '../scenarios/names.js';
 
 /** Where the command writes. */
 export interface CheckIo {
@@ -51,14 +52,17 @@ function defaultDeps(config: Config, io: CheckIo, masking: MutableRedactor): Sce
     redact: masking.redact,
     collector: createCollectorClient({ endpoints: collectorEndpoints(token, config.hawk.collectorUrl),
       httpTimeoutMs: config.httpTimeoutMs,
-      clock }),
+      clock,
+      retry: config.retry }),
     api: createHawkApi({
       transport: createGraphqlTransport({ url: config.hawk.apiUrl,
         httpTimeoutMs: config.httpTimeoutMs,
-        clock }),
+        clock,
+        retry: config.retry }),
       email: config.hawk.email,
       password: config.hawk.password,
       clock,
+      retry: config.retry,
     }),
   };
 }
@@ -153,7 +157,7 @@ export async function runCheckCommand(command: CheckCommand, config: Config, io:
 
   const masking = createMutableRedactor(scenarioSecrets(config));
 
-  if (command.scenario === 'check-notification') {
+  if (command.scenario === CHECK_NOTIFICATION) {
     return runNotificationCommand(command, config, io, deps, masking);
   }
 

@@ -1,13 +1,14 @@
 import type { FoundEvent, HawkApi } from '../clients/hawk-api.js';
 import type { Config } from '../config/load.js';
 import type { Logger } from '../log/logger.js';
-import { buildTitle, SCENARIO_NAMES } from '../scenarios/send-and-receive/plan.js';
+import { buildTitle } from '../scenarios/send-and-receive/plan.js';
+import { SCENARIO_NAMES } from '../scenarios/names.js';
 import type { History } from '../storage/history.js';
 import type { Clock } from '../time/clock.js';
 
 const PAGE_SIZE = 50;
 const MAX_PAGES = 10;
-const BUDGET_FACTOR = 4;
+const TIMEOUT_FACTOR = 4;
 const FIRST_PASS_DELAY_MS = 300_000;
 const RUN_ID_PATTERN = /^[a-z]{16}$/u;
 
@@ -192,11 +193,11 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
       skipped: 0,
       lateMarked: 0,
       pages: 0 };
-    const budget = new AbortController();
-    const signal = AbortSignal.any([outer, budget.signal]);
+    const timeout = new AbortController();
+    const signal = AbortSignal.any([outer, timeout.signal]);
 
-    clock.sleep(config.budgets.cleanup * BUDGET_FACTOR, budget.signal).then(() => {
-      budget.abort();
+    clock.sleep(config.timeouts.cleanup * TIMEOUT_FACTOR, timeout.signal).then(() => {
+      timeout.abort();
     }, () => undefined);
 
     try {
@@ -229,7 +230,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
       logger.warn('sweep failed', { error: report.error,
         ...report });
     } finally {
-      budget.abort();
+      timeout.abort();
     }
 
     if (report.error === undefined && (report.removed > 0 || report.lateMarked > 0)) {
@@ -240,32 +241,36 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
     return report;
   };
 
+  const start: Sweeper['start'] = () => {
+    if (sweepIntervalMs === 0 || loop !== undefined) {
+      return;
+    }
+
+    loop = (async (): Promise<void> => {
+      let pauseMs = deps.firstPassDelayMs ?? FIRST_PASS_DELAY_MS;
+
+      for (;;) {
+        try {
+          await clock.sleep(pauseMs, stopper.signal);
+        } catch {
+          return;
+        }
+
+        await sweepOnce(stopper.signal);
+        pauseMs = sweepIntervalMs;
+      }
+    })();
+  };
+
+  const stop: Sweeper['stop'] = async () => {
+    stopper.abort();
+    await loop;
+  };
+
   return {
     sweepOnce,
-    start() {
-      if (sweepIntervalMs === 0 || loop !== undefined) {
-        return;
-      }
-
-      loop = (async (): Promise<void> => {
-        let pauseMs = deps.firstPassDelayMs ?? FIRST_PASS_DELAY_MS;
-
-        for (;;) {
-          try {
-            await clock.sleep(pauseMs, stopper.signal);
-          } catch {
-            return;
-          }
-
-          await sweepOnce(stopper.signal);
-          pauseMs = sweepIntervalMs;
-        }
-      })();
-    },
-    async stop() {
-      stopper.abort();
-      await loop;
-    },
+    start,
+    stop,
     failures: () => failures,
   };
 }

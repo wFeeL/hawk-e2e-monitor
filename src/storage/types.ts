@@ -1,7 +1,7 @@
 import type { RunResult, StageName, StageResult } from '../engine/result.js';
 import type { Culprit, ErrorClass } from '../errors/taxonomy.js';
 import type { NotificationChannel } from '../notifications/types.js';
-import type { ScenarioName } from '../scenarios/send-and-receive/plan.js';
+import type { ScenarioName } from '../scenarios/names.js';
 
 /** Where a run is in its life. */
 export type RunStatus = 'aborted' | 'failed' | 'ok' | 'running' | 'skipped';

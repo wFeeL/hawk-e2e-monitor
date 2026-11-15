@@ -3,10 +3,12 @@ import type { RunResult, StageName } from '../engine/result.js';
 import { CheckError, CULPRIT_OF } from '../errors/taxonomy.js';
 import type { Culprit, ErrorClass } from '../errors/taxonomy.js';
 import type { NotificationChannel } from '../notifications/types.js';
-import type { ScenarioName } from '../scenarios/send-and-receive/plan.js';
+import type { ScenarioName } from '../scenarios/names.js';
 import type { AlertLevelState, DegradedCode, RunOutcome, RunRow, RunStatus, RunTrigger, SkipReason, StageRow } from './types.js';
+import { MS_PER_DAY } from '../time/units.js';
 
-const MS_PER_DAY = 86_400_000;
+/** Runs a listing returns when the caller gives no limit. */
+export const DEFAULT_LIST_LIMIT = 20;
 const WINDOW_DAYS = 7;
 const SHORT_WINDOW_DAYS = 1;
 const P50 = 0.5;
@@ -468,192 +470,232 @@ export function createHistory(db: DatabaseSync): History {
       lateDuplicateNotifications };
   };
 
-  return {
-    nextSequence(scenario) {
-      const row = one('SELECT MAX(sequence) AS top FROM runs WHERE scenario = ? AND NOT (status = \'skipped\' AND skip_reason = \'overlap\')', scenario);
+  const nextSequence: History['nextSequence'] = (scenario) => {
+    const row = one('SELECT MAX(sequence) AS top FROM runs WHERE scenario = ? AND NOT (status = \'skipped\' AND skip_reason = \'overlap\')', scenario);
 
-      return (num(row ?? {}, 'top') ?? 0) + 1;
-    },
-    startRun(start) {
-      run('INSERT INTO runs (run_id, scenario, sequence, trigger, status, started_at) VALUES (?, ?, ?, ?, \'running\', ?)',
-        start.runId, start.scenario, start.sequence, start.trigger, start.startedAt);
-    },
-    finishRun(runId, outcome) {
-      transaction(() => {
-        const row = one('SELECT id FROM runs WHERE run_id = ? AND status = \'running\'', runId);
-        const pk = num(row ?? {}, 'id');
+    return (num(row ?? {}, 'top') ?? 0) + 1;
+  };
 
-        if (pk === undefined) {
-          throw new Error(`Run ${runId} is not running or unknown`);
-        }
+  const startRun: History['startRun'] = (start) => {
+    run('INSERT INTO runs (run_id, scenario, sequence, trigger, status, started_at) VALUES (?, ?, ?, ?, \'running\', ?)',
+      start.runId, start.scenario, start.sequence, start.trigger, start.startedAt);
+  };
 
-        const { result } = outcome;
+  const finishRun: History['finishRun'] = (runId, outcome) => {
+    transaction(() => {
+      const row = one('SELECT id FROM runs WHERE run_id = ? AND status = \'running\'', runId);
+      const pk = num(row ?? {}, 'id');
 
-        run('UPDATE runs SET status = ?, finished_at = ?, duration_ms = ?, event_latency_ms = ?, failed_stage = ?, error_class = ?, culprit = ?, message = ?, skip_reason = ?, degraded = ?, result_json = ? WHERE id = ?',
-          outcome.status, outcome.finishedAt, outcome.durationMs, result?.eventLatencyMs ?? null, outcome.failedStage ?? null,
-          outcome.errorClass ?? null, outcome.culprit ?? null, outcome.message ?? null, outcome.skipReason ?? null,
-          JSON.stringify(outcome.degraded), result === undefined ? null : JSON.stringify(result), pk);
+      if (pk === undefined) {
+        throw new Error(`Run ${runId} is not running or unknown`);
+      }
 
-        for (const [position, stage] of (result?.stages ?? []).entries()) {
-          run('INSERT INTO stages (run_pk, position, name, status, duration_ms, error_class, culprit) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            pk, position, stage.name, stage.status, stage.durationMs, stage.errorClass ?? null, stage.culprit ?? null);
-        }
-      });
-    },
-    recordSkip(skip) {
-      run('INSERT INTO runs (run_id, scenario, sequence, trigger, status, started_at, finished_at, duration_ms, skip_reason) VALUES (?, ?, ?, ?, \'skipped\', ?, ?, 0, ?)',
-        skip.runId, skip.scenario, skip.sequence, skip.trigger, skip.at, skip.at, skip.reason);
-    },
-    abortRunning(errorClass, at) {
-      const message = new CheckError(errorClass).message;
+      const { result } = outcome;
 
-      return transaction(() => {
-        const rows = all('SELECT id, started_at FROM runs WHERE status = \'running\'');
+      run('UPDATE runs SET status = ?, finished_at = ?, duration_ms = ?, event_latency_ms = ?, failed_stage = ?, error_class = ?, culprit = ?, message = ?, skip_reason = ?, degraded = ?, result_json = ? WHERE id = ?',
+        outcome.status, outcome.finishedAt, outcome.durationMs, result?.eventLatencyMs ?? null, outcome.failedStage ?? null,
+        outcome.errorClass ?? null, outcome.culprit ?? null, outcome.message ?? null, outcome.skipReason ?? null,
+        JSON.stringify(outcome.degraded), result === undefined ? null : JSON.stringify(result), pk);
 
-        for (const row of rows) {
-          const duration = Math.max(0, Date.parse(at) - Date.parse(required(row, 'started_at')));
+      for (const [position, stage] of (result?.stages ?? []).entries()) {
+        run('INSERT INTO stages (run_pk, position, name, status, duration_ms, error_class, culprit) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          pk, position, stage.name, stage.status, stage.durationMs, stage.errorClass ?? null, stage.culprit ?? null);
+      }
+    });
+  };
 
-          run('UPDATE runs SET status = \'aborted\', finished_at = ?, duration_ms = ?, error_class = ?, culprit = ?, message = ? WHERE id = ?',
-            at, Number.isNaN(duration) ? 0 : duration, errorClass, CULPRIT_OF[errorClass], message, num(row, 'id') ?? 0);
-        }
+  const recordSkip: History['recordSkip'] = (skip) => {
+    run('INSERT INTO runs (run_id, scenario, sequence, trigger, status, started_at, finished_at, duration_ms, skip_reason) VALUES (?, ?, ?, ?, \'skipped\', ?, ?, 0, ?)',
+      skip.runId, skip.scenario, skip.sequence, skip.trigger, skip.at, skip.at, skip.reason);
+  };
 
-        return rows.length;
-      });
-    },
-    get(runId) {
-      const row = one('SELECT * FROM runs WHERE run_id = ?', runId);
+  const abortRunning: History['abortRunning'] = (errorClass, at) => {
+    const message = new CheckError(errorClass).message;
+
+    return transaction(() => {
+      const rows = all('SELECT id, started_at FROM runs WHERE status = \'running\'');
+
+      for (const row of rows) {
+        const duration = Math.max(0, Date.parse(at) - Date.parse(required(row, 'started_at')));
+
+        run('UPDATE runs SET status = \'aborted\', finished_at = ?, duration_ms = ?, error_class = ?, culprit = ?, message = ? WHERE id = ?',
+          at, Number.isNaN(duration) ? 0 : duration, errorClass, CULPRIT_OF[errorClass], message, num(row, 'id') ?? 0);
+      }
+
+      return rows.length;
+    });
+  };
+
+  const get: History['get'] = (runId) => {
+    const row = one('SELECT * FROM runs WHERE run_id = ?', runId);
+
+    if (row === undefined) {
+      return undefined;
+    }
+
+    const json = text(row, 'result_json');
+
+    return json === undefined
+      ? toRow(row)
+      : { ...toRow(row),
+          result: JSON.parse(json) as RunResult };
+  };
+
+  const list: History['list'] = (options) => {
+    const rows = options.scenario === undefined
+      ? all('SELECT * FROM runs ORDER BY started_at DESC, id DESC LIMIT ?', options.limit)
+      : all('SELECT * FROM runs WHERE scenario = ? ORDER BY started_at DESC, id DESC LIMIT ?', options.scenario, options.limit);
+
+    return rows.map(toRow);
+  };
+
+  const stats: History['stats'] = (now, scenarios) => {
+    const since = (days: number): string => new Date(now.getTime() - days * MS_PER_DAY).toISOString();
+
+    return scenarios.map((scenario) => {
+      const last = one('SELECT run_id, status, started_at FROM runs WHERE scenario = ? ORDER BY started_at DESC, id DESC LIMIT 1', scenario);
+
+      return { scenario,
+        last24h: windowStats(scenario, since(SHORT_WINDOW_DAYS)),
+        last7d: windowStats(scenario, since(WINDOW_DAYS)),
+        ...last === undefined
+          ? {}
+          : { lastRun: { runId: required(last, 'run_id'),
+              status: required(last, 'status') as RunStatus,
+              startedAt: required(last, 'started_at') } } };
+    });
+  };
+
+  const markLateEvent: History['markLateEvent'] = (runId, at, delayMs) => {
+    return run('UPDATE runs SET late_event_found_at = ?, late_event_delay_ms = ? WHERE run_id = ? AND status = \'failed\' AND late_event_found_at IS NULL', at, delayMs, runId) > 0;
+  };
+
+  const markLateNotification: History['markLateNotification'] = (runId, channel, at) => {
+    return transaction(() => {
+      const row = one('SELECT late_notification_at, late_notification_channel, late_duplicate_notification_at, result_json FROM runs WHERE run_id = ?', runId);
 
       if (row === undefined) {
         return undefined;
       }
 
       const json = text(row, 'result_json');
+      const result = json === undefined ? undefined : JSON.parse(json) as RunResult;
+      const seen = result?.notification?.[channel]?.latencyMs !== undefined;
 
-      return json === undefined
-        ? toRow(row)
-        : { ...toRow(row),
-            result: JSON.parse(json) as RunResult };
-    },
-    list(options) {
-      const rows = options.scenario === undefined
-        ? all('SELECT * FROM runs ORDER BY started_at DESC, id DESC LIMIT ?', options.limit)
-        : all('SELECT * FROM runs WHERE scenario = ? ORDER BY started_at DESC, id DESC LIMIT ?', options.scenario, options.limit);
+      if (text(row, 'late_notification_at') === undefined && !seen) {
+        run('UPDATE runs SET late_notification_at = ?, late_notification_channel = ? WHERE run_id = ?', at, channel, runId);
 
-      return rows.map(toRow);
-    },
-    stats(now, scenarios) {
-      const since = (days: number): string => new Date(now.getTime() - days * MS_PER_DAY).toISOString();
+        return 'late';
+      }
 
-      return scenarios.map((scenario) => {
-        const last = one('SELECT run_id, status, started_at FROM runs WHERE scenario = ? ORDER BY started_at DESC, id DESC LIMIT 1', scenario);
+      if ((seen || text(row, 'late_notification_channel') === channel) && text(row, 'late_duplicate_notification_at') === undefined) {
+        run('UPDATE runs SET late_duplicate_notification_at = ? WHERE run_id = ?', at, runId);
 
-        return { scenario,
-          last24h: windowStats(scenario, since(SHORT_WINDOW_DAYS)),
-          last7d: windowStats(scenario, since(WINDOW_DAYS)),
-          ...last === undefined
-            ? {}
-            : { lastRun: { runId: required(last, 'run_id'),
-                status: required(last, 'status') as RunStatus,
-                startedAt: required(last, 'started_at') } } };
-      });
-    },
-    markLateEvent(runId, at, delayMs) {
-      return run('UPDATE runs SET late_event_found_at = ?, late_event_delay_ms = ? WHERE run_id = ? AND status = \'failed\' AND late_event_found_at IS NULL', at, delayMs, runId) > 0;
-    },
-    markLateNotification(runId, channel, at) {
-      return transaction(() => {
-        const row = one('SELECT late_notification_at, late_notification_channel, late_duplicate_notification_at, result_json FROM runs WHERE run_id = ?', runId);
+        return 'duplicate';
+      }
 
-        if (row === undefined) {
-          return undefined;
-        }
+      return undefined;
+    });
+  };
 
-        const json = text(row, 'result_json');
-        const result = json === undefined ? undefined : JSON.parse(json) as RunResult;
-        const seen = result?.notification?.[channel]?.latencyMs !== undefined;
+  const alertState: History['alertState'] = (scenario) => {
+    const row = one('SELECT * FROM alert_state WHERE scenario = ?', scenario);
 
-        if (text(row, 'late_notification_at') === undefined && !seen) {
-          run('UPDATE runs SET late_notification_at = ?, late_notification_channel = ? WHERE run_id = ?', at, channel, runId);
+    return row === undefined
+      ? undefined
+      : compact<AlertStateRow>({
+          scenario,
+          state: required(row, 'state') as AlertLevelState,
+          failureStreak: num(row, 'failure_streak') ?? 0,
+          lastClass: text(row, 'last_class'),
+          lastStage: text(row, 'last_stage'),
+          lastRunId: text(row, 'last_run_id'),
+          episodeStartedAt: text(row, 'episode_started_at'),
+          episodeFailures: num(row, 'episode_failures') ?? 0,
+          degraded: codes(text(row, 'degraded')),
+          updatedAt: required(row, 'updated_at'),
+        });
+  };
 
-          return 'late';
-        }
+  const saveAlert: History['saveAlert'] = (state, message) => {
+    transaction(() => {
+      run('INSERT OR REPLACE INTO alert_state (scenario, state, failure_streak, last_class, last_stage, last_run_id, episode_started_at, episode_failures, degraded, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        state.scenario, state.state, state.failureStreak, state.lastClass ?? null, state.lastStage ?? null, state.lastRunId ?? null,
+        state.episodeStartedAt ?? null, state.episodeFailures, JSON.stringify(state.degraded), state.updatedAt);
 
-        if ((seen || text(row, 'late_notification_channel') === channel) && text(row, 'late_duplicate_notification_at') === undefined) {
-          run('UPDATE runs SET late_duplicate_notification_at = ? WHERE run_id = ?', at, runId);
+      if (message !== undefined) {
+        run('INSERT INTO alert_outbox (scenario, run_id, text, created_at, next_attempt_at) VALUES (?, ?, ?, ?, ?)',
+          state.scenario, message.runId ?? null, message.text, message.at, message.at);
+      }
+    });
+  };
 
-          return 'duplicate';
-        }
+  const pendingAlerts: History['pendingAlerts'] = (now, limit) => {
+    return all('SELECT * FROM alert_outbox WHERE sent_at IS NULL AND dropped_at IS NULL AND next_attempt_at <= ? ORDER BY created_at, id LIMIT ?', now, limit)
+      .map(row => compact<OutboxRow>({ id: num(row, 'id') ?? 0,
+        scenario: required(row, 'scenario') as ScenarioName,
+        runId: text(row, 'run_id'),
+        text: required(row, 'text'),
+        createdAt: required(row, 'created_at'),
+        attempts: num(row, 'attempts') ?? 0,
+        nextAttemptAt: required(row, 'next_attempt_at') }));
+  };
 
-        return undefined;
-      });
-    },
-    alertState(scenario) {
-      const row = one('SELECT * FROM alert_state WHERE scenario = ?', scenario);
+  const alertAttempt: History['alertAttempt'] = (id, update) => {
+    run('UPDATE alert_outbox SET attempts = attempts + 1, sent_at = COALESCE(?, sent_at), next_attempt_at = COALESCE(?, next_attempt_at), dropped_at = COALESCE(?, dropped_at), last_error = COALESCE(?, last_error) WHERE id = ?',
+      update.sentAt ?? null, update.nextAttemptAt ?? null, update.droppedAt ?? null, update.error ?? null, id);
+  };
 
-      return row === undefined
-        ? undefined
-        : compact<AlertStateRow>({
-            scenario,
-            state: required(row, 'state') as AlertLevelState,
-            failureStreak: num(row, 'failure_streak') ?? 0,
-            lastClass: text(row, 'last_class'),
-            lastStage: text(row, 'last_stage'),
-            lastRunId: text(row, 'last_run_id'),
-            episodeStartedAt: text(row, 'episode_started_at'),
-            episodeFailures: num(row, 'episode_failures') ?? 0,
-            degraded: codes(text(row, 'degraded')),
-            updatedAt: required(row, 'updated_at'),
-          });
-    },
-    saveAlert(state, message) {
-      transaction(() => {
-        run('INSERT OR REPLACE INTO alert_state (scenario, state, failure_streak, last_class, last_stage, last_run_id, episode_started_at, episode_failures, degraded, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          state.scenario, state.state, state.failureStreak, state.lastClass ?? null, state.lastStage ?? null, state.lastRunId ?? null,
-          state.episodeStartedAt ?? null, state.episodeFailures, JSON.stringify(state.degraded), state.updatedAt);
+  const oldestUnsentAlert: History['oldestUnsentAlert'] = () => {
+    return text(one('SELECT MIN(created_at) AS oldest FROM alert_outbox WHERE sent_at IS NULL AND dropped_at IS NULL') ?? {}, 'oldest');
+  };
 
-        if (message !== undefined) {
-          run('INSERT INTO alert_outbox (scenario, run_id, text, created_at, next_attempt_at) VALUES (?, ?, ?, ?, ?)',
-            state.scenario, message.runId ?? null, message.text, message.at, message.at);
-        }
-      });
-    },
-    pendingAlerts(now, limit) {
-      return all('SELECT * FROM alert_outbox WHERE sent_at IS NULL AND dropped_at IS NULL AND next_attempt_at <= ? ORDER BY created_at, id LIMIT ?', now, limit)
-        .map(row => compact<OutboxRow>({ id: num(row, 'id') ?? 0,
-          scenario: required(row, 'scenario') as ScenarioName,
-          runId: text(row, 'run_id'),
-          text: required(row, 'text'),
-          createdAt: required(row, 'created_at'),
-          attempts: num(row, 'attempts') ?? 0,
-          nextAttemptAt: required(row, 'next_attempt_at') }));
-    },
-    alertAttempt(id, update) {
-      run('UPDATE alert_outbox SET attempts = attempts + 1, sent_at = COALESCE(?, sent_at), next_attempt_at = COALESCE(?, next_attempt_at), dropped_at = COALESCE(?, dropped_at), last_error = COALESCE(?, last_error) WHERE id = ?',
-        update.sentAt ?? null, update.nextAttemptAt ?? null, update.droppedAt ?? null, update.error ?? null, id);
-    },
-    oldestUnsentAlert() {
-      return text(one('SELECT MIN(created_at) AS oldest FROM alert_outbox WHERE sent_at IS NULL AND dropped_at IS NULL') ?? {}, 'oldest');
-    },
-    getKv(key) {
-      return text(one('SELECT value FROM kv WHERE key = ?', key) ?? {}, 'value');
-    },
-    setKv(key, value) {
-      run('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)', key, value);
-    },
-    deleteKv(key) {
-      run('DELETE FROM kv WHERE key = ?', key);
-    },
-    prune(before) {
-      return transaction(() => {
-        const removed = run('DELETE FROM runs WHERE finished_at IS NOT NULL AND finished_at < ?', before);
+  const getKv: History['getKv'] = (key) => {
+    return text(one('SELECT value FROM kv WHERE key = ?', key) ?? {}, 'value');
+  };
 
-        run('DELETE FROM alert_outbox WHERE sent_at < ? OR dropped_at < ?', before, before);
+  const setKv: History['setKv'] = (key, value) => {
+    run('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)', key, value);
+  };
 
-        return removed;
-      });
-    },
-    close() {
-      db.close();
-    },
+  const deleteKv: History['deleteKv'] = (key) => {
+    run('DELETE FROM kv WHERE key = ?', key);
+  };
+
+  const prune: History['prune'] = (before) => {
+    return transaction(() => {
+      const removed = run('DELETE FROM runs WHERE finished_at IS NOT NULL AND finished_at < ?', before);
+
+      run('DELETE FROM alert_outbox WHERE sent_at < ? OR dropped_at < ?', before, before);
+
+      return removed;
+    });
+  };
+
+  const close: History['close'] = () => {
+    db.close();
+  };
+
+  return {
+    nextSequence,
+    startRun,
+    finishRun,
+    recordSkip,
+    abortRunning,
+    get,
+    list,
+    stats,
+    markLateEvent,
+    markLateNotification,
+    alertState,
+    saveAlert,
+    pendingAlerts,
+    alertAttempt,
+    oldestUnsentAlert,
+    getKv,
+    setKv,
+    deleteKv,
+    prune,
+    close,
   };
 }

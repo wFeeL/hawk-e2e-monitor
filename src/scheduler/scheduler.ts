@@ -3,7 +3,7 @@ import type { RunResult } from '../engine/result.js';
 import type { Redactor } from '../errors/redact.js';
 import type { Logger } from '../log/logger.js';
 import { createRunId } from '../scenarios/send-and-receive/plan.js';
-import type { ScenarioName } from '../scenarios/send-and-receive/plan.js';
+import type { ScenarioName } from '../scenarios/names.js';
 import type { History, RunStart } from '../storage/history.js';
 import { abortedOutcome, outcomeOf, rowOf } from '../storage/outcome.js';
 import type { RunOutcome, RunRow, RunTrigger } from '../storage/types.js';
@@ -40,7 +40,7 @@ export interface SchedulerDeps {
   clock: Clock;
   /** Log. */
   logger: Logger;
-  /** Configuration with the budgets and the `monitoring` settings. */
+  /** Configuration with the timeouts and the `monitoring` settings. */
   config: Config;
   /** Masks secrets in the text of an exception of a scenario. */
   redact: Redactor;
@@ -133,7 +133,7 @@ export interface Scheduler {
   health(nowMonoMs?: number): SchedulerHealth;
   /**
    * Lists runs whose scenario may still be touching Hawk.
-   * @returns Ids of the running runs and of the abandoned ones until their cleanup budget passes.
+   * @returns Ids of the running runs and of the abandoned ones until their cleanup timeout passes.
    */
   activeRunIds(): Set<string>;
   /**
@@ -201,11 +201,11 @@ function describe(error: unknown): string {
  */
 export function createScheduler(deps: SchedulerDeps): Scheduler {
   const { history, clock, logger, config, redact } = deps;
-  const { budgets, monitoring } = config;
+  const { timeouts, monitoring } = config;
   const newRunId = deps.newRunId ?? ((): string => createRunId());
   const intervalOf = deps.intervalOf ?? ((): number => monitoring.intervalMs);
   const listeners = deps.onRunFinished === undefined ? [] : [deps.onRunFinished].flat();
-  const watchdogMs = budgets.run + budgets.cleanup + monitoring.watchdogGraceMs;
+  const watchdogMs = timeouts.run + timeouts.cleanup + monitoring.watchdogGraceMs;
   const states = new Map<ScenarioName, ScenarioState>();
   const stopper = new AbortController();
   let started = false;
@@ -378,7 +378,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
 
     // The scenario stays busy while its cleanup may still be running.
-    after(budgets.cleanup, handle.timers.signal, () => {
+    after(timeouts.cleanup, handle.timers.signal, () => {
       release(state, handle);
     });
   };
@@ -569,81 +569,95 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     });
   };
 
+  const start: Scheduler['start'] = () => {
+    if (started) {
+      return;
+    }
+
+    started = true;
+    startedMono = clock.monotonicMs();
+    selfCheck();
+
+    for (const state of states.values()) {
+      firstTick(state).catch((error: unknown) => {
+        logger.error('first tick failed', { scenario: state.name,
+          error });
+      });
+    }
+  };
+
+  const stop: Scheduler['stop'] = async () => {
+    if (stopped) {
+      return;
+    }
+
+    stopped = true;
+    stopper.abort();
+
+    for (const state of states.values()) {
+      state.timer?.abort();
+
+      const handle = state.running;
+
+      if (handle !== undefined && !handle.finished) {
+        handle.abandoned = true;
+        handle.timers.abort();
+        handle.controller.abort();
+        finish(state, handle, abortedOutcome('monitor_stopped', {}, wallIso(), clock.monotonicMs() - handle.startedMono));
+      }
+
+      handle?.timers.abort();
+      state.running = undefined;
+    }
+
+    await Promise.resolve();
+  };
+
+  const runNow: Scheduler['runNow'] = (scenario, trigger) => {
+    const state = states.get(scenario);
+
+    if (state === undefined) {
+      throw new Error(`Scenario ${scenario} is not scheduled`);
+    }
+
+    if (state.running !== undefined) {
+      return { started: false,
+        runningRunId: state.running.start.runId };
+    }
+
+    return startRun(state, trigger);
+  };
+
+  const status: Scheduler['status'] = () => {
+    return [...states.values()].map(state => ({ scenario: state.name,
+      ...state.lastTickAt === undefined ? {} : { lastTickAt: state.lastTickAt },
+      ...state.lastTickMono === undefined ? {} : { lastTickMonoMs: state.lastTickMono },
+      ...state.running === undefined ? {} : { runningRunId: state.running.start.runId },
+      storageFailed }));
+  };
+
+  const healthy: Scheduler['healthy'] = (nowMonoMs) => {
+    const health = evaluate(nowMonoMs ?? clock.monotonicMs());
+
+    return health.scheduler && health.storage;
+  };
+
+  const health: Scheduler['health'] = (nowMonoMs) => {
+    return evaluate(nowMonoMs ?? clock.monotonicMs());
+  };
+
+  const activeRunIds: Scheduler['activeRunIds'] = () => {
+    return new Set([...states.values()].flatMap(state => state.running === undefined ? [] : [state.running.start.runId]));
+  };
+
   return {
-    start() {
-      if (started) {
-        return;
-      }
-
-      started = true;
-      startedMono = clock.monotonicMs();
-      selfCheck();
-
-      for (const state of states.values()) {
-        firstTick(state).catch((error: unknown) => {
-          logger.error('first tick failed', { scenario: state.name,
-            error });
-        });
-      }
-    },
-    async stop() {
-      if (stopped) {
-        return;
-      }
-
-      stopped = true;
-      stopper.abort();
-
-      for (const state of states.values()) {
-        state.timer?.abort();
-
-        const handle = state.running;
-
-        if (handle !== undefined && !handle.finished) {
-          handle.abandoned = true;
-          handle.timers.abort();
-          handle.controller.abort();
-          finish(state, handle, abortedOutcome('monitor_stopped', {}, wallIso(), clock.monotonicMs() - handle.startedMono));
-        }
-
-        handle?.timers.abort();
-        state.running = undefined;
-      }
-
-      await Promise.resolve();
-    },
-    runNow(scenario, trigger) {
-      const state = states.get(scenario);
-
-      if (state === undefined) {
-        throw new Error(`Scenario ${scenario} is not scheduled`);
-      }
-
-      if (state.running !== undefined) {
-        return { started: false,
-          runningRunId: state.running.start.runId };
-      }
-
-      return startRun(state, trigger);
-    },
-    status() {
-      return [...states.values()].map(state => ({ scenario: state.name,
-        ...state.lastTickAt === undefined ? {} : { lastTickAt: state.lastTickAt },
-        ...state.lastTickMono === undefined ? {} : { lastTickMonoMs: state.lastTickMono },
-        ...state.running === undefined ? {} : { runningRunId: state.running.start.runId },
-        storageFailed }));
-    },
-    healthy(nowMonoMs) {
-      const health = evaluate(nowMonoMs ?? clock.monotonicMs());
-
-      return health.scheduler && health.storage;
-    },
-    health(nowMonoMs) {
-      return evaluate(nowMonoMs ?? clock.monotonicMs());
-    },
-    activeRunIds() {
-      return new Set([...states.values()].flatMap(state => state.running === undefined ? [] : [state.running.start.runId]));
-    },
+    start,
+    stop,
+    runNow,
+    status,
+    healthy,
+    health,
+    activeRunIds,
     failures: () => writeFailures,
   };
 }

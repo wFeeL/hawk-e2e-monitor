@@ -12,7 +12,7 @@ export default [
     },
   },
   {
-    files: ['eslint.config.mjs', 'vitest*.config.ts', '**/*.test.ts', 'src/test-support/**'],
+    files: ['eslint.config.mjs', 'vitest*.config.ts', '**/*.test.ts', 'test/**'],
     rules: {
       'n/no-unpublished-import': 'off',
     },
@@ -51,7 +51,7 @@ export default [
     },
   },
   {
-    files: ['**/*.test.ts', 'src/test-support/**'],
+    files: ['**/*.test.ts', 'test/**'],
     rules: {
       '@typescript-eslint/no-magic-numbers': 'off',
     },

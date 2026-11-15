@@ -2,16 +2,14 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Alerter } from '../alerting/alerter.js';
 import type { Config } from '../config/load.js';
 import type { RouteHandler } from '../http/internal-server.js';
-import { SCENARIO_NAMES } from '../scenarios/send-and-receive/plan.js';
+import { SCENARIO_NAMES } from '../scenarios/names.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
+import { DEFAULT_LIST_LIMIT } from '../storage/history.js';
 import type { History, ListOptions } from '../storage/history.js';
 import type { Clock } from '../time/clock.js';
+import { HttpStatus } from '../net/http-status.js';
 
-const HTTP_OK = 200;
-const HTTP_BAD_REQUEST = 400;
-const HTTP_NOT_FOUND = 404;
-const DEFAULT_LIMIT = 20;
-const MAX_LIMIT = 500;
+const MAX_HISTORY_ROUTE_LIMIT = 500;
 const RUNS_PREFIX = '/runs/';
 
 /** What the routes read. */
@@ -49,7 +47,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
  * @param message What is wrong with the request.
  */
 function badRequest(res: ServerResponse, message: string): void {
-  sendJson(res, HTTP_BAD_REQUEST, { error: 'bad_request',
+  sendJson(res, HttpStatus.badRequest, { error: 'bad_request',
     message });
 }
 
@@ -80,10 +78,10 @@ function listRuns(deps: RouteDeps): RouteHandler {
       return;
     }
 
-    const limit = limitText === null ? DEFAULT_LIMIT : Number(limitText);
+    const limit = limitText === null ? DEFAULT_LIST_LIMIT : Number(limitText);
 
-    if (limitText !== null && (!/^\d+$/u.test(limitText) || limit < 1 || limit > MAX_LIMIT)) {
-      badRequest(res, `limit must be a whole number from 1 to ${String(MAX_LIMIT)}`);
+    if (limitText !== null && (!/^\d+$/u.test(limitText) || limit < 1 || limit > MAX_HISTORY_ROUTE_LIMIT)) {
+      badRequest(res, `limit must be a whole number from 1 to ${String(MAX_HISTORY_ROUTE_LIMIT)}`);
 
       return;
     }
@@ -94,7 +92,7 @@ function listRuns(deps: RouteDeps): RouteHandler {
       options.scenario = scenario;
     }
 
-    sendJson(res, HTTP_OK, deps.history.list(options));
+    sendJson(res, HttpStatus.ok, deps.history.list(options));
   };
 }
 
@@ -110,12 +108,12 @@ function oneRun(deps: RouteDeps): RouteHandler {
     const run = runId === '' ? undefined : deps.history.get(runId);
 
     if (run === undefined) {
-      sendJson(res, HTTP_NOT_FOUND, { error: 'not_found' });
+      sendJson(res, HttpStatus.notFound, { error: 'not_found' });
 
       return;
     }
 
-    sendJson(res, HTTP_OK, run);
+    sendJson(res, HttpStatus.ok, run);
   };
 }
 
@@ -129,7 +127,7 @@ function stats(deps: RouteDeps): RouteHandler {
     const now = deps.clock.wallTime();
     const alerts = deps.alerter.health();
 
-    sendJson(res, HTTP_OK, {
+    sendJson(res, HttpStatus.ok, {
       generatedAt: now.toISOString(),
       scenarios: deps.history.stats(now, deps.config.monitoring.scenarios),
       storageFailures: deps.scheduler.failures() + deps.alerter.failures(),

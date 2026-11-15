@@ -1,12 +1,8 @@
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { Logger } from '../log/logger.js';
+import { HttpStatus } from '../net/http-status.js';
 
-const HTTP_OK = 200;
-const HTTP_NOT_FOUND = 404;
-const HTTP_METHOD_NOT_ALLOWED = 405;
-const HTTP_INTERNAL_ERROR = 500;
-const HTTP_UNAVAILABLE = 503;
 const HEALTH_PATH = '/healthz';
 const READY_PATH = '/readyz';
 
@@ -179,9 +175,9 @@ export function createInternalServer(options: InternalServerOptions): Server {
         });
       }
       if (failures.length === 0) {
-        sendJson(res, HTTP_OK, { status: 'ok' });
+        sendJson(res, HttpStatus.ok, { status: 'ok' });
       } else {
-        sendJson(res, HTTP_UNAVAILABLE, { status: 'fail',
+        sendJson(res, HttpStatus.serviceUnavailable, { status: 'fail',
           failed: failures.map(failure => failure.name) });
       }
 
@@ -193,9 +189,9 @@ export function createInternalServer(options: InternalServerOptions): Server {
     if (route) {
       await route(req, res);
     } else if (checks) {
-      sendJson(res, HTTP_METHOD_NOT_ALLOWED, { error: 'method_not_allowed' }, { allow: 'GET' });
+      sendJson(res, HttpStatus.methodNotAllowed, { error: 'method_not_allowed' }, { allow: 'GET' });
     } else {
-      sendJson(res, HTTP_NOT_FOUND, { error: 'not_found' });
+      sendJson(res, HttpStatus.notFound, { error: 'not_found' });
     }
   };
 
@@ -210,7 +206,7 @@ export function createInternalServer(options: InternalServerOptions): Server {
       if (res.headersSent) {
         res.destroy();
       } else {
-        sendJson(res, HTTP_INTERNAL_ERROR, { error: 'internal_error' });
+        sendJson(res, HttpStatus.internalServerError, { error: 'internal_error' });
       }
     });
   });

@@ -12,19 +12,19 @@ export interface StageOutcome {
   details?: Record<string, unknown>;
 }
 
-/** A stage: name, time budget and body. */
+/** A stage: name, time limit and body. */
 export interface StageSpec<C> {
   /** Stage name. */
   name: StageName;
   /** Time the body may take before its signal aborts. */
-  budgetMs: number;
+  timeoutMs: number;
   /** Body; must stop when the signal aborts. */
   run: (context: C, signal: AbortSignal) => Promise<StageOutcome>;
 }
 
 /** Clock and run-wide deadline of the stage runner. */
 export interface StageRunnerOptions {
-  /** Clock for budgets and durations. */
+  /** Clock for timeouts and durations. */
   clock: Clock;
   /** Aborts every stage when the whole run is out of time. */
   runSignal: AbortSignal;
@@ -35,7 +35,7 @@ export interface StageRunnerOptions {
 /** Reason that tells a stage the run was cancelled from outside, not that its deadline passed. */
 export const RUN_CANCELLED = 'run cancelled';
 
-type AbortReason = 'budget' | 'run';
+type AbortReason = 'timeout' | 'run';
 /** The body returned. */
 interface Returned {
   /** Discriminator. */
@@ -141,8 +141,8 @@ function toOutcome(name: StageName, settled: Settled | undefined, reason: AbortR
 }
 
 /**
- * Runs one stage under its budget and the run deadline.
- * @param spec Name, budget and body of the stage.
+ * Runs one stage under its timeout and the run deadline.
+ * @param spec Name, timeout and body of the stage.
  * @param context Shared state of the scenario, passed to the body untouched.
  * @param options Time source, run-wide deadline and the wait after an abort.
  * @returns Recorded result; never rejects.
@@ -174,8 +174,8 @@ export async function runStage<C>(spec: StageSpec<C>, context: C, options: Stage
     runSignal.addEventListener('abort', onRunAbort, { once: true });
   }
 
-  clock.sleep(spec.budgetMs, timers.signal).then(() => {
-    abortWith('budget');
+  clock.sleep(spec.timeoutMs, timers.signal).then(() => {
+    abortWith('timeout');
   }, () => undefined);
 
   try {
@@ -214,7 +214,7 @@ export async function runStage<C>(spec: StageSpec<C>, context: C, options: Stage
 
 /**
  * Runs stages in parallel.
- * @param specs Name, budget and body of each stage, in declared order.
+ * @param specs Name, timeout and body of each stage, in declared order.
  * @param context Shared state of the scenario, passed to every body untouched.
  * @param options Time source, run-wide deadline and the wait after an abort.
  * @returns Results in the declared order.

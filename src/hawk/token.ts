@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 
-const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/u;
+/** Characters of a base64 string with optional padding. */
+export const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/u;
 
 /** Decoded integration token. */
 export interface IntegrationToken {

@@ -18,8 +18,7 @@ import { refusalWhileServing } from './serving.js';
 import { openDatabase } from '../storage/database.js';
 import { createHistory } from '../storage/history.js';
 import { MATCH_CHANGED_KEY } from '../storage/keys.js';
-
-const MS_PER_SECOND = 1000;
+import { MS_PER_SECOND } from '../time/units.js';
 
 /** Replacements for the default dependencies, for tests. */
 export interface ProvisionDeps {
@@ -27,8 +26,6 @@ export interface ProvisionDeps {
   api: HawkApi;
   /** Clock of the warmup wait. */
   clock: Clock;
-  /** Pauses between attempts of repeated calls. */
-  retryDelaysMs: readonly number[];
   /** Finds the public address instead of reading it from the settings. */
   resolveAddress: (signal: AbortSignal) => Promise<PublicAddress>;
 }
@@ -84,14 +81,15 @@ export async function runProvisionCommand(command: ProvisionCommand, config: Con
     const api = deps.api ?? createHawkApi({ transport: createGraphqlTransport({ url: config.hawk.apiUrl,
       httpTimeoutMs: config.httpTimeoutMs,
       clock: systemClock,
-      ...deps.retryDelaysMs === undefined ? {} : { retryDelaysMs: deps.retryDelaysMs } }),
+      retry: config.retry }),
     email: config.hawk.email,
     password: config.hawk.password,
-    clock: systemClock });
+    clock: systemClock,
+    retry: config.retry });
     const address = deps.resolveAddress === undefined
       ? await resolvePublicAddress(settings, { httpTimeoutMs: config.httpTimeoutMs,
         clock: systemClock,
-        ...deps.retryDelaysMs === undefined ? {} : { retryDelaysMs: deps.retryDelaysMs } }, signal)
+        retry: config.retry }, signal)
       : await deps.resolveAddress(signal);
 
     add(address.baseUrl);

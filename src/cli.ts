@@ -1,6 +1,7 @@
 import type { Transport } from './clients/collector.js';
-import { SCENARIO_NAMES } from './scenarios/send-and-receive/plan.js';
-import type { ScenarioName } from './scenarios/send-and-receive/plan.js';
+import { SCENARIO_NAMES } from './scenarios/names.js';
+import type { ScenarioName } from './scenarios/names.js';
+import { DEFAULT_LIST_LIMIT } from './storage/history.js';
 
 /** Start the service. */
 export interface ServeCommand {
@@ -56,8 +57,7 @@ export type Command = CheckCommand | HistoryCommand | ProvisionCommand | ServeCo
 /** Usage text printed for an unknown command. */
 export const USAGE = 'Usage: hawk-e2e-monitor [serve]\n       hawk-e2e-monitor check send-and-receive-event [--sequence <n>] [--transport http|ws] [--repeat]\n       hawk-e2e-monitor check check-notification [--sequence <n>] [--transport http|ws] [--repeat]\n       hawk-e2e-monitor provision [--no-wait]\n       hawk-e2e-monitor history [--scenario <name>] [--limit <n>] [--stats]\n';
 
-const DEFAULT_HISTORY_LIMIT = 20;
-const MAX_HISTORY_LIMIT = 1000;
+const MAX_HISTORY_COMMAND_LIMIT = 1000;
 const SEQUENCE_PATTERN = /^[1-9]\d*$/u;
 
 /**
@@ -165,7 +165,7 @@ function parseProvision(flags: readonly string[]): ProvisionCommand | UsageComma
  */
 function parseHistory(flags: readonly string[]): HistoryCommand | UsageCommand {
   const command: HistoryCommand = { kind: 'history',
-    limit: DEFAULT_HISTORY_LIMIT,
+    limit: DEFAULT_LIST_LIMIT,
     stats: false };
   const seen = new Set<string>();
 
@@ -197,8 +197,8 @@ function parseHistory(flags: readonly string[]): HistoryCommand | UsageCommand {
       const value = flags[i];
       const limit = Number(value);
 
-      if (value === undefined || !SEQUENCE_PATTERN.test(value) || limit > MAX_HISTORY_LIMIT) {
-        return invalid(`--limit needs a whole number from 1 to ${String(MAX_HISTORY_LIMIT)}`);
+      if (value === undefined || !SEQUENCE_PATTERN.test(value) || limit > MAX_HISTORY_COMMAND_LIMIT) {
+        return invalid(`--limit needs a whole number from 1 to ${String(MAX_HISTORY_COMMAND_LIMIT)}`);
       }
 
       command.limit = limit;

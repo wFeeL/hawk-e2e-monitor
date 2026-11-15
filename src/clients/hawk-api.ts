@@ -1,20 +1,15 @@
 import { CheckError, isCheckError } from '../errors/taxonomy.js';
 import type { ErrorClass } from '../errors/taxonomy.js';
+import type { RetryPolicy } from '../net/retry.js';
 import type { Clock } from '../time/clock.js';
-import { GraphqlFailure } from './graphql.js';
+import { ACCESS_EXPIRED, GraphqlFailure, UNAUTHENTICATED } from './graphql.js';
 import type { GraphqlOperation, GraphqlTransport } from './graphql.js';
 import type { ChannelSettings, NotificationRule, NotificationRuleInput, NotificationRuleUpdate } from '../notifications/types.js';
 import { CREATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE, EVENT_CARD, FIND_EVENTS, LOGIN, NOTIFICATION_RULES, PROJECT_TOKEN, REFRESH_TOKENS, REMOVE_EVENT, UPDATE_NOTIFICATION_RULE, WORKSPACE_QUOTA } from './operations.js';
+import { MS_PER_SECOND } from '../time/units.js';
 
-const ACCESS_EXPIRED = 'ACCESS_TOKEN_EXPIRED_ERROR';
-const UNAUTHENTICATED = 'UNAUTHENTICATED';
-const REMOVE_ATTEMPTS = 3;
-const FIRST_RETRY_DELAY_MS = 200;
-const SECOND_RETRY_DELAY_MS = 500;
-const DEFAULT_RETRY_DELAYS_MS = [FIRST_RETRY_DELAY_MS, SECOND_RETRY_DELAY_MS] as const;
 const NOT_FOUND_PREFIX = 'Event not found for eventId';
 const RETRYABLE_CLASSES: ReadonlySet<ErrorClass> = new Set<ErrorClass>(['api_unavailable', 'dns_error', 'network_error', 'tls_error']);
-const MS_PER_SECOND = 1000;
 // Unix seconds stay below this until the year 5138; anything above is already milliseconds.
 const MILLISECONDS_THRESHOLD = 1e11;
 
@@ -61,8 +56,8 @@ export interface HawkApiOptions {
   password: string;
   /** Clock for pauses between attempts. */
   clock: Clock;
-  /** Pauses between attempts of a repeated call, `[200, 500]` by default. */
-  retryDelaysMs?: readonly number[];
+  /** Attempts and pauses of a repeated call, such as removing an event. */
+  retry: RetryPolicy;
 }
 
 /** Calls of the Hawk API that the monitor makes. */
@@ -363,7 +358,7 @@ function toRule(rule: RawRule): NotificationRule {
  */
 export function createHawkApi(options: HawkApiOptions): HawkApi {
   const { transport, email, password, clock } = options;
-  const delaysMs = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+  const { attempts, delaysMs } = options.retry;
   let session: Session | undefined;
 
   const authFailed = (detail: string): CheckError => new CheckError('api_auth_failed', { detail });
@@ -459,118 +454,134 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
     return data.project.event ? toFoundEvent(data.project.event) : null;
   };
 
+  const projectToken: HawkApi['projectToken'] = async (projectId, signal) => {
+    const data = await authorized<ProjectTokenData>(PROJECT_TOKEN, { projectId }, signal);
+
+    if (!data.project) {
+      throw new CheckError('api_error', { detail: 'project not found' });
+    }
+
+    return data.project.token;
+  };
+
+  const workspaceQuota: HawkApi['workspaceQuota'] = async (projectId, signal) => {
+    const data = await authorized<WorkspaceQuotaData>(WORKSPACE_QUOTA, { projectId }, signal);
+    const workspace = (data.workspaces ?? []).find(item => item !== null && (item.projects ?? []).length > 0);
+
+    if (!workspace) {
+      throw new CheckError('api_forbidden', { projectId,
+        detail: 'no workspace of the account holds the project' });
+    }
+
+    if (!workspace.plan) {
+      throw new CheckError('api_error', { detail: 'workspace has no plan' });
+    }
+
+    return { workspaceId: workspace.id,
+      isBlocked: workspace.isBlocked ?? false,
+      eventsLimit: workspace.plan.eventsLimit,
+      eventsCount: workspace.billingPeriodEventsCount ?? 0 };
+  };
+
+  const findEvents: HawkApi['findEvents'] = async (projectId, search, signal) => {
+    const data = await authorized<FindEventsData>(FIND_EVENTS, { projectId,
+      search }, signal);
+
+    if (!data.project) {
+      throw new CheckError('api_error', { detail: 'project not found' });
+    }
+
+    const byGroup = new Map<string, FoundEvent>();
+
+    for (const row of data.project.dailyEventsPortion?.dailyEvents ?? []) {
+      if (row) {
+        const event = toFoundEvent(row.event);
+        const known = byGroup.get(event.groupHash);
+
+        if (!known || event.totalCount > known.totalCount) {
+          byGroup.set(event.groupHash, event);
+        }
+      }
+    }
+
+    return [...byGroup.values()];
+  };
+
+  const notificationRules: HawkApi['notificationRules'] = async (projectId, signal) => {
+    const data = await authorized<NotificationRulesData>(NOTIFICATION_RULES, { projectId }, signal);
+
+    if (!data.project) {
+      throw new CheckError('api_forbidden', { projectId,
+        detail: 'project not found or not visible to the account' });
+    }
+
+    return (data.project.notifications ?? []).map(toRule);
+  };
+
+  const createNotificationRule: HawkApi['createNotificationRule'] = async (input, signal) => {
+    const data = await authorized<RuleIdData>(CREATE_NOTIFICATION_RULE, { input }, signal);
+
+    if (!data.createProjectNotificationsRule) {
+      throw new CheckError('api_error', { detail: 'create answered without a rule' });
+    }
+
+    return data.createProjectNotificationsRule.id;
+  };
+
+  const updateNotificationRule: HawkApi['updateNotificationRule'] = async (input, signal) => {
+    const data = await authorized<RuleIdData>(UPDATE_NOTIFICATION_RULE, { input }, signal);
+
+    return data.updateProjectNotificationsRule?.id ?? null;
+  };
+
+  const deleteNotificationRule: HawkApi['deleteNotificationRule'] = async (projectId, ruleId, signal) => {
+    await authorized<unknown>(DELETE_NOTIFICATION_RULE, { input: { projectId,
+      ruleId } }, signal);
+  };
+
+  const removeEvent: HawkApi['removeEvent'] = async (projectId, eventId, signal) => {
+    let failedBefore = false;
+
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await removeOnce(projectId, eventId, signal);
+      } catch (error) {
+        if (!isCheckError(error)) {
+          throw error;
+        }
+
+        const vanished = error.errorClass === 'api_error' && failedBefore
+          && (error.facts.detail ?? '').startsWith(NOT_FOUND_PREFIX);
+
+        if (vanished && await eventCard(projectId, eventId, signal) === null) {
+          return true;
+        }
+
+        if (!RETRYABLE_CLASSES.has(error.errorClass) || attempt >= attempts || signal.aborted) {
+          throw error;
+        }
+
+        failedBefore = true;
+
+        try {
+          await clock.sleep(delaysMs[Math.min(attempt - 1, delaysMs.length - 1)] ?? 0, signal);
+        } catch {
+          throw error;
+        }
+      }
+    }
+  };
+
   return {
     ensureSession,
     eventCard,
-    async projectToken(projectId, signal) {
-      const data = await authorized<ProjectTokenData>(PROJECT_TOKEN, { projectId }, signal);
-
-      if (!data.project) {
-        throw new CheckError('api_error', { detail: 'project not found' });
-      }
-
-      return data.project.token;
-    },
-    async workspaceQuota(projectId, signal) {
-      const data = await authorized<WorkspaceQuotaData>(WORKSPACE_QUOTA, { projectId }, signal);
-      const workspace = (data.workspaces ?? []).find(item => item !== null && (item.projects ?? []).length > 0);
-
-      if (!workspace) {
-        throw new CheckError('api_forbidden', { projectId,
-          detail: 'no workspace of the account holds the project' });
-      }
-
-      if (!workspace.plan) {
-        throw new CheckError('api_error', { detail: 'workspace has no plan' });
-      }
-
-      return { workspaceId: workspace.id,
-        isBlocked: workspace.isBlocked ?? false,
-        eventsLimit: workspace.plan.eventsLimit,
-        eventsCount: workspace.billingPeriodEventsCount ?? 0 };
-    },
-    async findEvents(projectId, search, signal) {
-      const data = await authorized<FindEventsData>(FIND_EVENTS, { projectId,
-        search }, signal);
-
-      if (!data.project) {
-        throw new CheckError('api_error', { detail: 'project not found' });
-      }
-
-      const byGroup = new Map<string, FoundEvent>();
-
-      for (const row of data.project.dailyEventsPortion?.dailyEvents ?? []) {
-        if (row) {
-          const event = toFoundEvent(row.event);
-          const known = byGroup.get(event.groupHash);
-
-          if (!known || event.totalCount > known.totalCount) {
-            byGroup.set(event.groupHash, event);
-          }
-        }
-      }
-
-      return [...byGroup.values()];
-    },
-    async notificationRules(projectId, signal) {
-      const data = await authorized<NotificationRulesData>(NOTIFICATION_RULES, { projectId }, signal);
-
-      if (!data.project) {
-        throw new CheckError('api_forbidden', { projectId,
-          detail: 'project not found or not visible to the account' });
-      }
-
-      return (data.project.notifications ?? []).map(toRule);
-    },
-    async createNotificationRule(input, signal) {
-      const data = await authorized<RuleIdData>(CREATE_NOTIFICATION_RULE, { input }, signal);
-
-      if (!data.createProjectNotificationsRule) {
-        throw new CheckError('api_error', { detail: 'create answered without a rule' });
-      }
-
-      return data.createProjectNotificationsRule.id;
-    },
-    async updateNotificationRule(input, signal) {
-      const data = await authorized<RuleIdData>(UPDATE_NOTIFICATION_RULE, { input }, signal);
-
-      return data.updateProjectNotificationsRule?.id ?? null;
-    },
-    async deleteNotificationRule(projectId, ruleId, signal) {
-      await authorized<unknown>(DELETE_NOTIFICATION_RULE, { input: { projectId,
-        ruleId } }, signal);
-    },
-    async removeEvent(projectId, eventId, signal) {
-      let failedBefore = false;
-
-      for (let attempt = 1; ; attempt += 1) {
-        try {
-          return await removeOnce(projectId, eventId, signal);
-        } catch (error) {
-          if (!isCheckError(error)) {
-            throw error;
-          }
-
-          const vanished = error.errorClass === 'api_error' && failedBefore
-            && (error.facts.detail ?? '').startsWith(NOT_FOUND_PREFIX);
-
-          if (vanished && await eventCard(projectId, eventId, signal) === null) {
-            return true;
-          }
-
-          if (!RETRYABLE_CLASSES.has(error.errorClass) || attempt >= REMOVE_ATTEMPTS || signal.aborted) {
-            throw error;
-          }
-
-          failedBefore = true;
-
-          try {
-            await clock.sleep(delaysMs[Math.min(attempt - 1, delaysMs.length - 1)] ?? 0, signal);
-          } catch {
-            throw error;
-          }
-        }
-      }
-    },
+    projectToken,
+    workspaceQuota,
+    findEvents,
+    notificationRules,
+    createNotificationRule,
+    updateNotificationRule,
+    deleteNotificationRule,
+    removeEvent,
   };
 }
