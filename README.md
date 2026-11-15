@@ -75,10 +75,13 @@ with a warning.
 
 ## Running continuously
 
-`serve` is the default command of the container image. It starts the first
-scenario listed in `SCENARIOS` right away and each next one
+`serve` is the default command of the container image. With an empty history
+it starts the first scenario listed in `SCENARIOS` right away and each next one
 `SCENARIO_STAGGER_MS` later. After that every scenario runs again
-`CHECK_INTERVAL_MS` after the start of its previous run. A tick that comes while the previous run of the same scenario is
+`CHECK_INTERVAL_MS` after the start of its previous run, also across restarts
+of the monitor, so the first run after a restart can take up to one interval.
+check-notification first waits up to `TUNNEL_READY_TIMEOUT_MS` for the tunnel
+to report its address. A tick that comes while the previous run of the same scenario is
 still going is recorded as skipped.
 
 With Docker Compose the monitor starts together with a cloudflared quick
@@ -90,6 +93,11 @@ docker compose up -d --build
 docker compose ps      # monitor becomes healthy within about 15 s
 ```
 
+Compose needs Docker Engine 25 or newer. When Hawk runs on the same host, point
+`HAWK_API_URL` and `HAWK_COLLECTOR_URL` at `host.docker.internal` and make Hawk
+listen on an address the containers can reach, not only `127.0.0.1`. Values in
+`.env` that contain `$` go in single quotes.
+
 The history lives in SQLite in the `monitor-data` volume, so it survives
 `docker compose down` and image updates. Only the internal port is published,
 on `127.0.0.1:8090`:
@@ -97,7 +105,7 @@ on `127.0.0.1:8090`:
 | Path | Answer |
 |---|---|
 | `GET /healthz` | 200 while the process and its scheduler work |
-| `GET /readyz` | 200 once startup finished |
+| `GET /readyz` | 200 once startup finished, while the receiver is open and no alert has waited for delivery longer than 30 minutes |
 | `GET /runs?scenario=<name>&limit=<n>` | latest runs, newest first |
 | `GET /runs/<runId>` | the full result of one run: every stage, its duration and details |
 | `GET /stats` | success ratio, event latency percentiles and average stage durations |
@@ -117,9 +125,9 @@ database, so that two processes do not change the notification rule at once.
 Add @codex_bot to a Telegram chat, send it `/notify_start` and put the address
 it answers with into `ALERT_NOTIFY_URL`. The monitor sends a message when a
 scenario starts failing (after `ALERT_AFTER_FAILURES` failed runs in a row),
-when the reason of the failure changes, when it recovers, and when a run
-passes with a warning, for example only one notification channel arrived or
-the projected event count exceeds the plan limit. A message names the stage,
+when the reason of the failure changes, when it recovers, and when it becomes
+degraded: a run passed but only one notification channel arrived, or the
+projected event count exceeds the plan limit. A message names the stage,
 the error class, the likely culprit and the time of every stage. Messages that
 the bot does not accept are retried with a growing pause for up to 24 hours.
 With `ALERT_NOTIFY_URL` empty, alerts go to the log only.
@@ -136,14 +144,22 @@ With `ALERT_NOTIFY_URL` empty, alerts go to the log only.
 - Restarts and deploys of Hawk show up as failed runs with the stage and the
   error class, and the next run after Hawk is back passes and sends a
   recovery message. The monitor itself keeps running.
+- If the monitor container is recreated after a crash, the new container
+  waits until the lease of the old process expires (up to 90 s) and shows as
+  restarting meanwhile. A configuration error also keeps it restarting;
+  `docker compose logs monitor` names the variable at fault.
+- Every restart of cloudflared gives the quick tunnel a new address. The next
+  check-notification run moves the rule to the new address and checks
+  notifications through it in the same run.
+- The volume is created owned by the `node` user (uid 1000) of the image. A
+  bind mount or a volume created another way needs `chown 1000:1000`.
 - Test events left behind by failed or interrupted runs are removed once an
   hour (`SWEEP_INTERVAL_MS`) when they are older than `SWEEP_MIN_AGE_MS`.
 
-Every send-and-receive-event run sends one event, two on repeat runs, and
-every check-notification run sends one more. One scenario every 10 minutes is
-about 4,400 events a month, so the free plan of 1,000 events lasts about a
-week; the monitor warns when the projected count exceeds the workspace limit.
-Use a bigger plan or a longer interval.
+Every run of each scenario sends one event, two on repeat runs. One scenario
+every 10 minutes is about 4,400 events a month, so the free plan of 1,000
+events lasts about a week; the monitor warns when the projected count exceeds
+the workspace limit. Use a bigger plan or a longer interval.
 
 ## About this test assignment
 
