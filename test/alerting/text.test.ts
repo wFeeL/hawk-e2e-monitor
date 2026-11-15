@@ -228,6 +228,21 @@ describe('alertText', () => {
     expect(text).toContain('Event quota is almost used: 9/10');
   });
 
+  it.each(['degraded', 'recovered_degraded'] as const)('cuts long warnings of a %s alert to the limit and keeps the codes and the run line', (kind) => {
+    const warnings = Array.from({ length: 5 }, (_, index) => `warning ${String(index)} ${'w&'.repeat(1500)}`);
+    const text = alertText(input({ kind,
+      row: failedRow({ status: 'ok',
+        errorClass: undefined }),
+      state: stateRow({ state: 'degraded',
+        degraded: ['quota_projection'] }),
+      result: runResultFixture({ warnings }) }), IDENTITY);
+
+    expect(text.length).toBeLessThanOrEqual(ALERT_TEXT_LIMIT);
+    expect(text).toContain('degraded: quota_projection');
+    expect(text).toContain('run: raaaaaaaaaaaaaaaa #12');
+    expect(text).toContain('warning 0');
+  });
+
   it('escapes < and & in the instance, the message and the stage line, not the markup', () => {
     const text = alertText(input({ instanceId: 'a<b&c',
       row: failedRow({ message: 'Title <script> & "x"' }) }), IDENTITY);

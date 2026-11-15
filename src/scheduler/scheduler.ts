@@ -96,6 +96,8 @@ export interface SchedulerHealth {
   scheduler: boolean;
   /** The last write to the history worked. */
   storage: boolean;
+  /** Scenarios whose run has been busy longer than the watchdog and the hold after it allow. */
+  stuck: ScenarioName[];
 }
 
 /** Starts scenario runs on a schedule and watches them. */
@@ -183,6 +185,8 @@ interface ScenarioState {
   hungStreak: number;
   /** Last number given, for a failing history. */
   lastSequence: number;
+  /** Number of the last run whose start the history could not store; the next number must follow it. */
+  unwritten?: number;
 }
 
 /**
@@ -263,7 +267,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     let sequence: number;
 
     try {
-      sequence = history.nextSequence(state.name);
+      // A run that never reached the history leaves the stored maximum behind, so the counter in memory must lead.
+      sequence = Math.max(history.nextSequence(state.name), state.unwritten === undefined ? 0 : state.unwritten + 1);
     } catch (error) {
       writeFailed('nextSequence', error);
       sequence = state.lastSequence + 1;
@@ -332,6 +337,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
     if (handle.abandoned) {
       logger.warn(error === undefined ? 'late result of an abandoned run' : 'late failure of an abandoned run', { runId: handle.start.runId });
+      // Its cleanup is over, so the scenario need not wait for the hold timer, which the abort above cancelled.
+      release(state, handle);
 
       return;
     }
@@ -414,8 +421,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     try {
       history.startRun(start);
       storageFailed = false;
+      state.unwritten = undefined;
     } catch (error) {
       writeFailed('startRun', error);
+      state.unwritten = sequence;
     }
 
     state.running = handle;
@@ -550,10 +559,20 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   };
 
   const evaluate = (nowMonoMs: number): SchedulerHealth => {
-    const ticking = started && !stopped && [...states.values()].every(state => nowMonoMs - (state.lastTickMono ?? startedMono ?? nowMonoMs) <= thresholdOf(state.name));
+    // Before its first tick a scenario with a gate may wait for the tunnel, which is bounded by its own timeout.
+    const allowedMs = (state: ScenarioState): number => thresholdOf(state.name)
+      + (state.lastTickMono === undefined && deps.beforeFirstRun?.[state.name] !== undefined ? monitoring.tunnelReadyTimeoutMs : 0);
+    const ticking = started && !stopped && [...states.values()].every(state => nowMonoMs - (state.lastTickMono ?? startedMono ?? nowMonoMs) <= allowedMs(state));
+
+    // The watchdog abandons a run at `watchdogMs` and the scenario is held for one more cleanup timeout.
+    const busyLimitMs = watchdogMs + timeouts.cleanup;
+    const stuck = [...states.values()]
+      .filter(state => state.running !== undefined && nowMonoMs - state.running.startedMono > busyLimitMs)
+      .map(state => state.name);
 
     return { scheduler: ticking,
-      storage: !storageFailed };
+      storage: !storageFailed,
+      stuck };
   };
 
   const selfCheck = (): void => {
@@ -639,7 +658,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const healthy: Scheduler['healthy'] = (nowMonoMs) => {
     const health = evaluate(nowMonoMs ?? clock.monotonicMs());
 
-    return health.scheduler && health.storage;
+    return health.scheduler && health.storage && health.stuck.length === 0;
   };
 
   const health: Scheduler['health'] = (nowMonoMs) => {

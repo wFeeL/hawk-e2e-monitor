@@ -11,6 +11,7 @@ import { sendNotify } from './notify.js';
 import { decideAlert } from './state.js';
 import type { AlertKind } from './state.js';
 import { alertText, escapeHtml } from './text.js';
+import type { AlertTextInput } from './text.js';
 import { MS_PER_DAY } from '../time/units.js';
 
 const FLUSH_BATCH = 50;
@@ -260,50 +261,77 @@ export function createAlerter(deps: AlerterDeps): Alerter {
     }
   };
 
+  /**
+   * Builds the alert text, or a plain one when the full text cannot be built, so a transition is never left without a message.
+   * @param kind Kind of the alert.
+   * @param input Everything the full text needs.
+   * @returns HTML text.
+   */
+  const textOf = (kind: AlertKind, input: AlertTextInput): string => {
+    try {
+      return alertText(input, redact);
+    } catch (error) {
+      logger.error('alert text could not be built', { error: redact(describe(error)) });
+
+      return `<b>${kind.toUpperCase().replaceAll('_', ' ')}</b> ${input.scenario} [e2e:${escapeHtml(config.instanceId)}] (the alert text could not be built, see the monitor log)`;
+    }
+  };
+
   const onRunFinished: Alerter['onRunFinished'] = (row, result) => {
     try {
       const now = nowIso();
-      let kind: AlertKind | undefined;
-      let text: string | undefined;
+      let previous: AlertStateRow | undefined = memory.get(row.scenario);
+      let readError: unknown;
 
-      try {
-        const previous = memory.get(row.scenario) ?? history.alertState(row.scenario);
-        const decision = decideAlert(previous, row, monitoring, now);
+      if (previous === undefined) {
+        try {
+          previous = history.alertState(row.scenario);
+        } catch (error) {
+          storageFailed(error, 'read');
+          readError = error;
+        }
+      }
 
-        kind = decision.kind;
-        memory.set(row.scenario, decision.state);
+      const decision = decideAlert(previous, row, monitoring, now);
+      const { kind } = decision;
 
-        if (kind !== undefined) {
-          text = alertText({ kind,
+      memory.set(row.scenario, decision.state);
+
+      const text = kind === undefined
+        ? undefined
+        : textOf(kind, { kind,
             instanceId: config.instanceId,
             scenario: row.scenario,
             row,
             state: decision.state,
             ...result === undefined ? {} : { result },
-            now }, redact);
+            now });
+
+      if (readError !== undefined) {
+        // Without the stored state nothing can be queued, so the message goes out directly.
+        if (text !== undefined) {
+          sendAfterStorageFailure(text, row.scenario, readError);
         }
 
-        try {
-          if (decision.state !== previous) {
-            history.saveAlert(decision.state, text === undefined
-              ? undefined
-              : { text,
-                  runId: row.runId,
-                  at: now });
-          }
+        return kind;
+      }
 
-          storageWorked();
-        } catch (error) {
-          storageFailed(error, 'save');
-
-          if (text !== undefined) {
-            sendAfterStorageFailure(text, row.scenario, error);
-          }
-
-          return kind;
+      try {
+        if (decision.state !== previous) {
+          history.saveAlert(decision.state, text === undefined
+            ? undefined
+            : { text,
+                runId: row.runId,
+                at: now });
         }
+
+        storageWorked();
       } catch (error) {
-        storageFailed(error, 'read');
+        storageFailed(error, 'save');
+
+        if (text !== undefined) {
+          sendAfterStorageFailure(text, row.scenario, error);
+        }
 
         return kind;
       }

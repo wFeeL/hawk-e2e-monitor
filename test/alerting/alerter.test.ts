@@ -427,6 +427,59 @@ describe('alerter: storage failure', () => {
   });
 });
 
+describe('alerter: unreadable state and failing text', () => {
+  it('an unreadable state still raises the alert directly, with STORAGE FAILING', async () => {
+    const { alerter, bot, clock } = await setup({ wrap: history => ({ ...history,
+      alertState: () => {
+        throw new Error('locked');
+      } }) });
+
+    expect(alerter.onRunFinished(failedRow(clock), NO_RESULT)).toBe('failed');
+    await vi.waitFor(() => {
+      expect(bot.requests).toHaveLength(2);
+    });
+    expect(messages(bot)[0]).toContain('STORAGE FAILING');
+    expect(messages(bot)[0]).toContain('locked');
+    expect(messages(bot)[1]).toContain('<b>FAILED</b>');
+    expect(alerter.health().storageFailing).toBe(true);
+  });
+
+  it('decides the next run from memory while the state stays unreadable', async () => {
+    const { alerter, clock, history } = await setup({ wrap: wrapped => ({ ...wrapped,
+      alertState: () => {
+        throw new Error('locked');
+      } }) });
+
+    alerter.onRunFinished(failedRow(clock), NO_RESULT);
+    expect(alerter.onRunFinished(failedRow(clock, { errorClass: 'collector_unavailable',
+      failedStage: 'collector_availability',
+      runId: 'rcccccccccccccccc' }), NO_RESULT)).toBe('still_failing');
+    // The write works, so this one goes through the queue.
+    expect(history.oldestUnsentAlert()).toBeDefined();
+  });
+
+  it('a text that cannot be built still queues the transition with a plain message', async () => {
+    const { alerter, bot, clock, history, logger } = await setup({ redact: (text) => {
+      if (text.includes('Event did not appear')) {
+        throw new Error('redactor broke');
+      }
+
+      return text;
+    } });
+
+    alerter.start();
+    expect(alerter.onRunFinished(failedRow(clock), NO_RESULT)).toBe('failed');
+    await vi.waitFor(() => {
+      expect(bot.requests).toHaveLength(1);
+    });
+    expect(messages(bot)[0]).toContain('FAILED');
+    expect(messages(bot)[0]).toContain(SCENARIO);
+    expect(messages(bot)[0]).toContain('could not be built');
+    expect(logger.lines.some(line => line.level === 'error')).toBe(true);
+    expect(history.alertState(SCENARIO)?.state).toBe('failing');
+  });
+});
+
 describe('alerter: timer', () => {
   it('flushes right after a transition is queued, once started', async () => {
     const { alerter, bot, clock } = await setup();

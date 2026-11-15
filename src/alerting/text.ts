@@ -163,7 +163,7 @@ function latencyLine(row: RunRow, result: RunResult | undefined): string | undef
 interface Line {
   /** Plain text of the line, already masked. */
   text: string;
-  /** Lines with a higher number are cut first; absent for lines that stay whole. */
+  /** Lines with a lower number are cut first; absent for lines that stay whole. */
   cutOrder?: number;
 }
 
@@ -176,7 +176,10 @@ function bodyLines(input: AlertTextInput): Line[] {
   const { kind, row, state, result } = input;
   const run: Line = { text: `run: ${row.runId} #${String(row.sequence)} | ${row.startedAt}` };
   const codes: Line[] = state.degraded.length === 0 ? [] : [{ text: `degraded: ${state.degraded.join(', ')}` }];
-  const warnings: Line[] = (result?.warnings ?? []).map(text => ({ text }));
+  // Later warnings are cut first, so the first one stays readable the longest.
+  const found = result?.warnings ?? [];
+  const warnings: Line[] = found.map((text, index) => ({ text,
+    cutOrder: found.length - index }));
   const episode = episodeLine(input);
   const recovery: Line[] = episode === undefined ? [] : [{ text: episode }];
 
@@ -207,7 +210,7 @@ function bodyLines(input: AlertTextInput): Line[] {
 
 /**
  * Builds the HTML text of an alert for codex.bot.
- * Every fragment is masked first, then the text is cut to fit `ALERT_TEXT_LIMIT` after escaping (the error text first, then the stages), then escaped, and the markup is added last.
+ * Every fragment is masked first, then the text is cut to fit `ALERT_TEXT_LIMIT` after escaping (the error text and the warnings first, then the stages), then escaped, and the markup is added last.
  * @param input What the text is built from.
  * @param redact Masks secrets in plain text.
  * @returns Text of at most `ALERT_TEXT_LIMIT` characters.

@@ -526,6 +526,32 @@ describe('failures of the runner', () => {
     expect(rowOf(history, 'raaaaaaaaaaaaaaa').status).toBe('aborted');
   });
 
+  it('an abandoned run that settles within the cleanup timeout frees the scenario at once', async () => {
+    const { scheduler, clock, runners } = setup({ scenarios: [SEND] });
+
+    scheduler.start();
+    await settle(clock);
+    await clock.advance(WATCHDOG_MS);
+    expect(scheduler.runNow(SEND, 'manual')).toMatchObject({ started: false });
+    callOf(runners[SEND], 0).resolve();
+    await settle(clock);
+    expect(scheduler.activeRunIds().size).toBe(0);
+    expect(scheduler.runNow(SEND, 'manual')).toMatchObject({ started: true });
+    expect(runners[SEND].calls).toHaveLength(2);
+  });
+
+  it('an abandoned run that never settles frees the scenario when the cleanup timeout has passed', async () => {
+    const { scheduler, clock, runners } = setup({ scenarios: [SEND] });
+
+    scheduler.start();
+    await settle(clock);
+    await clock.advance(WATCHDOG_MS + CLEANUP_MS - 1);
+    expect(scheduler.runNow(SEND, 'manual')).toMatchObject({ started: false });
+    await clock.advance(1);
+    expect(scheduler.runNow(SEND, 'manual')).toMatchObject({ started: true });
+    expect(runners[SEND].calls).toHaveLength(2);
+  });
+
   it('keeps the scenario busy for the cleanup timeout after the abort, then a tick runs again', async () => {
     const { scheduler, clock, runners, history } = setup({ scenarios: [SEND] });
 
@@ -732,7 +758,8 @@ describe('health', () => {
     const { scheduler, clock } = setup({ scenarios: [SEND] });
 
     expect(scheduler.health()).toEqual({ scheduler: false,
-      storage: true });
+      storage: true,
+      stuck: [] });
     scheduler.start();
     await settle(clock);
     expect(scheduler.healthy()).toBe(true);
@@ -740,15 +767,21 @@ describe('health', () => {
     expect(scheduler.health().scheduler).toBe(false);
   });
 
-  it('is false when a scenario has not ticked for longer than interval + run + cleanup + grace', async () => {
-    const { scheduler, clock } = setup({ scenarios: [NOTIFY],
+  it('exits with code 1 when a scenario stopped ticking, but only after the tunnel wait it is given before its first tick', async () => {
+    const { scheduler, clock, config, exit, logger } = setup({ scenarios: [NOTIFY],
       deps: { beforeFirstRun: { [NOTIFY]: async () => new Promise<void>(() => undefined) } } });
+    const tunnelMs = config.monitoring.tunnelReadyTimeoutMs;
 
     scheduler.start();
     await settle(clock);
-    expect(scheduler.health(THRESHOLD_MS).scheduler).toBe(true);
-    expect(scheduler.health(THRESHOLD_MS + 1).scheduler).toBe(false);
-    expect(scheduler.healthy()).toBe(true);
+    expect(scheduler.health(THRESHOLD_MS + tunnelMs).scheduler).toBe(true);
+    expect(scheduler.health(THRESHOLD_MS + tunnelMs + 1).scheduler).toBe(false);
+    // The self-check runs every minute: it must not fire inside the tunnel wait, only after it.
+    await clock.advance(THRESHOLD_MS + tunnelMs - 1);
+    expect(exit).not.toHaveBeenCalled();
+    await clock.advance(60_000);
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(logger.lines.some(line => line.level === 'error')).toBe(true);
   });
 
   it('reads the threshold of a scenario from intervalOf', async () => {
@@ -772,19 +805,6 @@ describe('health', () => {
     expect(runners[SEND].calls).toHaveLength(1);
     await clock.advance(1);
     expect(runners[SEND].calls).toHaveLength(2);
-  });
-
-  it('exits with code 1 when the self-check finds a scenario that stopped ticking', async () => {
-    const { scheduler, clock, exit, logger } = setup({ scenarios: [NOTIFY],
-      deps: { beforeFirstRun: { [NOTIFY]: async () => new Promise<void>(() => undefined) } } });
-
-    scheduler.start();
-    await settle(clock);
-    await clock.advance(THRESHOLD_MS - 60_000);
-    expect(exit).not.toHaveBeenCalled();
-    await clock.advance(120_000);
-    expect(exit).toHaveBeenCalledWith(1);
-    expect(logger.lines.some(line => line.level === 'error')).toBe(true);
   });
 
   it('does not exit while the scenarios keep ticking', async () => {
@@ -880,6 +900,63 @@ describe('storage failure', () => {
     callOf(runners[SEND], 0).resolve();
     await clock.advance(INTERVAL_MS);
     expect([callOf(runners[SEND], 0).sequence, callOf(runners[SEND], 1).sequence]).toEqual([1, 2]);
+  });
+});
+
+describe('a scenario that stays busy', () => {
+  it('is reported as stuck once its run should have been abandoned and released', async () => {
+    const { scheduler, clock } = setup({ scenarios: [SEND, NOTIFY] });
+
+    scheduler.start();
+    await settle(clock);
+
+    const limit = WATCHDOG_MS + CLEANUP_MS;
+    const now = clock.monotonicMs();
+
+    expect(scheduler.health(now + limit).stuck).toEqual([]);
+    expect(scheduler.health(now + limit + 1).stuck).toEqual([SEND]);
+    expect(scheduler.healthy(now + limit + 1)).toBe(false);
+  });
+
+  it('is not stuck while an abandoned run is held for its cleanup', async () => {
+    const { scheduler, clock } = setup({ scenarios: [SEND] });
+
+    scheduler.start();
+    await settle(clock);
+    await clock.advance(WATCHDOG_MS);
+    expect(scheduler.activeRunIds().size).toBe(1);
+    expect(scheduler.health().stuck).toEqual([]);
+  });
+});
+
+describe('sequence while the history cannot be written', () => {
+  it('keeps counting runs when startRun fails, so the transport still alternates', async () => {
+    const control = { broken: true };
+    const real = createHistory(openDatabase(':memory:'));
+    const { scheduler, clock, runners } = setup({ scenarios: [SEND],
+      history: { ...real,
+        startRun: (start) => {
+          if (control.broken) {
+            throw new Error('disk full');
+          }
+
+          real.startRun(start);
+        } } });
+
+    scheduler.start();
+    await settle(clock);
+    callOf(runners[SEND], 0).resolve();
+    await clock.advance(INTERVAL_MS);
+    callOf(runners[SEND], 1).resolve();
+    await clock.advance(INTERVAL_MS);
+    expect([0, 1, 2].map(index => callOf(runners[SEND], index).sequence)).toEqual([1, 2, 3]);
+    control.broken = false;
+    callOf(runners[SEND], 2).resolve();
+    await clock.advance(INTERVAL_MS);
+    expect(callOf(runners[SEND], 3).sequence).toBe(4);
+    callOf(runners[SEND], 3).resolve();
+    await clock.advance(INTERVAL_MS);
+    expect(callOf(runners[SEND], 4).sequence).toBe(5);
   });
 });
 
