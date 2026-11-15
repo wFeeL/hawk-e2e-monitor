@@ -104,7 +104,7 @@ on `127.0.0.1:8090`:
 
 | Path | Answer |
 |---|---|
-| `GET /healthz` | 200 while the process and its scheduler work |
+| `GET /healthz` | 200 while the scheduler ticks, the history database works and no scenario is stuck busy; 503 with the reason otherwise |
 | `GET /readyz` | 200 once startup finished, while the receiver is open and no alert has waited for delivery longer than 30 minutes |
 | `GET /runs?scenario=<name>&limit=<n>` | latest runs, newest first |
 | `GET /runs/<runId>` | the full result of one run: every stage, its duration and details |
@@ -157,9 +157,10 @@ With `ALERT_NOTIFY_URL` empty, alerts go to the log only.
   hour (`SWEEP_INTERVAL_MS`) when they are older than `SWEEP_MIN_AGE_MS`.
 
 Every run of each scenario sends one event, two on repeat runs. One scenario
-every 10 minutes is about 4,400 events a month, so the free plan of 1,000
-events lasts about a week; the monitor warns when the projected count exceeds
-the workspace limit. Use a bigger plan or a longer interval.
+every 10 minutes is about 4,700 events a month with the default repeats, so the
+free plan of 1,000 events lasts about a week; the monitor warns when the
+projected count exceeds the workspace limit. Use a bigger plan or a longer
+interval.
 
 ## About this test assignment
 
