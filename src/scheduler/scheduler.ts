@@ -3,7 +3,7 @@ import type { RunResult } from '../engine/result.js';
 import type { Redactor } from '../errors/redact.js';
 import type { Logger } from '../log/logger.js';
 import { createRunId } from '../scenarios/send-and-receive/plan.js';
-import type { ScenarioName } from '../scenarios/send-and-receive/plan.js';
+import type { ScenarioName } from '../scenarios/names.js';
 import type { History, RunStart } from '../storage/history.js';
 import { abortedOutcome, outcomeOf, rowOf } from '../storage/outcome.js';
 import type { RunOutcome, RunRow, RunTrigger } from '../storage/types.js';

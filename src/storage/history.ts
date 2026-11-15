@@ -3,10 +3,12 @@ import type { RunResult, StageName } from '../engine/result.js';
 import { CheckError, CULPRIT_OF } from '../errors/taxonomy.js';
 import type { Culprit, ErrorClass } from '../errors/taxonomy.js';
 import type { NotificationChannel } from '../notifications/types.js';
-import type { ScenarioName } from '../scenarios/send-and-receive/plan.js';
+import type { ScenarioName } from '../scenarios/names.js';
 import type { AlertLevelState, DegradedCode, RunOutcome, RunRow, RunStatus, RunTrigger, SkipReason, StageRow } from './types.js';
 import { MS_PER_DAY } from '../time/units.js';
 
+/** Runs a listing returns when the caller gives no limit. */
+export const DEFAULT_LIST_LIMIT = 20;
 const WINDOW_DAYS = 7;
 const SHORT_WINDOW_DAYS = 1;
 const P50 = 0.5;

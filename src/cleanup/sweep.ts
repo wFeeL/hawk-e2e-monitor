@@ -1,7 +1,8 @@
 import type { FoundEvent, HawkApi } from '../clients/hawk-api.js';
 import type { Config } from '../config/load.js';
 import type { Logger } from '../log/logger.js';
-import { buildTitle, SCENARIO_NAMES } from '../scenarios/send-and-receive/plan.js';
+import { buildTitle } from '../scenarios/send-and-receive/plan.js';
+import { SCENARIO_NAMES } from '../scenarios/names.js';
 import type { History } from '../storage/history.js';
 import type { Clock } from '../time/clock.js';
 

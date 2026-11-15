@@ -2,21 +2,13 @@ import { randomInt } from 'node:crypto';
 import type { Transport } from '../../clients/collector.js';
 import type { Config } from '../../config/load.js';
 import type { TransportMode } from '../../config/schema.js';
+import type { ScenarioName } from '../names.js';
 
 const RUN_ID_LETTERS = 15;
 const ALPHABET_SIZE = 26;
 const FIRST_LETTER_CODE = 97;
 const HTTP_CATCHER = 'errors/nodejs';
 const WS_CATCHER = 'errors/javascript';
-
-/** Scenarios that send a test event. */
-export const SCENARIO_NAMES = ['send-and-receive-event', 'check-notification'] as const;
-
-/** Name of a scenario in titles and results. */
-export type ScenarioName = typeof SCENARIO_NAMES[number];
-
-/** Name of the scenario that sends an event and waits for it in Hawk. */
-export const SCENARIO_NAME: ScenarioName = 'send-and-receive-event';
 
 /** What the event carries in its `context`, so a mangled title can still be recognized. */
 export interface RunContextPayload {

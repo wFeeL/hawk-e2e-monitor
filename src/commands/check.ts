@@ -16,6 +16,7 @@ import { runSendAndReceive, scenarioSecrets } from '../scenarios/send-and-receiv
 import type { ScenarioDeps } from '../scenarios/send-and-receive/run.js';
 import { systemClock } from '../time/clock.js';
 import { refusalWhileServing } from './serving.js';
+import { CHECK_NOTIFICATION } from '../scenarios/names.js';
 
 /** Where the command writes. */
 export interface CheckIo {
@@ -156,7 +157,7 @@ export async function runCheckCommand(command: CheckCommand, config: Config, io:
 
   const masking = createMutableRedactor(scenarioSecrets(config));
 
-  if (command.scenario === 'check-notification') {
+  if (command.scenario === CHECK_NOTIFICATION) {
     return runNotificationCommand(command, config, io, deps, masking);
   }
 

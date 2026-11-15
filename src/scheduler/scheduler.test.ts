@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Config } from '../config/load.js';
 import type { RunResult } from '../engine/result.js';
 import { createRedactor } from '../errors/redact.js';
-import type { ScenarioName } from '../scenarios/send-and-receive/plan.js';
+import type { ScenarioName } from '../scenarios/names.js';
 import { openDatabase } from '../storage/database.js';
 import { createHistory } from '../storage/history.js';
 import type { History } from '../storage/history.js';

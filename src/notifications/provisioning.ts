@@ -3,8 +3,8 @@ import { CheckError, isCheckError } from '../errors/taxonomy.js';
 import type { Clock } from '../time/clock.js';
 import type { PublicAddress } from './address.js';
 import type { ChannelSettings, NotificationChannels, NotificationRule, NotificationRuleInput } from './types.js';
+import { SEND_AND_RECEIVE_EVENT } from '../scenarios/names.js';
 
-const EXCLUDED_SCENARIO = 'send-and-receive-event';
 const CHANNEL_NAMES = ['email', 'slack', 'loop', 'telegram', 'webhook'] as const;
 const OFF: ChannelSettings = { isEnabled: false,
   endpoint: '' };
@@ -148,7 +148,7 @@ export function desiredRule(deps: Pick<ProvisionerDeps, 'instanceId' | 'loop' | 
     isEnabled: true,
     whatToReceive: 'ONLY_NEW',
     including: [`[e2e:${deps.instanceId}]`],
-    excluding: [EXCLUDED_SCENARIO],
+    excluding: [SEND_AND_RECEIVE_EVENT],
     channels: { email: OFF,
       slack: OFF,
       telegram: OFF,

@@ -17,6 +17,7 @@ import type { ScenarioState } from '../send-and-receive/stages.js';
 import { notificationBeforeSend, notificationFormedStage, notificationSetupStage } from './stages.js';
 import type { LastHostname, NotificationContext, NotificationState } from './stages.js';
 import { decideNotificationVerdict } from './verdict.js';
+import { CHECK_NOTIFICATION } from '../names.js';
 
 /** Everything `runCheckNotification` needs from outside. */
 export interface NotificationDeps extends ScenarioDeps {
@@ -46,7 +47,7 @@ export async function runCheckNotification(deps: NotificationDeps, options: Plan
   const { config, clock, receiver } = deps;
   const { timeouts } = config;
   const settings = notificationSettings(config);
-  const plan = planRun(config, options, 'check-notification', deps.randomLetters);
+  const plan = planRun(config, options, CHECK_NOTIFICATION, deps.randomLetters);
   const provisioner = deps.provisioner ?? createProvisioner({ api: deps.api,
     clock,
     projectId: config.hawk.projectId,

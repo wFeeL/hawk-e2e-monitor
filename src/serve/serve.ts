@@ -38,6 +38,8 @@ import { systemClock } from '../time/clock.js';
 import type { Clock } from '../time/clock.js';
 import { createRoutes } from './routes.js';
 import { MS_PER_DAY } from '../time/units.js';
+import { CHECK_NOTIFICATION, SEND_AND_RECEIVE_EVENT } from '../scenarios/names.js';
+import type { ScenarioName } from '../scenarios/names.js';
 
 const TUNNEL_POLL_MS = 2000;
 const ALERT_BACKLOG_LIMIT_MS = 1_800_000;
@@ -438,9 +440,9 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
     alerter.start();
     closers.push(async () => alerter.stop());
 
-    const notifies = monitoring.scenarios.includes('check-notification');
-    const runners: Partial<Record<'check-notification' | 'send-and-receive-event', ScenarioRunner>> = {};
-    const beforeFirstRun: Partial<Record<'check-notification', (signal: AbortSignal) => Promise<void>>> = {};
+    const notifies = monitoring.scenarios.includes(CHECK_NOTIFICATION);
+    const runners: Partial<Record<ScenarioName, ScenarioRunner>> = {};
+    const beforeFirstRun: Partial<Record<typeof CHECK_NOTIFICATION, (signal: AbortSignal) => Promise<void>>> = {};
     let receiver: Receiver | undefined;
     let receiverClosed = false;
 
@@ -452,7 +454,7 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
       redact: masking.redact,
       ...overrides.pollScheduleMs === undefined ? {} : { pollScheduleMs: overrides.pollScheduleMs } };
 
-    runners['send-and-receive-event'] = async ({ runId, sequence, signal }) => runSendAndReceive({ ...base,
+    runners[SEND_AND_RECEIVE_EVENT] = async ({ runId, sequence, signal }) => runSendAndReceive({ ...base,
       signal }, { sequence,
       runId });
 
@@ -507,7 +509,7 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
         retry: config.retry }, signal);
       const lastHostname: LastHostname = {};
 
-      runners['check-notification'] = async ({ runId, sequence, signal }) => runCheckNotification({ ...base,
+      runners[CHECK_NOTIFICATION] = async ({ runId, sequence, signal }) => runCheckNotification({ ...base,
         signal,
         receiver: started,
         provisioner,
@@ -517,7 +519,7 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
         ...overrides.addressPollMs === undefined ? {} : { addressPollMs: overrides.addressPollMs } }, { sequence,
         runId });
 
-      beforeFirstRun['check-notification'] = async (signal) => {
+      beforeFirstRun[CHECK_NOTIFICATION] = async (signal) => {
         await waitForTunnel({ findAddress,
           receiver: started,
           secret: settings.receiverSecret,

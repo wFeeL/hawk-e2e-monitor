@@ -10,7 +10,8 @@ import { CheckError } from '../../errors/taxonomy.js';
 import { decodeIntegrationToken, tokenKey } from '../../hawk/token.js';
 import type { Logger } from '../../log/logger.js';
 import type { Clock } from '../../time/clock.js';
-import { planRun, SCENARIO_NAME } from './plan.js';
+import { SEND_AND_RECEIVE_EVENT } from '../names.js';
+import { planRun } from './plan.js';
 import type { PlanOptions, RandomLetters } from './plan.js';
 import { apiAvailabilityStage, cleanupStage, collectorAcceptStage, collectorAvailabilityStage, eventRepeatedStage, eventVisibleStage } from './stages.js';
 import type { ScenarioContext, ScenarioState } from './stages.js';
@@ -146,7 +147,7 @@ export function toCleanupResult(stage: StageResult): CleanupResult {
 export async function runSendAndReceive(deps: ScenarioDeps, options: PlanOptions): Promise<RunResult> {
   const { config, clock } = deps;
   const { timeouts } = config;
-  const plan = planRun(config, options, SCENARIO_NAME, deps.randomLetters);
+  const plan = planRun(config, options, SEND_AND_RECEIVE_EVENT, deps.randomLetters);
   const state: ScenarioState = { sendMayHaveReached: false };
   const context: ScenarioContext = { config,
     plan,
@@ -202,7 +203,7 @@ export async function runSendAndReceive(deps: ScenarioDeps, options: PlanOptions
   const cleanupStageResult = stages.at(-1);
   const result: RunResult = {
     runId: plan.runId,
-    scenario: SCENARIO_NAME,
+    scenario: SEND_AND_RECEIVE_EVENT,
     instanceId: config.instanceId,
     sequence: plan.sequence,
     transport: plan.transport,

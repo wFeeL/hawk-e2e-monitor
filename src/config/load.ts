@@ -2,7 +2,7 @@ import type { z } from 'zod';
 import { ENV_SHAPE, envSchema } from './schema.js';
 import type { LogLevel, ParsedEnv, TransportMode } from './schema.js';
 import type { RetryPolicy } from '../net/retry.js';
-import type { ScenarioName } from '../scenarios/send-and-receive/plan.js';
+import type { ScenarioName } from '../scenarios/names.js';
 
 /** Address of the internal HTTP server (health, readiness). */
 export interface InternalConfig {

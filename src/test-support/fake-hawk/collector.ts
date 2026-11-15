@@ -6,10 +6,10 @@ import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import type { FakeStore, StoredEvent } from './store.js';
 import { decodeTokenKey } from './token.js';
+import { PLAIN_TYPE } from './content-types.js';
 
 const MAX_BODY_BYTES = 1_000_000;
 const JSON_TYPE = 'text/json; charset=utf8';
-const PLAIN_TYPE = 'text/plain; charset=utf-8';
 
 /** A canned collector answer. */
 export interface CollectorReplyOverride {

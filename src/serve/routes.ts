@@ -2,14 +2,14 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Alerter } from '../alerting/alerter.js';
 import type { Config } from '../config/load.js';
 import type { RouteHandler } from '../http/internal-server.js';
-import { SCENARIO_NAMES } from '../scenarios/send-and-receive/plan.js';
+import { SCENARIO_NAMES } from '../scenarios/names.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
+import { DEFAULT_LIST_LIMIT } from '../storage/history.js';
 import type { History, ListOptions } from '../storage/history.js';
 import type { Clock } from '../time/clock.js';
 import { HttpStatus } from '../net/http-status.js';
 
-const DEFAULT_LIMIT = 20;
-const MAX_LIMIT = 500;
+const MAX_HISTORY_ROUTE_LIMIT = 500;
 const RUNS_PREFIX = '/runs/';
 
 /** What the routes read. */
@@ -78,10 +78,10 @@ function listRuns(deps: RouteDeps): RouteHandler {
       return;
     }
 
-    const limit = limitText === null ? DEFAULT_LIMIT : Number(limitText);
+    const limit = limitText === null ? DEFAULT_LIST_LIMIT : Number(limitText);
 
-    if (limitText !== null && (!/^\d+$/u.test(limitText) || limit < 1 || limit > MAX_LIMIT)) {
-      badRequest(res, `limit must be a whole number from 1 to ${String(MAX_LIMIT)}`);
+    if (limitText !== null && (!/^\d+$/u.test(limitText) || limit < 1 || limit > MAX_HISTORY_ROUTE_LIMIT)) {
+      badRequest(res, `limit must be a whole number from 1 to ${String(MAX_HISTORY_ROUTE_LIMIT)}`);
 
       return;
     }

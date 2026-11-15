@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { decodeIntegrationToken } from '../hawk/token.js';
-import { SCENARIO_NAMES } from '../scenarios/send-and-receive/plan.js';
+import { CHECK_NOTIFICATION, SCENARIO_NAMES, SEND_AND_RECEIVE_EVENT } from '../scenarios/names.js';
 import { boundedDurationMs, durationMs } from './duration.js';
 
 const DEFAULT_INTERNAL_PORT = 8090;
@@ -40,8 +40,6 @@ const DEFAULT_RETRY_DELAYS = '200,500';
 const MAX_RETRY_DELAY_MS = 60_000;
 const DEFAULT_SWEEP_INTERVAL_MS = 3_600_000;
 const DEFAULT_SWEEP_MIN_AGE_MS = 900_000;
-const DEFAULT_SCENARIOS = 'send-and-receive-event';
-const OWN_SCENARIO_NAME = 'send-and-receive-event';
 const RECEIVER_SECRET_PATTERN = /^[\w-]{32,}$/;
 const DEFAULT_REPEAT_EVERY_N_RUNS = 6;
 const MAX_INSTANCE_DIGITS = 12;
@@ -160,7 +158,7 @@ function scenarioList(): z.ZodType<Array<(typeof SCENARIO_NAMES)[number]>> {
   const names = SCENARIO_NAMES.join(', ');
 
   return z.string()
-    .default(DEFAULT_SCENARIOS)
+    .default(SEND_AND_RECEIVE_EVENT)
     .transform(value => value.split(',').map(name => name.trim()))
     .pipe(z.array(z.enum(SCENARIO_NAMES, { message: `must be a comma-separated list of: ${names}` }))
       .refine(list => new Set(list).size === list.length, 'must not repeat a scenario'));
@@ -187,7 +185,7 @@ export const ENV_SHAPE = {
     // The grouper masks values that look like card numbers (13-19 digits).
     .refine(value => value.replaceAll(/\D/gu, '').length <= MAX_INSTANCE_DIGITS, 'must contain at most 12 digits')
     // The title of this scenario's events must not match the other scenario's events.
-    .refine(value => !value.toLowerCase().includes(OWN_SCENARIO_NAME), `must not contain "${OWN_SCENARIO_NAME}"`)),
+    .refine(value => !value.toLowerCase().includes(SEND_AND_RECEIVE_EVENT), `must not contain "${SEND_AND_RECEIVE_EVENT}"`)),
   LOG_LEVEL: pub(z.enum(LOG_LEVELS).default('info')),
   INTERNAL_HOST: pub(z.string().min(1)
     .default('127.0.0.1')),
@@ -343,7 +341,7 @@ function checkMonitoring(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx)
       message: `must be at least RUN_TIMEOUT_MS + CLEANUP_TIMEOUT_MS (${String(runAndCleanup)} ms)` });
   }
 
-  if (!Array.isArray(env.SCENARIOS) || !env.SCENARIOS.includes('check-notification')) {
+  if (!Array.isArray(env.SCENARIOS) || !env.SCENARIOS.includes(CHECK_NOTIFICATION)) {
     return;
   }
 

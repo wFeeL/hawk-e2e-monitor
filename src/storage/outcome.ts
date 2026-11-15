@@ -2,7 +2,8 @@ import type { Config } from '../config/load.js';
 import type { RunResult } from '../engine/result.js';
 import { CheckError } from '../errors/taxonomy.js';
 import type { ErrorClass, MessageFacts } from '../errors/taxonomy.js';
-import type { ScenarioName } from '../scenarios/send-and-receive/plan.js';
+import { CHECK_NOTIFICATION } from '../scenarios/names.js';
+import type { ScenarioName } from '../scenarios/names.js';
 import type { RunStart } from './history.js';
 import type { DegradedCode, RunOutcome, RunRow } from './types.js';
 import { MS_PER_DAY } from '../time/units.js';
@@ -39,7 +40,7 @@ function degradationOf(result: RunResult, context: OutcomeContext): DegradedCode
   const codes: DegradedCode[] = [];
   const { notification } = result;
 
-  if (result.scenario === 'check-notification' && notification !== undefined
+  if (result.scenario === CHECK_NOTIFICATION && notification !== undefined
     && (notification.webhook === undefined || (context.loopEnabled && notification.loop === undefined))) {
     codes.push('single_channel');
   }
@@ -144,7 +145,7 @@ export function rowOf(start: RunStart, outcome: RunOutcome): RunRow {
  * @returns `check-notification` 1; `send-and-receive-event` 1 plus the share of runs that repeat the event.
  */
 export function eventsPerRun(scenario: ScenarioName, config: Config): number {
-  if (scenario === 'check-notification' || config.repeatEveryNRuns === 0) {
+  if (scenario === CHECK_NOTIFICATION || config.repeatEveryNRuns === 0) {
     return 1;
   }
 

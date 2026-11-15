@@ -3,7 +3,7 @@ import type { RunResult } from '../engine/result.js';
 import type { Redactor } from '../errors/redact.js';
 import { isCheckError } from '../errors/taxonomy.js';
 import type { Logger } from '../log/logger.js';
-import type { ScenarioName } from '../scenarios/send-and-receive/plan.js';
+import type { ScenarioName } from '../scenarios/names.js';
 import type { AlertStateRow, History } from '../storage/history.js';
 import type { RunRow } from '../storage/types.js';
 import type { Clock } from '../time/clock.js';
@@ -11,10 +11,10 @@ import { sendNotify } from './notify.js';
 import { decideAlert } from './state.js';
 import type { AlertKind } from './state.js';
 import { alertText, escapeHtml } from './text.js';
+import { MS_PER_DAY } from '../time/units.js';
 
 const FLUSH_BATCH = 50;
 const MAX_RETRY_PAUSE_MS = 600_000;
-const DROP_AFTER_MS = 86_400_000;
 const REJECTED_LOG_EVERY = 3;
 
 /** What the alerter needs from outside. */
@@ -176,7 +176,7 @@ export function createAlerter(deps: AlerterDeps): Alerter {
     }
 
     for (const row of rows) {
-      if (Date.parse(now) - Date.parse(row.createdAt) > DROP_AFTER_MS) {
+      if (Date.parse(now) - Date.parse(row.createdAt) > MS_PER_DAY) {
         history.alertAttempt(row.id, { droppedAt: now,
           error: 'dropped after 24 hours' });
         logger.error('alert dropped', { scenario: row.scenario,

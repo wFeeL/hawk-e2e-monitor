@@ -7,9 +7,9 @@ import type { FakeRules } from './rules.js';
 import { createFakeRules, defaultRule } from './rules.js';
 import type { FakeStore, StoredEvent } from './store.js';
 import { objectIdLike } from './store.js';
+import { PLAIN_TYPE } from './content-types.js';
 
 const JSON_TYPE = 'application/json; charset=utf-8';
-const PLAIN_TYPE = 'text/plain; charset=utf-8';
 const DEFAULT_EVENTS_LIMIT = 10_000;
 const UNAUTHENTICATED_MESSAGE = 'You must be signed in to view this resource.';
 // The FindEvents query asks for 50 rows.

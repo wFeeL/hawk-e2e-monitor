@@ -1,6 +1,5 @@
 import { Buffer } from 'node:buffer';
-
-const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/u;
+import { BASE64 } from '../../hawk/token.js';
 
 /**
  * Encodes an integration token the way Hawk SDKs expect it.
