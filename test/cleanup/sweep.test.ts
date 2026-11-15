@@ -700,6 +700,41 @@ describe('sweepOnce of projects', () => {
     expect(createdProjects(history).ids()).toEqual([id]);
   });
 
+  it('goes on with the other projects when one fails, keeps the failed one and reports the first error', async () => {
+    const first = leftoverProject('raaaaaaaaaaaaaaa');
+    const second = leftoverProject('rbbbbbbbbbbbbbbb');
+    const report = await sweeper({ api: { ...api,
+      removeProject: async (id, signal) => {
+        if (id === first) {
+          throw new Error('cannot remove the first');
+        }
+
+        return api.removeProject(id, signal);
+      } } }).sweepOnce(SIGNAL);
+
+    expect(hawk.projects.has(first)).toBe(true);
+    expect(hawk.projects.has(second)).toBe(false);
+    expect(createdProjects(history).ids()).toEqual([first]);
+    expect(report.projects).toMatchObject({ removed: 1,
+      error: 'cannot remove the first' });
+    expect(report.error).toBe('cannot remove the first');
+  });
+
+  it('a pass that is aborted does not turn into a project error', async () => {
+    leftoverProject('raaaaaaaaaaaaaaa');
+
+    const stop = new AbortController();
+    const report = await sweeper({ api: { ...api,
+      removeProject: () => {
+        stop.abort();
+
+        return Promise.reject(new Error('aborted while removing'));
+      } } }).sweepOnce(stop.signal);
+
+    expect(report.error).toBeDefined();
+    expect(report.projects).toBeUndefined();
+  });
+
   it('a project that the cleanup of its run could not remove goes in a later pass', async () => {
     const id = leftoverProject(PROJECT_RUN, { ageMs: 60_000 });
 

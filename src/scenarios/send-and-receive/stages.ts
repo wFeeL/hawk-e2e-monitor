@@ -319,7 +319,8 @@ function patternFindings(patterns: readonly string[], title: string): PatternFin
 
   for (const pattern of patterns) {
     try {
-      if (new RegExp(pattern, 'u').test(title)) {
+      // Hawk compiles the patterns without the `u` flag, which accepts escapes such as `\:`.
+      if (new RegExp(pattern).test(title)) {
         catches = true;
         warnings.push(`The event grouping pattern "${pattern}" of the project catches the title of the monitor's events, so Hawk may glue them together`);
       }

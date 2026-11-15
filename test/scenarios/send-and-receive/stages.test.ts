@@ -106,6 +106,16 @@ describe('apiAvailabilityStage grouping patterns', () => {
     expect((result.details?.warnings as string[]).join(' ')).toContain('\\[e2e:.*\\] .* send-and-receive-event');
   });
 
+  it('reads a pattern as Hawk does, without the u flag, so an escaped colon still works', async () => {
+    hawk.api.knobs.groupingPatterns = ['\\[e2e\\:.*'];
+
+    const { context, plan } = scenario();
+    const result = await run(apiAvailabilityStage(TIMEOUT_MS, { title: plan.title }), context);
+
+    expect(result.details?.degraded).toEqual(['grouping_pattern']);
+    expect(JSON.stringify(result.details?.warnings)).not.toContain('not a regular expression');
+  });
+
   it('only warns about a pattern that is not a regular expression', async () => {
     hawk.api.knobs.groupingPatterns = ['(unclosed'];
 

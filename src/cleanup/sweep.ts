@@ -42,6 +42,8 @@ export interface ProjectsReport {
   gone: number;
   /** Projects left alone: another workspace, another name, too young or still in use. */
   skipped: number;
+  /** The first error that stopped the removal of one project; the pass went on with the others. */
+  error?: string;
 }
 
 /** What the sweep needs from outside. */
@@ -277,6 +279,25 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
     const report: ProjectsReport = { removed: 0,
       gone: 0,
       skipped: 0 };
+    // One project that cannot be removed must not keep the others from it.
+    const removing = async (remove: () => Promise<boolean>, runId: string): Promise<boolean> => {
+      try {
+        const done = await remove();
+
+        if (!done) {
+          logger.warn('sweep: Hawk did not remove a project', { runId });
+        }
+
+        return done;
+      } catch (error) {
+        signal.throwIfAborted();
+        report.error ??= describe(error);
+        logger.warn('sweep: a project could not be removed', { runId,
+          error: describe(error) });
+
+        return false;
+      }
+    };
 
     for (const id of candidates) {
       signal.throwIfAborted();
@@ -300,11 +321,10 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
         continue;
       }
 
-      if (await api.removeProject(id, signal)) {
+      if (await removing(() => api.removeProject(id, signal), runId)) {
         record.forget(id);
         report.removed += 1;
       } else {
-        logger.warn('sweep: Hawk did not remove a project', { runId });
         report.skipped += 1;
       }
     }
@@ -324,12 +344,11 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
         report.skipped += 1;
       } else if (clock.wallTime().getTime() - project.createdAtMs < sweepMinAgeMs) {
         report.skipped += 1;
-      } else if (await api.removeProject(project.id, signal)) {
+      } else if (await removing(() => api.removeProject(project.id, signal), runId)) {
         record.forget(project.id);
         pending.drop(runId);
         report.removed += 1;
       } else {
-        logger.warn('sweep: Hawk did not remove a project', { runId });
         report.skipped += 1;
       }
     }
@@ -380,6 +399,12 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
 
       if (projects !== undefined) {
         report.projects = projects;
+
+        if (projects.error !== undefined) {
+          report.error = projects.error;
+          failures += 1;
+          logger.warn('sweep failed', { ...report });
+        }
       }
     } catch (error) {
       report.error = describe(error);
