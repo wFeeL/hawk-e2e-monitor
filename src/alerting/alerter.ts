@@ -10,7 +10,7 @@ import type { Clock } from '../time/clock.js';
 import { sendNotify } from './notify.js';
 import { decideAlert } from './state.js';
 import type { AlertKind } from './state.js';
-import { alertText, escapeHtml } from './text.js';
+import { alertText, plainAlertText, storageFailingText } from './text.js';
 import type { AlertTextInput } from './text.js';
 import { MS_PER_DAY } from '../time/units.js';
 
@@ -152,7 +152,7 @@ export function createAlerter(deps: AlerterDeps): Alerter {
   const sendAfterStorageFailure = (text: string, scenario: ScenarioName, error: unknown): void => {
     const notice = storageNoticeSent
       ? undefined
-      : `<b>STORAGE FAILING</b> [e2e:${escapeHtml(redact(config.instanceId))}]: ${escapeHtml(redact(describe(error)))}`;
+      : storageFailingText(config.instanceId, describe(error), redact);
 
     storageNoticeSent = true;
     direct = direct.then(async () => {
@@ -273,7 +273,7 @@ export function createAlerter(deps: AlerterDeps): Alerter {
     } catch (error) {
       logger.error('alert text could not be built', { error: redact(describe(error)) });
 
-      return `<b>${kind.toUpperCase().replaceAll('_', ' ')}</b> ${input.scenario} [e2e:${escapeHtml(config.instanceId)}] (the alert text could not be built, see the monitor log)`;
+      return plainAlertText(kind, input.scenario, config.instanceId);
     }
   };
 

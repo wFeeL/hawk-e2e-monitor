@@ -157,7 +157,7 @@ describe('alerter: delivery', () => {
     expect(await alerter.flush(SIGNAL)).toEqual({ sent: 1,
       failed: 0 });
     expect(messages(bot)).toHaveLength(1);
-    expect(messages(bot)[0]).toContain('<b>FAILED</b> send-and-receive-event [e2e:test]');
+    expect(messages(bot)[0]).toContain('<b>FAILED</b> send-and-receive-event\ninstance test | outage');
     expect(bot.requests[0]?.form.parse_mode).toBe('HTML');
     expect(bot.requests[0]?.form.disable_web_page_preview).toBe('true');
     expect(history.pendingAlerts(clock.wallTime().toISOString(), 10)).toHaveLength(0);
