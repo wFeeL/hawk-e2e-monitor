@@ -229,5 +229,26 @@ export const DELETE_NOTIFICATION_RULE: GraphqlOperation = {
   idempotent: true,
 };
 
+/** Creates a project in a workspace; repeating it would create a second project, so no blind retries. */
+export const CREATE_PROJECT: GraphqlOperation = {
+  name: 'CreateProject',
+  document: 'mutation CreateProject($workspaceId: ID!, $name: String!) { createProject(workspaceId: $workspaceId, name: $name) { id name token } }',
+  idempotent: false,
+};
+
+/** Removes a project; once it is gone a second request fails, so no blind retries. */
+export const REMOVE_PROJECT: GraphqlOperation = {
+  name: 'RemoveProject',
+  document: 'mutation RemoveProject($projectId: ID!) { removeProject(projectId: $projectId) }',
+  idempotent: false,
+};
+
+/** Projects of each workspace of the account, all of them or only the listed ones. */
+export const WORKSPACE_PROJECTS: GraphqlOperation = {
+  name: 'WorkspaceProjects',
+  document: 'query WorkspaceProjects($ids: [ID!]) { workspaces { id projects(ids: $ids) { id name creationDate } } }',
+  idempotent: true,
+};
+
 /** Every operation the monitor sends. */
-export const ALL_OPERATIONS: readonly GraphqlOperation[] = [LOGIN, REFRESH_TOKENS, PROJECT_TOKEN, WORKSPACE_QUOTA, PROJECT_DAILY_EVENTS, EVENT, REMOVE_EVENT, NOTIFICATION_RULES, CREATE_NOTIFICATION_RULE, UPDATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE];
+export const ALL_OPERATIONS: readonly GraphqlOperation[] = [LOGIN, REFRESH_TOKENS, PROJECT_TOKEN, WORKSPACE_QUOTA, PROJECT_DAILY_EVENTS, EVENT, REMOVE_EVENT, NOTIFICATION_RULES, CREATE_NOTIFICATION_RULE, UPDATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE, CREATE_PROJECT, REMOVE_PROJECT, WORKSPACE_PROJECTS];

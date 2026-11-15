@@ -9,10 +9,10 @@ import type { FakeApiError, FakeHawk } from '../support/fake-hawk/index.js';
 import { systemClock } from '../../src/time/clock.js';
 import { GraphqlFailure, createGraphqlTransport } from '../../src/clients/graphql.js';
 import type { GraphqlOperation, GraphqlTransport } from '../../src/clients/graphql.js';
-import { ALL_OPERATIONS, CREATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE, EVENT, PROJECT_DAILY_EVENTS, LOGIN, NOTIFICATION_RULES, PROJECT_TOKEN, REFRESH_TOKENS, REMOVE_EVENT, UPDATE_NOTIFICATION_RULE, WORKSPACE_QUOTA } from '../../src/clients/operations.js';
+import { ALL_OPERATIONS, CREATE_NOTIFICATION_RULE, CREATE_PROJECT, REMOVE_PROJECT, WORKSPACE_PROJECTS, DELETE_NOTIFICATION_RULE, EVENT, PROJECT_DAILY_EVENTS, LOGIN, NOTIFICATION_RULES, PROJECT_TOKEN, REFRESH_TOKENS, REMOVE_EVENT, UPDATE_NOTIFICATION_RULE, WORKSPACE_QUOTA } from '../../src/clients/operations.js';
 
 const FIXTURE = new URL('../fixtures/hawk-api.graphql', import.meta.url);
-const OPERATION_COUNT = 11;
+const OPERATION_COUNT = 14;
 
 /** What the Login mutation returns inside `data`. */
 interface LoginData {
@@ -122,9 +122,9 @@ afterEach(async () => {
 describe('operations', () => {
   const schema = buildSchema(readFileSync(FIXTURE, 'utf8'));
 
-  it('lists all eleven operations', () => {
+  it('lists all the operations', () => {
     expect(ALL_OPERATIONS).toHaveLength(OPERATION_COUNT);
-    expect(ALL_OPERATIONS).toEqual([LOGIN, REFRESH_TOKENS, PROJECT_TOKEN, WORKSPACE_QUOTA, PROJECT_DAILY_EVENTS, EVENT, REMOVE_EVENT, NOTIFICATION_RULES, CREATE_NOTIFICATION_RULE, UPDATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE]);
+    expect(ALL_OPERATIONS).toEqual([LOGIN, REFRESH_TOKENS, PROJECT_TOKEN, WORKSPACE_QUOTA, PROJECT_DAILY_EVENTS, EVENT, REMOVE_EVENT, NOTIFICATION_RULES, CREATE_NOTIFICATION_RULE, UPDATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE, CREATE_PROJECT, REMOVE_PROJECT, WORKSPACE_PROJECTS]);
   });
 
   it.each(ALL_OPERATIONS.map(operation => [operation.name, operation] as const))(
@@ -160,9 +160,10 @@ describe('operations', () => {
     expect(errors[0]?.message).toContain('toke');
   });
 
-  it('only RefreshTokens, CreateNotificationRule and RemoveEvent are not idempotent', () => {
+  it('only the operations that change something and cannot be repeated blindly are not idempotent', () => {
     expect(ALL_OPERATIONS.filter(operation => !operation.idempotent).map(operation => operation.name))
-      .toEqual(['RefreshTokens', 'RemoveEvent', 'CreateNotificationRule']);
+      .toEqual(['RefreshTokens', 'RemoveEvent', 'CreateNotificationRule', 'CreateProject', 'RemoveProject']);
+    expect(WORKSPACE_PROJECTS.idempotent).toBe(true);
   });
 
   it('CreateNotificationRule is not idempotent', () => {

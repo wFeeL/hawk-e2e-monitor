@@ -5,7 +5,7 @@ import type { Clock } from '../time/clock.js';
 import { ACCESS_EXPIRED, GraphqlFailure, UNAUTHENTICATED } from './graphql.js';
 import type { GraphqlOperation, GraphqlTransport } from './graphql.js';
 import type { ChannelSettings, NotificationRule, NotificationRuleInput, NotificationRuleUpdate } from '../notifications/types.js';
-import { CREATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE, EVENT, PROJECT_DAILY_EVENTS, LOGIN, NOTIFICATION_RULES, PROJECT_TOKEN, REFRESH_TOKENS, REMOVE_EVENT, UPDATE_NOTIFICATION_RULE, WORKSPACE_QUOTA } from './operations.js';
+import { CREATE_NOTIFICATION_RULE, CREATE_PROJECT, DELETE_NOTIFICATION_RULE, EVENT, PROJECT_DAILY_EVENTS, LOGIN, NOTIFICATION_RULES, PROJECT_TOKEN, REFRESH_TOKENS, REMOVE_EVENT, REMOVE_PROJECT, UPDATE_NOTIFICATION_RULE, WORKSPACE_PROJECTS, WORKSPACE_QUOTA } from './operations.js';
 import { MS_PER_SECOND } from '../time/units.js';
 
 const NOT_FOUND_PREFIX = 'Event not found for eventId';
@@ -71,6 +71,32 @@ export interface ProjectInfo {
   groupingPatterns: string[];
 }
 
+/** A project Hawk has just created. */
+export interface CreatedProject {
+  /** 24-character hex id of the project. */
+  id: string;
+  /** Integration token of the project. */
+  token: string;
+}
+
+/** A project in the list of a workspace. */
+export interface WorkspaceProject {
+  /** 24-character hex id of the project. */
+  id: string;
+  /** Name of the project. */
+  name: string;
+  /** When the project was created, in milliseconds. */
+  createdAtMs: number;
+}
+
+/** The projects of one workspace. */
+export interface WorkspaceProjects {
+  /** Id of the workspace. */
+  workspaceId: string;
+  /** Projects that were asked for, or all of them. */
+  projects: WorkspaceProject[];
+}
+
 /** Accounts and waits the client needs. */
 export interface HawkApiOptions {
   /** Sends GraphQL operations. */
@@ -132,6 +158,30 @@ export interface HawkApi {
    * @returns The event, or null when it does not exist.
    */
   eventCard(projectId: string, eventId: string, signal: AbortSignal): Promise<EventCard | null>;
+  /**
+   * Creates a project. Not repeated, because a repeat would create a second project.
+   * @param workspaceId Workspace to create it in; the account must be its admin.
+   * @param name Name of the project.
+   * @param signal Deadline of the caller.
+   * @returns Id and integration token of the new project.
+   * @throws CheckError `api_error` when Hawk answers without a project.
+   */
+  createProject(workspaceId: string, name: string, signal: AbortSignal): Promise<CreatedProject>;
+  /**
+   * Removes a project. Not repeated, because once it is gone a second request fails.
+   * @param projectId 24-character hex id of the project.
+   * @param signal Deadline of the caller.
+   * @returns False when Hawk answered that nothing was removed.
+   */
+  removeProject(projectId: string, signal: AbortSignal): Promise<boolean>;
+  /**
+   * Lists the projects of every workspace of the account.
+   * @param ids Projects to list; an empty list asks for all of them.
+   * @param signal Deadline of the caller.
+   * @returns One entry per workspace, with creation times in milliseconds.
+   * @throws CheckError `api_error` when a creation time cannot be read.
+   */
+  workspaceProjects(ids: readonly string[], signal: AbortSignal): Promise<WorkspaceProjects[]>;
   /**
    * Removes an event; an attempt that removed it but timed out counts as done.
    * @param projectId 24-character hex id of the project.
@@ -331,6 +381,42 @@ interface EventCardProject {
   event: RawEvent | null;
 }
 
+/** Answer of the CreateProject mutation. */
+interface CreateProjectData {
+  /** The new project, null when Hawk made none. */
+  createProject: CreatedProject | null;
+}
+
+/** Answer of the RemoveProject mutation. */
+interface RemoveProjectData {
+  /** False when Hawk removed nothing. */
+  removeProject: boolean;
+}
+
+/** Answer of the WorkspaceProjects query. */
+interface WorkspaceProjectsData {
+  /** Workspaces of the account, possibly with nulls. */
+  workspaces: (RawProjectsOfWorkspace | null)[] | null;
+}
+
+/** A workspace with its projects in a raw answer. */
+interface RawProjectsOfWorkspace {
+  /** Workspace id. */
+  id: string;
+  /** Projects, possibly with nulls. */
+  projects: (RawListedProject | null)[] | null;
+}
+
+/** A project in a raw list. */
+interface RawListedProject {
+  /** Project id. */
+  id: string;
+  /** Project name. */
+  name: string;
+  /** Creation time as text or a number of seconds or milliseconds. */
+  creationDate: string | number;
+}
+
 /** Answer of the WorkspaceQuota query. */
 interface WorkspaceQuotaData {
   /** Workspaces of the account, possibly with nulls. */
@@ -364,6 +450,22 @@ interface RawPlan {
  */
 function toMilliseconds(value: number): number {
   return value > MILLISECONDS_THRESHOLD ? value : value * MS_PER_SECOND;
+}
+
+/**
+ * Reads the creation time of a project.
+ * @param value Date as the API sends it.
+ * @returns Milliseconds.
+ * @throws CheckError `api_error` when the value is neither a number nor a date text.
+ */
+function creationTime(value: string | number): number {
+  const time = typeof value === 'number' ? toMilliseconds(value) : Date.parse(value);
+
+  if (Number.isNaN(time)) {
+    throw new CheckError('api_error', { detail: `unreadable project creation date: ${String(value)}` });
+  }
+
+  return time;
 }
 
 /**
@@ -618,6 +720,37 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
       ruleId } }, signal);
   };
 
+  const createProject: HawkApi['createProject'] = async (workspaceId, name, signal) => {
+    const data = await authorized<CreateProjectData>(CREATE_PROJECT, { workspaceId,
+      name }, signal);
+
+    if (!data.createProject) {
+      throw new CheckError('api_error', { detail: 'createProject answered without a project' });
+    }
+
+    return { id: data.createProject.id,
+      token: data.createProject.token };
+  };
+
+  const removeProject: HawkApi['removeProject'] = async (projectId, signal) => {
+    const data = await authorized<RemoveProjectData>(REMOVE_PROJECT, { projectId }, signal);
+
+    return data.removeProject;
+  };
+
+  const workspaceProjects: HawkApi['workspaceProjects'] = async (ids, signal) => {
+    const data = await authorized<WorkspaceProjectsData>(WORKSPACE_PROJECTS, { ids: [...ids] }, signal);
+
+    return (data.workspaces ?? []).flatMap(workspace => workspace === null
+      ? []
+      : [{ workspaceId: workspace.id,
+          projects: (workspace.projects ?? []).flatMap(project => project === null
+            ? []
+            : [{ id: project.id,
+                name: project.name,
+                createdAtMs: creationTime(project.creationDate) }]) }]);
+  };
+
   const removeEvent: HawkApi['removeEvent'] = async (projectId, eventId, signal) => {
     let failedBefore = false;
 
@@ -663,5 +796,8 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
     updateNotificationRule,
     deleteNotificationRule,
     removeEvent,
+    createProject,
+    removeProject,
+    workspaceProjects,
   };
 }

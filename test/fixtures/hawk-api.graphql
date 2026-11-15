@@ -14,6 +14,8 @@
 scalar DateTime
 
 scalar JSONObject
+
+scalar Upload
 #   notifications.ts  NotificationsChannelSettings (:11), NotificationsChannels (:31)
 #                 without webPush and desktopPush
 #   notificationsInput.ts  NotificationsChannelSettingsInput (:7),
@@ -25,6 +27,8 @@ scalar JSONObject
 #                 updateProjectNotificationsRule (:126), deleteProjectNotificationsRule (:134)
 #   project.ts    Project.notifications (:389)
 #   projectEventGroupingPattern.ts  ProjectEventGroupingPattern; project.ts Project.eventGroupingPatterns
+#   project.ts    Project.name, Project.creationDate, Mutation.createProject, Mutation.removeProject
+#   typeDefs/index.ts  scalar Upload
 # The fragment of the Garage event documents (hawk.garage, src/api/fragments.ts) needs more:
 #   event.ts      SourceCodeLine, Commit, Release, EventBacktraceFrame, EventUser,
 #                 Breadcrumb, EventMarks, the full Event and EventPayload
@@ -190,6 +194,8 @@ type ProjectEventGroupingPattern {
 type Project {
   id: ID!
   token: String!
+  name: String!
+  creationDate: DateTime!
   eventGroupingPatterns: [ProjectEventGroupingPattern]
   notifications: [ProjectNotificationsRule]
   event(eventId: ID!, originalEventId: ID!): Event
@@ -293,6 +299,8 @@ type Mutation {
   login(email: String!, password: String!): Tokens!
   refreshTokens(refreshToken: String!): Tokens!
   removeEvent(projectId: ID!, eventId: ID!): Boolean!
+  createProject(workspaceId: ID!, name: String!, image: Upload): Project!
+  removeProject(projectId: ID!): Boolean!
   createProjectNotificationsRule(input: CreateProjectNotificationsRuleInput!): ProjectNotificationsRule
   updateProjectNotificationsRule(input: UpdateProjectNotificationsRuleInput!): ProjectNotificationsRule
   deleteProjectNotificationsRule(input: ProjectNotificationRulePointer!): ProjectNotificationsRule
