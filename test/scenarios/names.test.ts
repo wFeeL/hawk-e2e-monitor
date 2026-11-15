@@ -19,8 +19,15 @@ describe('SCENARIO_TRAITS', () => {
 
   it('derives the event scenarios from the table', () => {
     expect(EVENT_SCENARIOS).toEqual(SCENARIO_NAMES.filter(name => SCENARIO_TRAITS[name].sendsEvents));
-    expect(EVENT_SCENARIOS).toEqual(['send-and-receive-event', 'check-notification', 'new-project', 'sourcemaps', 'sentry-envelope']);
+    expect(EVENT_SCENARIOS).toEqual(['send-and-receive-event', 'check-notification', 'new-project', 'sourcemaps', 'sentry-envelope', 'telegram-delivery']);
     expect(EVENT_SCENARIOS).not.toContain('endpoints-probe');
+  });
+
+  it('lists telegram-delivery before the probe with the traits of an event scenario', () => {
+    expect(SCENARIO_NAMES.at(-2)).toBe('telegram-delivery');
+    expect(SCENARIO_TRAITS['telegram-delivery']).toEqual({ sendsEvents: true,
+      inHeartbeat: true,
+      hiddenByDefault: false });
   });
 
   it('gives the new scenarios the same traits', () => {

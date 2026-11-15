@@ -66,6 +66,15 @@ describe('decideVerdict', () => {
     expect(verdict.error?.message).toBe('wrong token');
   });
 
+  it('keeps the culprit the failed stage recorded', () => {
+    const failed: StageResult = { ...stage('api_availability', 'failed', { errorClass: 'telegram_bot_unavailable',
+      message: 'unknown notify token' }),
+    culprit: 'config' };
+    const verdict = decideVerdict(stages(failed), { sendMayHaveReached: false });
+
+    expect(verdict.error?.culprit).toBe('config');
+  });
+
   it('a cleanup failure alone fails the run on cleanup', () => {
     const verdict = decideVerdict(stages(stage('cleanup', 'failed', { errorClass: 'cleanup_failed',
       message: 'not removed' })), { sendMayHaveReached: false });

@@ -4,11 +4,14 @@ export const CHANNELS = ['webhook', 'loop'] as const;
 /** One of `CHANNELS`. */
 export type NotificationChannel = (typeof CHANNELS)[number];
 
-/** Paths the receiver answers on: the channels of the rules and the threshold webhook, which is a rule of its own. */
-export const ARRIVAL_KINDS = [...CHANNELS, 'threshold'] as const;
+/** Paths the receiver answers on: the channels of the rules and the webhooks of the threshold and Telegram rules, which are rules of their own. */
+export const ARRIVAL_KINDS = [...CHANNELS, 'threshold', 'telegram'] as const;
 
 /** One of `ARRIVAL_KINDS`. */
 export type ArrivalKind = (typeof ARRIVAL_KINDS)[number];
+
+/** Kinds whose late POST the history records: the threshold webhook is only logged. */
+export type LateKind = Exclude<ArrivalKind, 'threshold'>;
 
 /** Settings of one channel of a rule. */
 export interface ChannelSettings {

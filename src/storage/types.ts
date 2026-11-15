@@ -1,6 +1,6 @@
 import type { RunResult, StageName, StageResult } from '../engine/result.js';
 import type { Culprit, ErrorClass } from '../errors/taxonomy.js';
-import type { NotificationChannel } from '../notifications/types.js';
+import type { LateKind } from '../notifications/types.js';
 import type { ScenarioName } from '../scenarios/names.js';
 
 /** Where a run is in its life. */
@@ -74,7 +74,7 @@ export interface RunRow {
   /** When the first notification arrived after the run had ended. */
   lateNotificationAt?: string;
   /** Channel of that notification. */
-  lateNotificationChannel?: NotificationChannel;
+  lateNotificationChannel?: LateKind;
   /** When a second POST of an already seen channel arrived. */
   lateDuplicateNotificationAt?: string;
   /** Stages in order. */

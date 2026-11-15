@@ -26,7 +26,7 @@ import { systemClock } from '../time/clock.js';
 import { MS_PER_SECOND } from '../time/units.js';
 import { readMatchChange, recordMatchChange } from './match-change.js';
 import { refusalWhileServing } from './serving.js';
-import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, NEW_PROJECT, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS } from '../scenarios/names.js';
+import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, NEW_PROJECT, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS, TELEGRAM_DELIVERY } from '../scenarios/names.js';
 import type { ScenarioName } from '../scenarios/names.js';
 
 /** Where the command writes. */
@@ -295,6 +295,19 @@ const runProbeCommand: CheckScenario = async (command, config, io, deps, masking
   return summarize(result, io, masking);
 };
 
+/**
+ * Placeholder until the scenario is wired in: reports that it cannot run.
+ * @param _command Parsed `check` command.
+ * @param _config Validated configuration.
+ * @param io Output streams.
+ * @returns Exit code 1.
+ */
+const runTelegramDeliveryCommand: CheckScenario = async (_command, _config, io) => {
+  io.stderr('telegram-delivery is not available yet\n');
+
+  return Promise.resolve(1);
+};
+
 /** One entry per scenario; a new scenario is added here. */
 const CHECKS: Readonly<Record<ScenarioName, CheckScenario>> = {
   [SEND_AND_RECEIVE_EVENT]: runSendAndReceiveCommand,
@@ -302,6 +315,7 @@ const CHECKS: Readonly<Record<ScenarioName, CheckScenario>> = {
   [NEW_PROJECT]: runNewProjectCommand,
   [SOURCEMAPS]: runSourcemapsCommand,
   [SENTRY_ENVELOPE]: runSentryEnvelopeCommand,
+  [TELEGRAM_DELIVERY]: runTelegramDeliveryCommand,
   [ENDPOINTS_PROBE]: runProbeCommand,
 };
 

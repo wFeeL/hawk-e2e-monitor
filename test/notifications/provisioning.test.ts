@@ -156,7 +156,7 @@ describe('desiredRules', () => {
 
   it('keeps both rules off the scenarios that do not check notifications', () => {
     const { newEvents, threshold } = desiredRules(depsOf(), address());
-    const names = ['send-and-receive-event', 'new-project', 'sourcemaps', 'sentry-envelope'];
+    const names = ['send-and-receive-event', 'new-project', 'sourcemaps', 'sentry-envelope', 'telegram-delivery'];
 
     expect(newEvents.excluding).toEqual(names);
     expect(threshold.excluding).toEqual(names);
@@ -179,7 +179,7 @@ describe('desiredRule', () => {
       isEnabled: true,
       whatToReceive: 'ONLY_NEW',
       including: [`[e2e:${INSTANCE}]`],
-      excluding: ['send-and-receive-event', 'new-project', 'sourcemaps', 'sentry-envelope'] });
+      excluding: ['send-and-receive-event', 'new-project', 'sourcemaps', 'sentry-envelope', 'telegram-delivery'] });
     expect(rule.channels.webhook).toEqual({ isEnabled: true,
       endpoint: `https://one.example.com/hooks/webhook/${SECRET}` });
     expect(rule.channels.loop).toEqual({ isEnabled: true,

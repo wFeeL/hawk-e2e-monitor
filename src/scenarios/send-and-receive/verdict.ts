@@ -19,7 +19,8 @@ export interface Verdict {
  * @returns Error with the recorded class and text.
  */
 export function errorOf(stage: StageResult): CheckError {
-  return new CheckError(stage.errorClass ?? 'monitor_internal', {}, { message: stage.message });
+  return new CheckError(stage.errorClass ?? 'monitor_internal', {}, { message: stage.message,
+    ...stage.culprit === undefined ? {} : { culprit: stage.culprit } });
 }
 
 /**

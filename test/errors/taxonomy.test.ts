@@ -43,11 +43,17 @@ const EXPECTED_CULPRITS: readonly (readonly [ErrorClass, Culprit])[] = [
   ['sentry_rejected', 'hawk'],
   ['garage_unavailable', 'hawk'],
   ['api_unexpected_response', 'hawk'],
+  ['telegram_auth_failed', 'config'],
+  ['telegram_conflict', 'config'],
+  ['telegram_bot_misconfigured', 'config'],
+  ['telegram_api_unavailable', 'network'],
+  ['telegram_bot_unavailable', 'network'],
+  ['telegram_not_delivered', 'hawk'],
 ];
 
 describe('taxonomy', () => {
   it('culprit table covers every class', () => {
-    expect(ERROR_CLASSES).toHaveLength(52);
+    expect(ERROR_CLASSES).toHaveLength(58);
 
     for (const errorClass of ERROR_CLASSES) {
       expect(CULPRIT_OF[errorClass]).toBeDefined();
@@ -69,6 +75,11 @@ describe('taxonomy', () => {
     expect(error.cause).toBe(cause);
     expect(isCheckError(error)).toBe(true);
     expect(isCheckError(new Error('x'))).toBe(false);
+  });
+
+  it('a culprit option replaces the culprit of the class', () => {
+    expect(new CheckError('telegram_bot_unavailable', {}, { culprit: 'config' }).culprit).toBe('config');
+    expect(new CheckError('telegram_bot_unavailable').culprit).toBe('network');
   });
 
   it('an explicit message replaces the described one', () => {
@@ -109,5 +120,18 @@ describe('CULPRITS', () => {
     for (const errorClass of ERROR_CLASSES) {
       expect(CULPRITS).toContain(CULPRIT_OF[errorClass]);
     }
+  });
+});
+
+describe('texts of the telegram classes', () => {
+  it('each class names the variable or the chain and no token', () => {
+    expect(text('telegram_auth_failed', {})).toContain('TELEGRAM_BOT_TOKEN');
+    expect(text('telegram_conflict', {})).toContain('webhook');
+    expect(text('telegram_bot_misconfigured', { detail: 'privacy mode is on' })).toContain('privacy mode is on');
+    expect(text('telegram_api_unavailable', { url: 'https://api.telegram.org/bot***/getMe',
+      code: 'ECONNREFUSED' })).toContain('bot***/getMe');
+    expect(text('telegram_bot_unavailable', { status: 404,
+      url: 'https://notify.bot.codex.so/u/***' })).toContain('TELEGRAM_NOTIFY_URL');
+    expect(text('telegram_not_delivered', { detail: 'x' })).toContain('Telegram');
   });
 });

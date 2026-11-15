@@ -2,6 +2,7 @@ import { formatDuration } from '../time/format.js';
 import type { ErrorClass, MessageFacts } from './taxonomy.js';
 
 const HTTP_BAD_REQUEST = 400;
+const HTTP_NOT_FOUND = 404;
 
 /** Detail of the collector's plain-text 400, which its panic recovery sends. */
 export const COLLECTOR_PANIC_DETAIL = 'Bad request (plain text instead of JSON)';
@@ -234,6 +235,20 @@ export function describeError(errorClass: ErrorClass, facts: MessageFacts): stri
       return 'The monitor restarted while the run was in progress';
     case 'monitor_stopped':
       return 'The monitor stopped while the run was in progress';
+    case 'telegram_auth_failed':
+      return withDetail('Telegram rejected the bot token; check TELEGRAM_BOT_TOKEN', facts.detail);
+    case 'telegram_conflict':
+      return withDetail('Another reader or a webhook holds the updates of the bot; the monitor needs the bot to have no webhook and one reader', facts.detail);
+    case 'telegram_bot_misconfigured':
+      return withDetail('The bot cannot see the messages of the group', facts.detail);
+    case 'telegram_api_unavailable':
+      return join(`Telegram Bot API${facts.url === undefined ? '' : ` ${facts.url}`} gave no usable answer`, [': ', what], [', ', waited], ['; ', facts.detail]);
+    case 'telegram_bot_unavailable':
+      return facts.status === HTTP_NOT_FOUND
+        ? withDetail('The @codex_bot notify URL is unknown to the bot; check TELEGRAM_NOTIFY_URL', facts.detail)
+        : join('The @codex_bot notify service did not take the probe message', [': ', what], [' for ', facts.url], ['; ', facts.detail]);
+    case 'telegram_not_delivered':
+      return withDetail('Hawk formed the notification but it did not reach Telegram', facts.detail);
     case 'alert_rejected':
       return join('codex.bot did not accept the alert', [': ', ifSet(facts.status, String)], [' ', facts.detail]);
   }

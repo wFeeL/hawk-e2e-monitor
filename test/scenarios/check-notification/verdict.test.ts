@@ -88,6 +88,7 @@ function arrivals(webhook: Arrival[], loop: Arrival[], unmatched = 0): Arrivals 
   return { webhook,
     loop,
     threshold: [],
+    telegram: [],
     unmatched };
 }
 

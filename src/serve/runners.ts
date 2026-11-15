@@ -1,5 +1,6 @@
+import { StartupError } from '../app.js';
 import type { ScenarioRunner } from '../scheduler/scheduler.js';
-import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, NEW_PROJECT, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS } from '../scenarios/names.js';
+import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, NEW_PROJECT, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS, TELEGRAM_DELIVERY } from '../scenarios/names.js';
 import type { ScenarioName } from '../scenarios/names.js';
 import { runEndpointsProbe } from '../scenarios/endpoints-probe/run.js';
 import { runSentryEnvelope } from '../scenarios/sentry-envelope/run.js';
@@ -133,6 +134,15 @@ const setupSentryEnvelope: SetupScenario = async (context): Promise<ScenarioSetu
   });
 };
 
+/**
+ * Placeholder until the scenario is wired in: refuses to start.
+ * @returns Never resolves.
+ * @throws StartupError always.
+ */
+const setupTelegramDelivery: SetupScenario = async (): Promise<ScenarioSetup> => {
+  return Promise.reject(new StartupError('telegram-delivery is not available yet'));
+};
+
 /** One entry per scenario; a new scenario is added here. */
 const SETUPS: Readonly<Record<ScenarioName, SetupScenario>> = {
   [SEND_AND_RECEIVE_EVENT]: setupSendAndReceive,
@@ -140,6 +150,7 @@ const SETUPS: Readonly<Record<ScenarioName, SetupScenario>> = {
   [NEW_PROJECT]: setupNewProject,
   [SOURCEMAPS]: setupSourcemaps,
   [SENTRY_ENVELOPE]: setupSentryEnvelope,
+  [TELEGRAM_DELIVERY]: setupTelegramDelivery,
   [ENDPOINTS_PROBE]: setupProbe,
 };
 

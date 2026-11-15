@@ -5,6 +5,7 @@ import type { Culprit, ErrorClass } from '../errors/taxonomy.js';
 export const STAGE_NAMES = [
   'collector_availability',
   'api_availability',
+  'telegram_ready',
   'notification_setup',
   'project_created',
   'token_accepted',
@@ -13,6 +14,8 @@ export const STAGE_NAMES = [
   'collector_accept',
   'event_visible',
   'notification_formed',
+  'telegram_delivered',
+  'telegram_probe',
   'event_repeated',
   'threshold_formed',
   'cleanup',
@@ -85,6 +88,11 @@ export interface RunNotification {
   /** The threshold notification, which the repeated event triggers. */
   threshold?: {
     /** Time from the collector's answer to the repeat to the threshold POST. */
+    latencyMs: number;
+  };
+  /** The webhook of the Telegram rule. */
+  telegram?: {
+    /** Time from the collector's answer to the first POST. */
     latencyMs: number;
   };
   /** POSTs with a valid secret but no run id of this run. */

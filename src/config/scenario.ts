@@ -1,4 +1,4 @@
-import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, NEW_PROJECT, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS } from '../scenarios/names.js';
+import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, NEW_PROJECT, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS, TELEGRAM_DELIVERY } from '../scenarios/names.js';
 import type { ScenarioName } from '../scenarios/names.js';
 import type { Config } from './load.js';
 
@@ -76,6 +76,7 @@ export function watchdogOf(scenario: ScenarioWithEvent, parts: WatchdogParts): n
   switch (scenario) {
     case SEND_AND_RECEIVE_EVENT:
     case CHECK_NOTIFICATION:
+    case TELEGRAM_DELIVERY:
       return parts.run + tail;
     case NEW_PROJECT:
       return parts.apiAvailability * 2 + parts.newProjectToken + parts.eventVisible + tail;
@@ -102,6 +103,8 @@ function intervalOf(config: Config, scenario: ScenarioWithEvent): number {
       return scenarios.sourcemaps.intervalMs;
     case SENTRY_ENVELOPE:
       return scenarios.sentryEnvelope.intervalMs;
+    case TELEGRAM_DELIVERY:
+      return monitoring.intervalMs;
     case SEND_AND_RECEIVE_EVENT:
     case CHECK_NOTIFICATION:
       return monitoring.intervalMs;
