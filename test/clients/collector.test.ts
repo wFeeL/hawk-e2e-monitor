@@ -148,6 +148,7 @@ const REPLY_TABLE: readonly (readonly [string, number, string, ErrorClass | 'acc
   ['400 other JSON', 400, '{"code":400,"error":true,"message":"Payload is empty"}', 'bad_request'],
   ['400 JSON without message', 400, '{"code":400}', 'bad_request'],
   ['400 plain', 400, 'Bad request', 'collector_unexpected_response'],
+  ['400 HTML page', 400, '<html>400 Bad Request</html>', 'collector_unexpected_response'],
   ['402 quota', 402, '{"code":402,"error":true,"message":"Project has exceeded the events limit"}', 'quota_exhausted'],
   ['402 rate limit', 402, '{"code":402,"error":true,"message":"Rate limit exceeded"}', 'rate_limited'],
   ['402 limiter failure', 402, '{"code":402,"error":true,"message":"Failed to update rate limit"}', 'collector_dependency_error'],
@@ -181,6 +182,18 @@ describe('classifyCollectorReply', () => {
     const verdict = classifyCollectorReply(404, 'a'.repeat(500));
 
     expect(verdict.kind === 'rejected' ? verdict.message : '').toBe(`HTTP 404 ${'a'.repeat(200)}`);
+  });
+
+  it('keeps the address hint for a 400 page of a proxy', async () => {
+    collector.knobs.reply = () => ({ status: 400,
+      body: '<html><body><h1>400 Bad Request</h1><hr>nginx</body></html>',
+      contentType: 'text/html' });
+
+    const { error } = rejected(await clientFor().send(message(), 'http', signal));
+
+    expect(error.errorClass).toBe('collector_unexpected_response');
+    expect(error.message).toContain('check HAWK_COLLECTOR_URL');
+    expect(error.message).not.toContain('handler failed');
   });
 
   it('names a plain-text 400 as a handler failure', () => {
@@ -423,6 +436,26 @@ describe('health', () => {
     expect(error.errorClass).toBe('ip_blacklisted');
     expect(error.culprit).toBe('monitor');
     expect(error.facts.status).toBe(429);
+  });
+
+  it('health 400 with the panic body says the handler failed', async () => {
+    collector.knobs.health = { status: 400,
+      text: 'Bad request' };
+
+    const error = await checkError(clientFor().health(signal));
+
+    expect(error.errorClass).toBe('collector_unexpected_response');
+    expect(error.message).toBe('Collector handler failed: HTTP 400 Bad request (plain text instead of JSON)');
+  });
+
+  it('health 400 page of a proxy keeps the address hint', async () => {
+    collector.knobs.health = { status: 400,
+      text: '<html>400 Bad Request nginx</html>' };
+
+    const error = await checkError(clientFor().health(signal));
+
+    expect(error.message).toContain('check HAWK_COLLECTOR_URL');
+    expect(error.message).not.toContain('handler failed');
   });
 
   it('other statuses are unexpected', async () => {

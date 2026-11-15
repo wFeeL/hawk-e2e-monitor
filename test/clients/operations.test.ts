@@ -284,6 +284,17 @@ describe('graphql transport', () => {
       expect(seen).toBe(1);
     });
 
+    it.each([408, 429])('%i with HTML is retried and ends api_unavailable', async (status) => {
+      reply = (response) => {
+        response.statusCode = status;
+        response.setHeader('content-type', 'text/html');
+        response.end('<html>Slow down</html>');
+      };
+
+      checkError(await failure(), 'api_unavailable');
+      expect(seen).toBe(3);
+    });
+
     it('503 with HTML stays api_unavailable and is retried', async () => {
       reply = (response) => {
         response.statusCode = 503;

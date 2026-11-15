@@ -111,6 +111,18 @@ function parseObject(text: string): GraphqlBody | undefined {
 }
 
 /**
+ * Tells a passing fault from a final answer: a 5xx, or a 408 or 429 that is not a GraphQL answer.
+ * A proxy or a rate limiter sends those as plain pages, and a repeat may succeed.
+ * @param status HTTP status.
+ * @param text Body text.
+ * @returns True when the request may be repeated and the API counts as unavailable.
+ */
+function isTransient(status: number, text: string): boolean {
+  return status >= HttpStatus.internalServerError
+    || ((status === HttpStatus.requestTimeout || status === HttpStatus.tooManyRequests) && parseObject(text) === undefined);
+}
+
+/**
  * Creates a transport.
  * @param options Where to send, how long to wait and how to retry.
  * @returns Transport bound to one endpoint.
@@ -145,7 +157,7 @@ export function createGraphqlTransport(options: GraphqlTransportOptions): Graphq
         signal }, 'api', { attempts: operation.idempotent ? attempts : 1,
         delaysMs,
         clock,
-        retryStatus: status => operation.idempotent && status >= HttpStatus.internalServerError,
+        retryStatus: (status, text) => operation.idempotent && isTransient(status, text),
         retryNetwork: () => operation.idempotent });
 
       return response;
@@ -171,7 +183,7 @@ export function createGraphqlTransport(options: GraphqlTransportOptions): Graphq
       const waitedMs = Math.round(clock.monotonicMs() - startedAt);
       const body = parseObject(response.text);
 
-      if (response.status >= HttpStatus.internalServerError) {
+      if (isTransient(response.status, response.text)) {
         throw new CheckError('api_unavailable', { url,
           status: response.status,
           waitedMs });
