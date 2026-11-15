@@ -559,7 +559,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   };
 
   const evaluate = (nowMonoMs: number): SchedulerHealth => {
-    const ticking = started && !stopped && [...states.values()].every(state => nowMonoMs - (state.lastTickMono ?? startedMono ?? nowMonoMs) <= thresholdOf(state.name));
+    // Before its first tick a scenario with a gate may wait for the tunnel, which is bounded by its own timeout.
+    const allowedMs = (state: ScenarioState): number => thresholdOf(state.name)
+      + (state.lastTickMono === undefined && deps.beforeFirstRun?.[state.name] !== undefined ? monitoring.tunnelReadyTimeoutMs : 0);
+    const ticking = started && !stopped && [...states.values()].every(state => nowMonoMs - (state.lastTickMono ?? startedMono ?? nowMonoMs) <= allowedMs(state));
 
     // The watchdog abandons a run at `watchdogMs` and the scenario is held for one more cleanup timeout.
     const busyLimitMs = watchdogMs + timeouts.cleanup;

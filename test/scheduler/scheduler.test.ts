@@ -767,15 +767,21 @@ describe('health', () => {
     expect(scheduler.health().scheduler).toBe(false);
   });
 
-  it('is false when a scenario has not ticked for longer than interval + run + cleanup + grace', async () => {
-    const { scheduler, clock } = setup({ scenarios: [NOTIFY],
+  it('exits with code 1 when a scenario stopped ticking, but only after the tunnel wait it is given before its first tick', async () => {
+    const { scheduler, clock, config, exit, logger } = setup({ scenarios: [NOTIFY],
       deps: { beforeFirstRun: { [NOTIFY]: async () => new Promise<void>(() => undefined) } } });
+    const tunnelMs = config.monitoring.tunnelReadyTimeoutMs;
 
     scheduler.start();
     await settle(clock);
-    expect(scheduler.health(THRESHOLD_MS).scheduler).toBe(true);
-    expect(scheduler.health(THRESHOLD_MS + 1).scheduler).toBe(false);
-    expect(scheduler.healthy()).toBe(true);
+    expect(scheduler.health(THRESHOLD_MS + tunnelMs).scheduler).toBe(true);
+    expect(scheduler.health(THRESHOLD_MS + tunnelMs + 1).scheduler).toBe(false);
+    // The self-check runs every minute: it must not fire inside the tunnel wait, only after it.
+    await clock.advance(THRESHOLD_MS + tunnelMs - 1);
+    expect(exit).not.toHaveBeenCalled();
+    await clock.advance(60_000);
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(logger.lines.some(line => line.level === 'error')).toBe(true);
   });
 
   it('reads the threshold of a scenario from intervalOf', async () => {
@@ -799,19 +805,6 @@ describe('health', () => {
     expect(runners[SEND].calls).toHaveLength(1);
     await clock.advance(1);
     expect(runners[SEND].calls).toHaveLength(2);
-  });
-
-  it('exits with code 1 when the self-check finds a scenario that stopped ticking', async () => {
-    const { scheduler, clock, exit, logger } = setup({ scenarios: [NOTIFY],
-      deps: { beforeFirstRun: { [NOTIFY]: async () => new Promise<void>(() => undefined) } } });
-
-    scheduler.start();
-    await settle(clock);
-    await clock.advance(THRESHOLD_MS - 60_000);
-    expect(exit).not.toHaveBeenCalled();
-    await clock.advance(120_000);
-    expect(exit).toHaveBeenCalledWith(1);
-    expect(logger.lines.some(line => line.level === 'error')).toBe(true);
   });
 
   it('does not exit while the scenarios keep ticking', async () => {
