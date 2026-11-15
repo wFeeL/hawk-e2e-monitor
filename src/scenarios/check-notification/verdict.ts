@@ -1,3 +1,4 @@
+import { formatDuration } from '../../time/format.js';
 import type { RunNotification, StageResult } from '../../engine/result.js';
 import { CheckError } from '../../errors/taxonomy.js';
 import type { Arrivals } from '../../receiver/server.js';
@@ -91,7 +92,7 @@ function buildWarnings(stages: readonly StageResult[], state: ScenarioState, not
     const index = warnings.findIndex(text => text.startsWith(ONLY_PREFIX));
 
     if (arrivals[channel].length === 0 && finalArrivals[channel].length === 1 && late !== undefined && index >= 0) {
-      warnings[index] = `The ${channel} notification arrived after the pair wait, ${String(Math.round(late.atMs - state.acceptedAtMs))} ms after the send`;
+      warnings[index] = `The ${channel} notification arrived after the pair wait, ${formatDuration(late.atMs - state.acceptedAtMs)} after the send`;
     }
   }
 

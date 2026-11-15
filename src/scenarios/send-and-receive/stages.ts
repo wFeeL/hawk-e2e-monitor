@@ -1,3 +1,4 @@
+import { formatDuration } from '../../time/format.js';
 import type { CollectorClient, CollectorMessage, SendOutcome } from '../../clients/collector.js';
 import type { FoundEvent, HawkApi } from '../../clients/hawk-api.js';
 import type { Config } from '../../config/load.js';
@@ -407,7 +408,7 @@ export function eventRepeatedStage(timeoutMs: number): StageSpec<ScenarioContext
 
       return { status: 'failed',
         error: uncertain
-          ? new CheckError(uncertain.errorClass, uncertain.facts, { message: `Collector did not confirm the repeated event (${uncertain.message}); it was not counted twice within ${String(waitedMs)} ms` })
+          ? new CheckError(uncertain.errorClass, uncertain.facts, { message: `Collector did not confirm the repeated event (${uncertain.message}); it was not counted twice within ${formatDuration(waitedMs)}` })
           : new CheckError('repeat_not_counted', { count: lastCount,
             waitedMs }),
         details: { pollOutcome: 'not_found',

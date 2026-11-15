@@ -1,3 +1,4 @@
+import { formatDuration } from '../../time/format.js';
 import type { FoundEvent } from '../../clients/hawk-api.js';
 import type { notificationSettings } from '../../config/load.js';
 import type { StageOutcome, StageSpec } from '../../engine/stages.js';
@@ -423,7 +424,7 @@ export function notificationFormedStage(timeoutMs: number): StageSpec<Notificati
         const [present] = channels.filter(channel => channel !== absent);
         const first = Math.min(...[webhook, loop].flatMap(arrival => arrival === undefined ? [] : [arrival.atMs]));
 
-        details.warning = `Only the ${String(present)} notification arrived; the ${absent} sender did not deliver within ${String(Math.round(clock.monotonicMs() - first))} ms`;
+        details.warning = `Only the ${String(present)} notification arrived; the ${absent} sender did not deliver within ${formatDuration(clock.monotonicMs() - first)}`;
       }
 
       return { status: 'ok',

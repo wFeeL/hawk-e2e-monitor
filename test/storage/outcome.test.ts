@@ -130,7 +130,7 @@ describe('abortedOutcome and rowOf', () => {
       degraded: [],
       errorClass: 'run_hung',
       culprit: 'monitor',
-      message: 'The run did not finish within 540000 ms and was abandoned',
+      message: 'The run did not finish within 9m 0s and was abandoned',
     });
     expect(abortedOutcome('monitor_internal', { detail: 'scenario threw: boom' }, 'x', 1).message).toContain('scenario threw: boom');
   });

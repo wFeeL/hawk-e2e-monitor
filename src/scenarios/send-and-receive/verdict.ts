@@ -1,3 +1,4 @@
+import { formatDuration } from '../../time/format.js';
 import type { StageName, StageResult } from '../../engine/result.js';
 import { CheckError } from '../../errors/taxonomy.js';
 import type { ScenarioState } from './stages.js';
@@ -61,7 +62,7 @@ export function decideVerdict(stages: readonly StageResult[], _state: ScenarioSt
       return { status: 'failed',
         failedStage: 'collector_accept',
         error: new CheckError(accept.errorClass ?? 'collector_unavailable', {},
-          { message: `Collector did not confirm the event (${accept.message ?? 'no details'}); the event did not appear within ${typeof waited === 'number' ? String(waited) : 'the time limit'} ms` }) };
+          { message: `Collector did not confirm the event (${accept.message ?? 'no details'}); the event did not appear within ${typeof waited === 'number' ? formatDuration(waited) : 'the time limit'}` }) };
     }
 
     if (failed.details?.pollOutcome === 'api_error') {
