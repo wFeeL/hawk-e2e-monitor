@@ -1,4 +1,5 @@
 import type { Config } from '../config/load.js';
+import { RULE_WARMUP_MARGIN_MS } from '../config/schema.js';
 import { scenarioSettings } from '../config/scenario.js';
 import type { ScenarioSettings } from '../config/scenario.js';
 import type { RunResult } from '../engine/result.js';
@@ -12,7 +13,6 @@ import type { RunOutcome, RunRow, RunTrigger } from '../storage/types.js';
 import type { Clock } from '../time/clock.js';
 
 const SELF_CHECK_MS = 60_000;
-const WARMUP_MARGIN_MS = 1000;
 const HUNGS_BEFORE_EXIT = 3;
 const LAST_RUNS_LOOKED_AT = 5;
 
@@ -348,7 +348,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     const stage = result.stages.find(item => item.name === 'notification_formed');
     const remaining = stage?.details?.warmupRemainingMs;
 
-    return (typeof remaining === 'number' ? remaining : config.notifications.ruleCacheWarmupMs) + WARMUP_MARGIN_MS;
+    return (typeof remaining === 'number' ? remaining : config.notifications.ruleCacheWarmupMs) + RULE_WARMUP_MARGIN_MS;
   };
 
   const onSettled = (state: ScenarioState, handle: Handle, result: RunResult | undefined, error: unknown): void => {
