@@ -1,6 +1,35 @@
 import { formatDuration } from '../time/format.js';
 import type { ErrorClass, MessageFacts } from './taxonomy.js';
 
+const HTTP_BAD_REQUEST = 400;
+
+/** Detail of the collector's plain-text 400, which its panic recovery sends. */
+export const COLLECTOR_PANIC_DETAIL = 'Bad request (plain text instead of JSON)';
+
+/** Plain words for codes that Node reports as bare identifiers. */
+const CODE_WORDS: Readonly<Record<string, string>> = {
+  UND_ERR_SOCKET: 'connection closed by the other side',
+  ECONNRESET: 'connection reset',
+  ECONNREFUSED: 'connection refused',
+  CERT_HAS_EXPIRED: 'the certificate has expired',
+  DEPTH_ZERO_SELF_SIGNED_CERT: 'self-signed certificate',
+  SELF_SIGNED_CERT_IN_CHAIN: 'self-signed certificate in the chain',
+  UNABLE_TO_VERIFY_LEAF_SIGNATURE: 'the certificate chain cannot be verified',
+  UNABLE_TO_GET_ISSUER_CERT_LOCALLY: 'the certificate chain cannot be verified',
+  ERR_TLS_CERT_ALTNAME_INVALID: 'the certificate does not match the host name',
+};
+
+/**
+ * Writes a code with its plain words when it is a known one.
+ * @param code Code of the failure.
+ * @returns `<words> (<CODE>)` for a known code, the code itself otherwise.
+ */
+function codeText(code: string): string {
+  const words = Object.hasOwn(CODE_WORDS, code) ? CODE_WORDS[code] : undefined;
+
+  return words === undefined ? code : `${words} (${code})`;
+}
+
 /**
  * Names a failure by its code or, failing that, its HTTP status.
  * @param facts Facts of the message.
@@ -12,7 +41,7 @@ function codeOrStatus(facts: MessageFacts): string | undefined {
   }
 
   if (facts.code !== undefined) {
-    return facts.code;
+    return codeText(facts.code);
   }
 
   return facts.status === undefined ? undefined : `HTTP ${String(facts.status)}`;
@@ -94,16 +123,21 @@ export function describeError(errorClass: ErrorClass, facts: MessageFacts): stri
     case 'network_error':
       return join('Monitor network failure', [': ', what], [' for ', facts.url]);
     case 'tls_error':
-      return join(`TLS failure for ${facts.host ?? facts.url ?? 'the host'}`, [': ', facts.code]);
+      return join(`TLS failure for ${facts.host ?? facts.url ?? 'the host'}`, [': ', facts.code === undefined ? undefined : codeText(facts.code)]);
     case 'collector_dependency_error':
       return withDetail('Collector reports a broken dependency (Redis or Mongo)', facts.detail);
     case 'collector_unexpected_response':
+      // The plain-text 400 of the panic recovery is a failure inside the collector, not a wrong address, so no URL hint.
+      if (facts.status === HTTP_BAD_REQUEST && facts.detail === COLLECTOR_PANIC_DETAIL) {
+        return join('Collector handler failed', [': ', what], [' ', facts.detail]);
+      }
+
       return join(`${where} gave an unexpected response`, [': ', what], [' (', ifSet(facts.detail, text => `${text})`)],
         ['; check HAWK_COLLECTOR_URL', '']);
     case 'ws_handshake_failed':
-      return join(`WebSocket ${facts.url ?? 'of the collector'} did not open`, [': ', facts.detail]);
+      return join(`WebSocket ${facts.url ?? 'of the collector'} did not open`, [': ', what], [', ', waited], ['; ', facts.detail]);
     case 'auth_invalid_token':
-      return withDetail('Collector rejected the integration token', facts.detail);
+      return `${withDetail('Collector rejected the integration token', facts.detail)}; a token regenerated less than a minute ago may not be known to the collector yet`;
     case 'bad_request':
       return withDetail('Collector rejected the event', facts.detail);
     case 'quota_exhausted':
@@ -120,6 +154,8 @@ export function describeError(errorClass: ErrorClass, facts: MessageFacts): stri
       return join(`${where} did not confirm the event`, [': ', what], ['; the run keeps looking for it', '']);
     case 'api_unavailable':
       return join(`API ${facts.url ?? 'endpoint'} did not respond`, [': ', what], [', ', waited]);
+    case 'api_unexpected_response':
+      return join(`Hawk API${facts.url === undefined ? '' : ` at ${facts.url}`} gave a non-GraphQL answer`, [': ', what], ['; check HAWK_API_URL', '']);
     case 'api_query_rejected':
       return withDetail('Monitor query was rejected by the API schema; did the API version change?', facts.detail);
     case 'api_auth_failed':

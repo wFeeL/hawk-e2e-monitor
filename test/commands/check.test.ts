@@ -17,6 +17,12 @@ import type { CheckIo } from '../../src/commands/check.js';
 import { seedLease, tempDatabase } from '../support/database.js';
 import type { TempDatabase } from '../support/database.js';
 import { LEASE_TTL_MS } from '../../src/storage/lease.js';
+import { openDatabase } from '../../src/storage/database.js';
+import { createHistory } from '../../src/storage/history.js';
+import { MATCH_CHANGED_KEY } from '../../src/storage/keys.js';
+import { existsSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
+import { systemClock } from '../../src/time/clock.js';
 
 const COMMAND: CheckCommand = { kind: 'check',
   scenario: 'send-and-receive-event',
@@ -166,9 +172,16 @@ const NOTIFICATION_COMMAND: CheckCommand = { kind: 'check',
 
 describe('runCheckCommand with check-notification', () => {
   let parts: NotificationTestDeps | undefined;
+  let database: TempDatabase;
   const servers: Server[] = [];
 
+  // A check that changes the rule writes the change time, so no test may use the default path.
+  beforeEach(async () => {
+    database = await tempDatabase();
+  });
+
   afterEach(async () => {
+    await database.remove();
     await parts?.close();
     parts = undefined;
     for (const server of servers.splice(0)) {
@@ -185,7 +198,9 @@ describe('runCheckCommand with check-notification', () => {
    */
   async function runNotification(options: NotificationTestOptions = {}, adjust: Adjust = (config, deps) => ({ config,
     deps })): Promise<Captured> {
-    const setup = await createNotificationTestDeps(hawk, options);
+    const setup = await createNotificationTestDeps(hawk, { ...options,
+      env: { DATABASE_PATH: database.path,
+        ...options.env } });
 
     parts = setup;
 
@@ -313,6 +328,105 @@ describe('runCheckCommand with check-notification', () => {
     await expect(fetch(`${own.baseUrl}/hooks/probe/${TEST_RECEIVER_SECRET}`)).rejects.toThrow();
   });
 
+  describe('with a database', () => {
+    /**
+     * Reads the stored time of the last rule change.
+     * @returns The stored text, or undefined.
+     */
+    function storedChange(): string | undefined {
+      const history = createHistory(openDatabase(database.path, { readOnly: true }));
+
+      try {
+        return history.getKv(MATCH_CHANGED_KEY);
+      } finally {
+        history.close();
+      }
+    }
+
+    it('a check that creates the rule records the change and says the notification was not checked', async () => {
+      const { code, stderr } = await runNotification({ preProvision: false,
+        env: { RULE_CACHE_WARMUP_MS: '300' } });
+
+      expect(code, stderr).toBe(0);
+      expect(Number.isNaN(Date.parse(storedChange() ?? ''))).toBe(false);
+      expect(stderr).toContain('notification not checked: rule cache warmup');
+    });
+
+    /**
+     * Stores a rule change time, as an earlier check would have.
+     * @param offsetMs Distance from now; negative for the past.
+     */
+    function storeChange(offsetMs: number): void {
+      const history = createHistory(openDatabase(database.path));
+
+      history.setKv(MATCH_CHANGED_KEY, new Date(Date.now() + offsetMs).toISOString());
+      history.close();
+    }
+
+    it('a check right after a rule change waits out the rest of the warmup and then checks the notification', async () => {
+      storeChange(-100);
+
+      const startedAt = Date.now();
+      const { code, stdout, stderr } = await runNotification({ env: { RULE_CACHE_WARMUP_MS: '300' } });
+      const result = JSON.parse(stdout.trimEnd()) as RunResult;
+
+      expect(code, stderr).toBe(0);
+      expect(stderr).toContain('waiting 1 s for Hawk to reload notification rules\n');
+      expect(Date.now() - startedAt).toBeGreaterThanOrEqual(150);
+      expect(result.stages.find(stage => stage.name === 'notification_formed')?.status).toBe('ok');
+    });
+
+    it('a stored time in the future waits at most the warmup', async () => {
+      storeChange(60_000);
+
+      const startedAt = Date.now();
+      const { code, stdout, stderr } = await runNotification({ env: { RULE_CACHE_WARMUP_MS: '300' } });
+      const result = JSON.parse(stdout.trimEnd()) as RunResult;
+
+      expect(code, stderr).toBe(0);
+      expect(stderr).toContain('waiting 1 s for Hawk to reload notification rules\n');
+      expect(Date.now() - startedAt).toBeLessThan(5000);
+      expect(result.stages.find(stage => stage.name === 'notification_formed')?.status).toBe('ok');
+    });
+
+    it('refuses when a serve started during the wait', async () => {
+      storeChange(-100);
+
+      const clock = { ...systemClock,
+        sleep: (): Promise<void> => {
+          seedLease(database.path, { pid: 4242,
+            hostname: 'box',
+            at: new Date().toISOString() });
+
+          return Promise.resolve();
+        } };
+      const { code, stdout, stderr } = await runNotification({ env: { RULE_CACHE_WARMUP_MS: '300' } }, (config, deps) => ({ config,
+        deps: { ...deps,
+          clock } }));
+
+      expect(code).toBe(1);
+      expect(stdout).toBe('');
+      expect(stderr).toContain('serve is running for');
+      expect(hawk.collector.posts).toBe(0);
+    });
+
+    it('an empty database file gives no time and no complaint', async () => {
+      await writeFile(database.path, '');
+
+      const { stderr } = await runNotification({ preProvision: false,
+        env: { RULE_CACHE_WARMUP_MS: '300' } });
+
+      expect(stderr).not.toContain('could not read the rule change time');
+    });
+
+    it('a check that changes nothing does not create the database', async () => {
+      const { code, stderr } = await runNotification();
+
+      expect(code, stderr).toBe(0);
+      expect(existsSync(database.path)).toBe(false);
+    });
+  });
+
   it('a busy receiver port is a failure of the monitor, without a result', async () => {
     const busy = createServer();
 
@@ -437,6 +551,71 @@ describe('runCheckCommand: endpoints-probe', () => {
 
     expect(code).toBe(1);
     expect(stderr).toContain('failed collector_availability collector_dependency_error:');
+  });
+});
+
+describe('check new-project and the database', () => {
+  /**
+   * Runs `check new-project` over a database path.
+   * @param databasePath Path the command opens.
+   * @returns Exit code and what it wrote.
+   */
+  async function run(databasePath: string): Promise<Captured> {
+    const { deps } = createTestDeps(hawk);
+    const config: Config = { ...deps.config,
+      monitoring: { ...deps.config.monitoring,
+        databasePath } };
+    const captured: Captured = { code: -1,
+      stdout: '',
+      stderr: '' };
+
+    captured.code = await runCheckCommand({ kind: 'check',
+      scenario: 'new-project',
+      sequence: 1,
+      repeat: false }, config, { stdout: (text) => {
+      captured.stdout += text;
+    },
+    stderr: (text) => {
+      captured.stderr += text;
+    } }, { pollScheduleMs: deps.pollScheduleMs });
+
+    return captured;
+  }
+
+  it('does not run, and creates no project, while a serve holds the database', async () => {
+    const database = await tempDatabase();
+
+    try {
+      seedLease(database.path, { pid: 4242,
+        hostname: 'box',
+        at: new Date().toISOString() });
+
+      const { code, stdout, stderr } = await run(database.path);
+
+      expect(code).toBe(1);
+      expect(stdout).toBe('');
+      expect(stderr).toContain('serve is running for');
+      expect(hawk.projects.inWorkspace('fake-workspace')).toHaveLength(1);
+    } finally {
+      await database.remove();
+    }
+  });
+
+  it('says which file it could not open and creates no project', async () => {
+    const database = await tempDatabase();
+
+    try {
+      // A file stands where the directory of the database should be.
+      await writeFile(database.path, 'not a directory');
+
+      const { code, stderr } = await run(`${database.path}/monitor.db`);
+
+      expect(code).toBe(1);
+      expect(stderr).toContain(`${database.path}/monitor.db`);
+      expect(hawk.projects.inWorkspace('fake-workspace')).toHaveLength(1);
+    } finally {
+      await database.remove();
+    }
   });
 });
 

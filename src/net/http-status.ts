@@ -8,6 +8,7 @@ export const HttpStatus = {
   paymentRequired: 402,
   notFound: 404,
   methodNotAllowed: 405,
+  requestTimeout: 408,
   conflict: 409,
   payloadTooLarge: 413,
   tooManyRequests: 429,

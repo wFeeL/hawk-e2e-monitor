@@ -607,7 +607,8 @@ export function collectorAcceptStage(timeoutMs: number, beforeSend?: () => void)
 
           return { status: 'uncertain',
             error: outcome.cause,
-            details: { attempts: outcome.attempts } };
+            details: { attempts: outcome.attempts,
+              warning: `The collector did not confirm the event (${outcome.cause.message}); SDKs of users may see an error` } };
         case 'rejected':
           return { status: 'failed',
             error: outcome.error,
@@ -640,20 +641,42 @@ export function eventVisibleStage(timeoutMs: number): StageSpec<ScenarioContext>
     name: 'event_visible',
     timeoutMs,
     run: async (context, signal): Promise<StageOutcome> => {
-      const { api, clock, plan, state } = context;
+      const { api, clock, config, plan, state } = context;
       const shape = shapeOf(context);
       const { projectId } = shape;
-      const poll = await pollUntil<FoundEvent>(async (probeSignal) => {
-        const events = await api.findEvents(projectId, plan.runId, probeSignal);
-        const hit = events.find(event => shape.matches(event));
+      // The search leaves one HTTP timeout of the stage for the card read, which keeps the stage signal.
+      const search = new AbortController();
+      const timer = new AbortController();
+      const onStageAbort = (): void => {
+        search.abort();
+      };
 
-        return hit
-          ? { kind: 'found',
-              value: hit }
-          : { kind: 'absent' };
-      }, { clock,
-        signal,
-        scheduleMs: context.pollScheduleMs });
+      if (signal.aborted) {
+        onStageAbort();
+      } else {
+        signal.addEventListener('abort', onStageAbort, { once: true });
+      }
+
+      clock.sleep(Math.max(timeoutMs - config.httpTimeoutMs, 0), timer.signal).then(onStageAbort, () => undefined);
+
+      let poll;
+
+      try {
+        poll = await pollUntil<FoundEvent>(async (probeSignal) => {
+          const events = await api.findEvents(projectId, plan.runId, probeSignal);
+          const hit = events.find(event => shape.matches(event));
+
+          return hit
+            ? { kind: 'found',
+                value: hit }
+            : { kind: 'absent' };
+        }, { clock,
+          signal: search.signal,
+          scheduleMs: context.pollScheduleMs });
+      } finally {
+        timer.abort();
+        signal.removeEventListener('abort', onStageAbort);
+      }
 
       state.pollSummary = poll;
 
@@ -786,7 +809,10 @@ export function eventRepeatedStage(timeoutMs: number, beforeSend?: () => void): 
           : { status: 'ok',
               details: { pollOutcome: 'found',
                 attempts: poll.attempts,
-                repeatUncertain: outcome.kind === 'uncertain' } };
+                repeatUncertain: outcome.kind === 'uncertain',
+                ...outcome.kind === 'uncertain'
+                  ? { warning: `The collector did not confirm the repeated event (${outcome.cause.message}); SDKs of users may see an error` }
+                  : {} } };
       }
 
       const waitedMs = Math.round(clock.monotonicMs() - poll.startedAtMs);

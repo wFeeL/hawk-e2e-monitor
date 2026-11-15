@@ -17,7 +17,7 @@ import { openDatabase } from '../../src/storage/database.js';
 import { createHistory } from '../../src/storage/history.js';
 import type { History, RunWithResult } from '../../src/storage/history.js';
 import { MATCH_CHANGED_KEY } from '../../src/storage/keys.js';
-import { LEASE_KEY, writeLease } from '../../src/storage/lease.js';
+import { LEASE_KEY, LEASE_REFRESH_MS, LEASE_TWIN_MARGIN_MS, writeLease } from '../../src/storage/lease.js';
 import type { RunRow } from '../../src/storage/types.js';
 import { httpAddress } from '../support/address.js';
 import { seedLease, tempDatabase } from '../support/database.js';
@@ -34,6 +34,8 @@ import type { FakeNotify, FakeNotifyAnswer } from '../support/fake-notify.js';
 import { memoryLogger } from '../support/logger.js';
 import type { MemoryLogger } from '../support/logger.js';
 import { createTestDeps } from '../support/scenario.js';
+import { systemClock } from '../../src/time/clock.js';
+import type { Clock } from '../../src/time/clock.js';
 import { startServe } from '../../src/serve/serve.js';
 import type { ProcessIdentity, ServeHandle } from '../../src/serve/serve.js';
 
@@ -126,6 +128,8 @@ interface LaunchOptions {
   seed?: (history: History) => void;
   /** Identity of the process. */
   identity?: ProcessIdentity;
+  /** Clock of the serve; the system clock by default. */
+  clock?: Clock;
   /** Address lookup of the scenario; gets the configured port of the receiver. */
   resolveAddress?: (port: number) => Promise<ReturnType<typeof httpAddress>>;
   /** Wait between self-checks of a new address. */
@@ -258,6 +262,7 @@ async function launch(options: LaunchOptions = {}, hawk?: FakeHawk): Promise<Har
     logger,
     exit,
     ...options.identity === undefined ? {} : { identity: options.identity },
+    ...options.clock === undefined ? {} : { clock: options.clock },
     overrides: { api: options.wrapApi?.(deps.api) ?? deps.api,
       collector: deps.collector,
       pollScheduleMs: [20, 40],
@@ -279,6 +284,26 @@ async function launch(options: LaunchOptions = {}, hawk?: FakeHawk): Promise<Har
     config,
     exit,
     database };
+}
+
+/**
+ * Makes a clock that skips the wait for a twin lease and records it; every other sleep is real.
+ * @param waits Receives the length of each skipped wait.
+ * @param onWait Runs during the skipped wait.
+ * @returns Clock for `startServe`.
+ */
+function twinWaitClock(waits: number[], onWait?: () => void): Clock {
+  return { ...systemClock,
+    sleep: async (ms, signal) => {
+      if (ms !== LEASE_REFRESH_MS + LEASE_TWIN_MARGIN_MS) {
+        return systemClock.sleep(ms, signal);
+      }
+
+      waits.push(ms);
+      onWait?.();
+
+      return Promise.resolve();
+    } };
 }
 
 /**
@@ -1058,16 +1083,139 @@ describe('serve: start and stop', () => {
     expect(inspect(harness, history => history.getKv(LEASE_KEY))).toBeUndefined();
   });
 
-  it('takes over the lease of a predecessor with the same host and process id, as after a restart of the container', async () => {
+  it('waits one renewal period for a lease of the same host and process id, then takes it over when it did not move', async () => {
+    const waits: number[] = [];
     const harness = await launch({ identity: { hostname: 'box-a',
-      pid: 1 },
+      pid: 1,
+      nonce: 'this-start' },
+    clock: twinWaitClock(waits),
     seed: (history) => {
       writeLease(history, { pid: 1,
         hostname: 'box-a',
+        nonce: 'previous-start',
         at: new Date().toISOString() });
     } });
 
-    expect(harness.handle.port).toBeGreaterThan(0);
+    expect(waits).toEqual([LEASE_REFRESH_MS + LEASE_TWIN_MARGIN_MS]);
+    expect(harness.logger.lines).toContainEqual(expect.objectContaining({ level: 'warn',
+      msg: 'a lease with the same pid and hostname exists; waiting one renewal period' }));
+    expect(inspect(harness, history => history.getKv(LEASE_KEY))).toContain('"nonce":"this-start"');
+  });
+
+  it('stops cleanly when a stop signal comes during the wait for a twin lease, and leaves the lease alone', async () => {
+    const hawk = await hawkFor();
+    const database = await tempDatabase();
+    const { deps } = createTestDeps(hawk);
+    const stop = new AbortController();
+    let waiting: () => void = () => undefined;
+    const reachedWait = new Promise<void>((resolve) => {
+      waiting = resolve;
+    });
+    const clock: Clock = { ...systemClock,
+      sleep: async (ms, signal) => {
+        if (ms !== LEASE_REFRESH_MS + LEASE_TWIN_MARGIN_MS) {
+          return systemClock.sleep(ms, signal);
+        }
+
+        waiting();
+
+        return systemClock.sleep(ms, signal);
+      } };
+    const seededAt = new Date().toISOString();
+
+    cleanups.push(async () => database.remove());
+    seedLease(database.path, { pid: 1,
+      hostname: 'box-a',
+      nonce: 'twin',
+      at: seededAt });
+
+    const started = startServe({ config: { ...deps.config,
+      monitoring: { ...deps.config.monitoring,
+        databasePath: database.path } },
+    logger: memoryLogger(),
+    clock,
+    signal: stop.signal,
+    identity: { hostname: 'box-a',
+      pid: 1,
+      nonce: 'this-start' } });
+
+    await reachedWait;
+    stop.abort();
+
+    await expect(started).rejects.toBeInstanceOf(StartupError);
+    await expect(started).rejects.toThrow('stopped while waiting for the lease of an earlier process');
+
+    const history = createHistory(openDatabase(database.path));
+
+    expect(history.getKv(LEASE_KEY)).toContain('"nonce":"twin"');
+    history.close();
+  });
+
+  it('reads the time again after the twin wait, for aborting earlier runs', async () => {
+    const before = new Date('2026-03-10T12:00:00.000Z');
+    const after = new Date(before.getTime() + LEASE_REFRESH_MS + LEASE_TWIN_MARGIN_MS);
+    let waited = false;
+    const clock: Clock = { ...systemClock,
+      wallTime: () => waited ? after : before,
+      sleep: async (ms, signal) => {
+        if (ms !== LEASE_REFRESH_MS + LEASE_TWIN_MARGIN_MS) {
+          return systemClock.sleep(ms, signal);
+        }
+
+        waited = true;
+
+        return Promise.resolve();
+      } };
+    const harness = await launch({ identity: { hostname: 'box-a',
+      pid: 1,
+      nonce: 'this-start' },
+    clock,
+    intervalMs: 600_000,
+    seed: (history) => {
+      writeLease(history, { pid: 1,
+        hostname: 'box-a',
+        nonce: 'previous-start',
+        at: before.toISOString() });
+      history.startRun({ runId: 'rsssssssssssssss',
+        scenario: SEND,
+        sequence: 7,
+        trigger: 'schedule',
+        startedAt: new Date(before.getTime() - 3_600_000).toISOString() });
+    } });
+
+    expect(inspect(harness, history => history.get('rsssssssssssssss'))).toMatchObject({ status: 'aborted',
+      finishedAt: after.toISOString() });
+  });
+
+  it('refuses to start when the lease of the same host and process id renewed during the wait', async () => {
+    const hawk = await hawkFor();
+    const database = await tempDatabase();
+    const { deps } = createTestDeps(hawk);
+
+    cleanups.push(async () => database.remove());
+    seedLease(database.path, { pid: 1,
+      hostname: 'box-a',
+      nonce: 'twin',
+      at: new Date().toISOString() });
+
+    const clock = twinWaitClock([], () => {
+      const history = createHistory(openDatabase(database.path));
+
+      writeLease(history, { pid: 1,
+        hostname: 'box-a',
+        nonce: 'twin',
+        at: new Date(Date.now() + 1000).toISOString() });
+      history.close();
+    });
+
+    await expect(startServe({ config: { ...deps.config,
+      monitoring: { ...deps.config.monitoring,
+        databasePath: database.path } },
+    logger: memoryLogger(),
+    clock,
+    identity: { hostname: 'box-a',
+      pid: 1,
+      nonce: 'this-start' } })).rejects.toThrow('Another serve (pid 1)');
   });
 
   it('refuses to start when the lease of another host is alive', async () => {

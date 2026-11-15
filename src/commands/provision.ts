@@ -15,9 +15,7 @@ import { systemClock } from '../time/clock.js';
 import type { Clock } from '../time/clock.js';
 import type { CheckIo } from './check.js';
 import { refusalWhileServing } from './serving.js';
-import { openDatabase } from '../storage/database.js';
-import { createHistory } from '../storage/history.js';
-import { MATCH_CHANGED_KEY } from '../storage/keys.js';
+import { recordMatchChange } from './match-change.js';
 import { MS_PER_SECOND } from '../time/units.js';
 
 /** Replacements for the default dependencies, for tests. */
@@ -28,27 +26,6 @@ export interface ProvisionDeps {
   clock: Clock;
   /** Finds the public address instead of reading it from the settings. */
   resolveAddress: (signal: AbortSignal) => Promise<PublicAddress>;
-}
-
-/**
- * Tells `serve` when matching changed, so it does not trust the old rule after a restart.
- * A failed write is only reported: the rule itself was changed.
- * @param config Validated configuration.
- * @param at Time of the change.
- * @param io Output streams.
- */
-function recordMatchChange(config: Config, at: Date, io: CheckIo): void {
-  try {
-    const history = createHistory(openDatabase(config.monitoring.databasePath));
-
-    try {
-      history.setKv(MATCH_CHANGED_KEY, at.toISOString());
-    } finally {
-      history.close();
-    }
-  } catch (error) {
-    io.stderr(`could not record the rule change in ${config.monitoring.databasePath}: ${error instanceof Error ? error.message : String(error)}\n`);
-  }
 }
 
 /**

@@ -23,6 +23,7 @@ const HOST = 'abc.trycloudflare.com';
 
 let hawk: FakeHawk;
 let config: Config;
+let database: TempDatabase;
 
 /** What a run wrote. */
 interface Captured {
@@ -73,14 +74,18 @@ function capture(): Capture {
 
 beforeEach(async () => {
   hawk = await startFakeHawk();
+  // A provision that changes the rule writes the change time, so no test may use the default path.
+  database = await tempDatabase();
   config = { ...createTestDeps(hawk, { env: { RECEIVER_SECRET: TEST_RECEIVER_SECRET,
     TUNNEL_METRICS_URL: 'http://127.0.0.1:9100',
-    RULE_CACHE_WARMUP_MS: '50' } }).deps.config,
+    RULE_CACHE_WARMUP_MS: '50',
+    DATABASE_PATH: database.path } }).deps.config,
   logLevel: 'debug' };
 });
 
 afterEach(async () => {
   await hawk.close();
+  await database.remove();
 });
 
 describe('runProvisionCommand', () => {
@@ -185,19 +190,6 @@ describe('runProvisionCommand', () => {
 });
 
 describe('runProvisionCommand and the history file', () => {
-  let database: TempDatabase;
-
-  beforeEach(async () => {
-    database = await tempDatabase();
-    config = { ...config,
-      monitoring: { ...config.monitoring,
-        databasePath: database.path } };
-  });
-
-  afterEach(async () => {
-    await database.remove();
-  });
-
   it('refuses while a serve lease is alive and calls nothing', async () => {
     seedLease(database.path, { pid: 4242,
       hostname: 'box',

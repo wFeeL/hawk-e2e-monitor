@@ -243,6 +243,16 @@ describe('loadConfig', () => {
     ]);
   });
 
+  it('EVENT_VISIBLE_TIMEOUT_MS must be at least twice HTTP_TIMEOUT_MS', () => {
+    const errors = expectErrors(loadConfig(validEnv({ HTTP_TIMEOUT_MS: '3000',
+      EVENT_VISIBLE_TIMEOUT_MS: '5999' }))).filter(error => error.variable === 'EVENT_VISIBLE_TIMEOUT_MS');
+
+    expect(errors).toEqual([{ variable: 'EVENT_VISIBLE_TIMEOUT_MS',
+      message: 'must be at least twice HTTP_TIMEOUT_MS: the search needs one HTTP timeout and the card read another' }]);
+    expectOk(loadConfig(validEnv({ HTTP_TIMEOUT_MS: '3000',
+      EVENT_VISIBLE_TIMEOUT_MS: '6000' })));
+  });
+
   it('LATE_DUPLICATE_WAIT_MS may be 0, which turns the pause off', () => {
     expect(expectOk(loadConfig(validEnv({ LATE_DUPLICATE_WAIT_MS: '0' }))).config.lateDuplicateWaitMs).toBe(0);
   });

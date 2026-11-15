@@ -9,6 +9,9 @@ import { HttpStatus } from '../net/http-status.js';
 export const ACCESS_EXPIRED = 'ACCESS_TOKEN_EXPIRED_ERROR';
 /** Hawk code for a missing or invalid login. */
 export const UNAUTHENTICATED = 'UNAUTHENTICATED';
+/** Largest API answer the client reads (4 MiB); the rest of a longer body is dropped. */
+export const MAX_API_BODY_BYTES = 4_194_304;
+
 const AUTH_CODES = new Set([UNAUTHENTICATED, ACCESS_EXPIRED, 'SSO_REQUIRED']);
 const REJECTED_CODES = new Set(['GRAPHQL_VALIDATION_FAILED', 'BAD_USER_INPUT']);
 
@@ -110,6 +113,18 @@ function parseObject(text: string): GraphqlBody | undefined {
 }
 
 /**
+ * Tells a passing fault from a final answer: a 5xx, or a 408 or 429 that is not a GraphQL answer.
+ * A proxy or a rate limiter sends those as plain pages, and a repeat may succeed.
+ * @param status HTTP status.
+ * @param text Body text.
+ * @returns True when the request may be repeated and the API counts as unavailable.
+ */
+function isTransient(status: number, text: string): boolean {
+  return status >= HttpStatus.internalServerError
+    || ((status === HttpStatus.requestTimeout || status === HttpStatus.tooManyRequests) && parseObject(text) === undefined);
+}
+
+/**
  * Creates a transport.
  * @param options Where to send, how long to wait and how to retry.
  * @returns Transport bound to one endpoint.
@@ -140,10 +155,11 @@ export function createGraphqlTransport(options: GraphqlTransportOptions): Graphq
           query: operation.document,
           variables }),
         timeoutMs: httpTimeoutMs,
+        maxBytes: MAX_API_BODY_BYTES,
         signal }, 'api', { attempts: operation.idempotent ? attempts : 1,
         delaysMs,
         clock,
-        retryStatus: status => operation.idempotent && status >= HttpStatus.internalServerError,
+        retryStatus: (status, text) => operation.idempotent && isTransient(status, text),
         retryNetwork: () => operation.idempotent });
 
       return response;
@@ -169,8 +185,14 @@ export function createGraphqlTransport(options: GraphqlTransportOptions): Graphq
       const waitedMs = Math.round(clock.monotonicMs() - startedAt);
       const body = parseObject(response.text);
 
-      if (response.status >= HttpStatus.internalServerError || !body) {
+      if (isTransient(response.status, response.text)) {
         throw new CheckError('api_unavailable', { url,
+          status: response.status,
+          waitedMs });
+      }
+
+      if (!body) {
+        throw new CheckError('api_unexpected_response', { url,
           status: response.status,
           waitedMs });
       }

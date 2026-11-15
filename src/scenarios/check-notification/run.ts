@@ -27,6 +27,10 @@ export interface NotificationDeps extends ScenarioDeps {
   provisioner?: Provisioner;
   /** Finds the public address; reads the settings by default. */
   resolveAddress?: (signal: AbortSignal) => Promise<PublicAddress>;
+  /** Wall-clock time of the last change of the rule matching, read by a one-off command; absent when unknown. */
+  lastMatchChangeAtWallMs?: number;
+  /** Called with the wall-clock time when the run changes the rule matching. */
+  onMatchChange?: (wallMs: number) => void;
   /** Adds a value that output must not show, such as the public address. */
   addSecret: (value: string) => void;
   /** Host of the previous run's address, shared by the runs of a process; see `NotificationContext`. */
@@ -54,7 +58,9 @@ export async function runCheckNotification(deps: NotificationDeps, options: Plan
     instanceId: config.instanceId,
     secret: settings.receiverSecret,
     loop: settings.loop,
-    warmupMs: settings.ruleCacheWarmupMs });
+    warmupMs: settings.ruleCacheWarmupMs,
+    ...deps.lastMatchChangeAtWallMs === undefined ? {} : { lastMatchChangeAtWallMs: deps.lastMatchChangeAtWallMs },
+    ...deps.onMatchChange === undefined ? {} : { onMatchChange: deps.onMatchChange } });
   const state: ScenarioState = { sendMayHaveReached: false };
   const notification: NotificationState = { warmup: false };
   const context: NotificationContext = { config,

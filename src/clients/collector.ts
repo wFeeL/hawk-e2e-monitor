@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { COLLECTOR_PANIC_DETAIL } from '../errors/messages.js';
 import { CheckError } from '../errors/taxonomy.js';
 import type { ErrorClass, MessageFacts } from '../errors/taxonomy.js';
 import { stripTokenSecret } from '../errors/redact.js';
@@ -13,6 +14,9 @@ import { TOKEN_INVALID_PREFIX } from '../errors/redact.js';
 import { HttpStatus } from '../net/http-status.js';
 
 const SNIPPET_LENGTH = 200;
+
+/** Largest collector answer the client reads (64 KiB); its answers are a few hundred bytes. */
+export const MAX_COLLECTOR_BODY_BYTES = 65_536;
 const PROBE_ID = '00000000-0000-4000-8000-000000000000';
 
 /** Ways an event can travel to the collector. */
@@ -192,13 +196,37 @@ function parseObject(text: string): ReplyBody | undefined {
 }
 
 /**
+ * Turns a body into one short line: tags dropped, whitespace collapsed.
+ * @param text Body text, possibly HTML with line breaks.
+ * @returns At most `SNIPPET_LENGTH` characters on one line.
+ */
+function flatSnippet(text: string): string {
+  return text
+    .replace(/<[^>]*>/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .slice(0, SNIPPET_LENGTH);
+}
+
+/**
  * Describes a body that carries no message.
  * @param status HTTP status.
  * @param body Body text.
  * @returns Status and the start of the body.
  */
 function snippet(status: number, body: string): string {
-  return `HTTP ${String(status)} ${body.slice(0, SNIPPET_LENGTH)}`.trimEnd();
+  return `HTTP ${String(status)} ${flatSnippet(body)}`.trimEnd();
+}
+
+/**
+ * Tells the answer of the collector's panic recovery from the 400 page of a proxy.
+ * @param status HTTP status.
+ * @param body Body text.
+ * @returns True for a 400 whose body is exactly `Bad request`.
+ */
+function isHandlerPanic(status: number, body: string): boolean {
+  // A panic inside the collector answers plain-text 400; handler answers are always JSON.
+  return status === HttpStatus.badRequest && body.trim() === 'Bad request';
 }
 
 /**
@@ -250,7 +278,7 @@ export function classifyCollectorReply(status: number, body: string): ReplyVerdi
 
   switch (status) {
     case HttpStatus.badRequest:
-      return reject('bad_request', snippet(status, body));
+      return reject('collector_unexpected_response', isHandlerPanic(status, body) ? COLLECTOR_PANIC_DETAIL : snippet(status, body));
     case HttpStatus.payloadTooLarge:
       return reject('payload_too_large', snippet(status, body));
     case HttpStatus.tooManyRequests:
@@ -271,8 +299,10 @@ export function classifyCollectorReply(status: number, body: string): ReplyVerdi
  */
 function refusalOf(verdict: ReplyRejected, url: string, status: number, fallback: ErrorClass): CheckError {
   const keeps: readonly ErrorClass[] = ['auth_invalid_token', 'quota_exhausted', 'rate_limited', 'unknown_402', 'collector_dependency_error', 'ip_blacklisted'];
+  // A handler that panicked answers a plain 400, which says nothing about the release or the envelope.
+  const panic = verdict.errorClass === 'collector_unexpected_response' && verdict.message === COLLECTOR_PANIC_DETAIL;
 
-  return new CheckError(keeps.includes(verdict.errorClass) ? verdict.errorClass : fallback, { url,
+  return new CheckError(panic || keeps.includes(verdict.errorClass) ? verdict.errorClass : fallback, { url,
     status,
     detail: verdict.message });
 }
@@ -328,10 +358,15 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
   /**
    * Builds the error of a WebSocket that never opened or never started.
    * @param outcome Outcome with its detail.
+   * @param startedMs Start of the exchange on the monotonic clock.
    * @returns `ws_handshake_failed` error.
    */
-  const handshakeError = (outcome: WsOutcome): CheckError => new CheckError('ws_handshake_failed', { url: endpoints.wsUrl,
-    ...outcome.kind === 'handshake_failed' ? { detail: outcome.detail } : {} });
+  const handshakeError = (outcome: WsOutcome, startedMs: number): CheckError => new CheckError('ws_handshake_failed', { url: endpoints.wsUrl,
+    ...outcome.kind === 'handshake_failed' ? { detail: outcome.detail } : {},
+    ...outcome.kind === 'timeout'
+      ? { code: 'TIMEOUT',
+          waitedMs: Math.round(clock.monotonicMs() - startedMs) }
+      : {} });
 
   /**
    * Builds the error for a WebSocket that closed or timed out.
@@ -354,6 +389,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
       result = await requestWithRetry({ url: endpoints.healthUrl,
         method: 'GET',
         timeoutMs: httpTimeoutMs,
+        maxBytes: MAX_COLLECTOR_BODY_BYTES,
         signal }, 'collector', { attempts: maxAttempts,
         delaysMs,
         clock,
@@ -398,7 +434,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
 
     throw new CheckError('collector_unexpected_response', { ...facts(),
       status,
-      detail: text.slice(0, SNIPPET_LENGTH) });
+      detail: isHandlerPanic(status, text) ? COLLECTOR_PANIC_DETAIL : flatSnippet(text) });
   };
 
   const probeInvalidToken = async (signal: AbortSignal): Promise<void> => {
@@ -415,11 +451,11 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
       }
 
       throw new CheckError('collector_unexpected_response', { url: endpoints.wsUrl,
-        detail: stripTokenSecret(json && typeof json.message === 'string' ? json.message : outcome.text.slice(0, SNIPPET_LENGTH)) });
+        detail: stripTokenSecret(json && typeof json.message === 'string' ? json.message : flatSnippet(outcome.text)) });
     }
 
     if (outcome.kind === 'handshake_failed') {
-      throw handshakeError(outcome);
+      throw handshakeError(outcome, startedMs);
     }
 
     throw wsUnavailable(outcome, startedMs);
@@ -437,6 +473,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
         headers: JSON_HEADERS,
         body: JSON.stringify(message),
         timeoutMs: httpTimeoutMs,
+        maxBytes: MAX_COLLECTOR_BODY_BYTES,
         signal }, 'collector', { attempts: maxAttempts,
         delaysMs,
         clock,
@@ -485,7 +522,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
 
     if (outcome.kind === 'handshake_failed') {
       return { kind: 'rejected',
-        error: handshakeError(outcome),
+        error: handshakeError(outcome, startedMs),
         attempts };
     }
 
@@ -495,7 +532,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
             cause: wsUnavailable(outcome, startedMs),
             attempts }
         : { kind: 'rejected',
-            error: handshakeError(outcome),
+            error: handshakeError(outcome, startedMs),
             attempts };
     }
 
@@ -504,7 +541,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
     if (typeof json?.code !== 'number') {
       return { kind: 'rejected',
         error: new CheckError('collector_unexpected_response', { url: endpoints.wsUrl,
-          detail: outcome.text.slice(0, SNIPPET_LENGTH) }),
+          detail: flatSnippet(outcome.text) }),
         attempts };
     }
 
@@ -536,6 +573,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
         headers: Object.fromEntries([['authorization', `Bearer ${token}`]]),
         body: form,
         timeoutMs: httpTimeoutMs,
+        maxBytes: MAX_COLLECTOR_BODY_BYTES,
         signal }, 'collector', { attempts: maxAttempts,
         delaysMs,
         clock,
@@ -595,6 +633,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
         headers: Object.fromEntries([['content-type', 'application/x-sentry-envelope']]),
         body,
         timeoutMs: httpTimeoutMs,
+        maxBytes: MAX_COLLECTOR_BODY_BYTES,
         signal }, 'collector', { attempts: maxAttempts,
         delaysMs,
         clock,

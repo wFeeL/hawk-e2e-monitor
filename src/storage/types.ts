@@ -19,6 +19,7 @@ export type RunTrigger = (typeof RUN_TRIGGERS)[number];
 export const DEGRADED_CODES = [
   'quota_usage',
   'single_channel',
+  'accept_uncertain',
   'js_worker_not_seen',
   'grouping_pattern',
 ] as const;

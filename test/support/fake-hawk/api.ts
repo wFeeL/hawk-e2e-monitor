@@ -51,6 +51,8 @@ export interface FakeApiKnobs {
   down?: boolean;
   /** Down for this long, counted from the first request that sees the value. */
   downForMs?: number;
+  /** The first request of an operation answers this HTTP status with an empty body; the entry is then removed. */
+  statusOnce?: Partial<Record<string, number>>;
   /** GraphQL errors by operationName, HTTP 200 with `data: null`. */
   errors?: Partial<Record<string, FakeApiError>>;
   /** The next request with a known access token gets ACCESS_TOKEN_EXPIRED_ERROR. */
@@ -562,6 +564,15 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
 
       if (isDown()) {
         respond(response, 503, 'text/html', '<html><body>Service Unavailable</body></html>');
+
+        return;
+      }
+
+      const once = name === undefined ? undefined : knobs.statusOnce?.[name];
+
+      if (name !== undefined && once !== undefined && knobs.statusOnce) {
+        delete knobs.statusOnce[name];
+        respond(response, once, PLAIN_TYPE, '');
 
         return;
       }

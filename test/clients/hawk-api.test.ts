@@ -157,6 +157,17 @@ describe('hawk api session', () => {
     expect(hawk.api.operations).toEqual(['Login', 'ProjectToken', 'RefreshTokens', 'Login', 'ProjectToken']);
   });
 
+  it('retries a refresh answered with 502', async () => {
+    const api = apiFor();
+
+    await api.ensureSession(signal);
+    hawk.api.knobs.expireAccessOnce = true;
+    hawk.api.knobs.statusOnce = Object.fromEntries([['RefreshTokens', 502]]);
+
+    expect(await api.projectToken(hawk.projectId, signal)).toBe(hawk.token);
+    expect(hawk.api.operations.filter(name => name === 'RefreshTokens')).toHaveLength(2);
+  });
+
   it('a refresh answered with an API error does not fall back to login', async () => {
     const api = apiFor();
 

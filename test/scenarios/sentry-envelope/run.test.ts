@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { RunResult, StageName, StageResult } from '../../../src/engine/result.js';
 import { decodeIntegrationToken, tokenKey } from '../../../src/hawk/token.js';
+import { outcomeOf } from '../../../src/storage/outcome.js';
 import { runSentryEnvelope } from '../../../src/scenarios/sentry-envelope/run.js';
 import { startFakeHawk } from '../../support/fake-hawk/index.js';
 import type { FakeHawk } from '../../support/fake-hawk/index.js';
@@ -83,6 +84,17 @@ describe('a healthy run', () => {
 });
 
 describe('failures', () => {
+  it('an envelope the collector did not confirm, though the event arrived, is an ok run with a warning and accept_uncertain', async () => {
+    hawk.collector.knobs.replyDelayMs = 400;
+
+    const result = await run({ env: { HTTP_TIMEOUT_MS: '300',
+      COLLECTOR_ACCEPT_TIMEOUT_MS: '2000' } });
+
+    expect(result.status).toBe('ok');
+    expect(result.warnings.join(' ')).toContain('did not confirm the envelope');
+    expect(outcomeOf(result, { loopEnabled: false }).degraded).toEqual(['accept_uncertain']);
+  });
+
   it('a refused envelope is sentry_rejected', async () => {
     hawk.collector.knobs.envelopeReply = { status: 400,
       body: '{"code":400,"error":true,"message":"Failed to process Sentry envelope"}' };

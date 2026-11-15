@@ -21,6 +21,9 @@ const DEFAULT_NOTIFICATION_TIMEOUT_MS = 120_000;
 const DEFAULT_NOTIFICATION_PAIR_WAIT_MS = 15_000;
 const DEFAULT_NOTIFICATION_SETUP_TIMEOUT_MS = 30_000;
 const DEFAULT_RULE_CACHE_WARMUP_MS = 65_000;
+
+/** Pause the scheduler adds after the rule cache warmup, so the first check lands past it. */
+export const RULE_WARMUP_MARGIN_MS = 1000;
 const DEFAULT_CHECK_INTERVAL_MS = 600_000;
 const DEFAULT_WATCHDOG_GRACE_MS = 30_000;
 const MIN_WATCHDOG_GRACE_MS = 1000;
@@ -490,6 +493,14 @@ function checkMonitoring(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx)
 
   checkScenarioIntervals(env, ctx);
   checkProbe(env, ctx);
+
+  if (Array.isArray(env.SCENARIOS) && env.SCENARIOS.includes(CHECK_NOTIFICATION) && env.RULE_CACHE_WARMUP_MS + RULE_WARMUP_MARGIN_MS >= env.CHECK_INTERVAL_MS) {
+    const limit = env.CHECK_INTERVAL_MS - RULE_WARMUP_MARGIN_MS;
+
+    ctx.addIssue({ code: 'custom',
+      path: ['RULE_CACHE_WARMUP_MS'],
+      message: `must be less than CHECK_INTERVAL_MS - ${String(RULE_WARMUP_MARGIN_MS)} ms (${String(limit)} ms)` });
+  }
 }
 
 /**
@@ -502,7 +513,7 @@ function checkCombinations(env: z.output<typeof baseSchema>, ctx: z.RefinementCt
   // Zod runs this check even when a field failed a format rule, so skip values that are not usable.
   const numbers = ['HTTP_TIMEOUT_MS', 'RUN_TIMEOUT_MS', 'LATE_DUPLICATE_WAIT_MS', ...STAGE_TIMEOUT_VARS.map(([name]) => name),
     'NOTIFICATION_TIMEOUT_MS', 'NOTIFICATION_PAIR_WAIT_MS', 'NOTIFICATION_SETUP_TIMEOUT_MS',
-    'CHECK_INTERVAL_MS', 'NEW_PROJECT_INTERVAL_MS', 'SOURCEMAPS_INTERVAL_MS', 'SENTRY_ENVELOPE_INTERVAL_MS',
+    'CHECK_INTERVAL_MS', 'RULE_CACHE_WARMUP_MS', 'NEW_PROJECT_INTERVAL_MS', 'SOURCEMAPS_INTERVAL_MS', 'SENTRY_ENVELOPE_INTERVAL_MS',
     'NEW_PROJECT_TOKEN_TIMEOUT_MS', 'RELEASE_SAVE_TIMEOUT_MS', 'WATCHDOG_GRACE_MS', 'SCENARIO_STAGGER_MS', 'SWEEP_MIN_AGE_MS', 'RETRY_ATTEMPTS',
     'PROBE_INTERVAL_MS', 'PROBE_RETENTION_DAYS', 'HISTORY_RETENTION_DAYS', 'GARAGE_TIMEOUT_MS'] as const;
 
@@ -527,6 +538,12 @@ function checkCombinations(env: z.output<typeof baseSchema>, ctx: z.RefinementCt
         path: ['HTTP_TIMEOUT_MS'],
         message: `must be less than ${name}` });
     }
+  }
+
+  if (env.EVENT_VISIBLE_TIMEOUT_MS < 2 * env.HTTP_TIMEOUT_MS) {
+    ctx.addIssue({ code: 'custom',
+      path: ['EVENT_VISIBLE_TIMEOUT_MS'],
+      message: 'must be at least twice HTTP_TIMEOUT_MS: the search needs one HTTP timeout and the card read another' });
   }
 
   for (const [name] of STAGE_TIMEOUT_VARS.slice(0, -1)) {

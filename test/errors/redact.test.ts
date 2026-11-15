@@ -1,7 +1,26 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMutableRedactor, createRedactor, redactDeep, stripTokenSecret } from '../../src/errors/redact.js';
 
 describe('mutable redactor', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('adds the same value 1000 times and still masks it once', () => {
+    const { redact, add } = createMutableRedactor([]);
+
+    for (let i = 0; i < 1000; i += 1) {
+      add('https://a.example');
+    }
+
+    add('a.example');
+
+    const sorts = vi.spyOn(Array.prototype, 'toSorted');
+
+    expect(redact('see https://a.example')).toBe('see ***');
+    expect(sorts).not.toHaveBeenCalled();
+  });
+
   it('masks a secret added after creation and keeps the old ones', () => {
     const { redact, add } = createMutableRedactor(['first-secret']);
 

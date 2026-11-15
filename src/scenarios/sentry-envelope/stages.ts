@@ -151,7 +151,8 @@ export function envelopeAcceptStage(timeoutMs: number): StageSpec<ScenarioContex
 
           return { status: 'uncertain',
             error: outcome.cause,
-            details: { attempts: outcome.attempts } };
+            details: { attempts: outcome.attempts,
+              warning: `The collector did not confirm the envelope (${outcome.cause.message}); SDKs of users may see an error` } };
         case 'rejected':
           return { status: 'failed',
             error: outcome.error,

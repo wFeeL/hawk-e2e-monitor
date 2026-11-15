@@ -96,7 +96,11 @@ docker compose ps      # monitor becomes healthy within about 15 s
 
 Compose needs Docker Engine 25 or newer with Compose 2.24 or newer. When Hawk runs on the same host, point
 `HAWK_API_URL` and `HAWK_COLLECTOR_URL` at `host.docker.internal` and make Hawk
-listen on an address the containers can reach, not only `127.0.0.1`. Values in
+listen on an address the containers can reach, not only `127.0.0.1`. With
+Docker on Linux, `host.docker.internal` is the address of the `docker0`
+bridge, so a Hawk published on `127.0.0.1` refuses the connection. Publish
+Hawk on the bridge address too, or attach the monitor to the network of the
+Hawk containers with a compose override and use their service names. Values in
 `.env` that contain `$` go in single quotes.
 
 The history lives in SQLite in the `monitor-data` volume, so it survives
@@ -120,6 +124,10 @@ docker compose exec monitor node dist/main.js history --stats
 
 `check` and `provision` refuse to run while `serve` works on the same
 database, so that two processes do not change the notification rule at once.
+They also refuse when the database file exists but cannot be opened, because
+then they cannot tell whether `serve` is running. A `check check-notification`
+started within `RULE_CACHE_WARMUP_MS` of a rule change first waits for Hawk to
+reload the notification rules.
 
 ### Alerts
 
@@ -127,8 +135,9 @@ Add @codex_bot to a Telegram chat, send it `/notify_start` and put the address
 it answers with into `ALERT_NOTIFY_URL`. The monitor sends a message when a
 scenario starts failing (after `ALERT_AFTER_FAILURES` failed runs in a row),
 when the reason of the failure changes, when it recovers, and when it becomes
-degraded: a run passed but only one notification channel arrived, or less
-than 10% of the workspace event quota is left. A message names the stage,
+degraded: a run passed but only one notification channel arrived, the
+collector did not confirm an event that still reached Hawk (users' SDKs would
+see an error there), or less than 10% of the workspace event quota is left. A message names the stage,
 the error class, the likely culprit and the time of every stage. Messages that
 the bot does not accept are retried with a growing pause for up to 24 hours.
 With `ALERT_NOTIFY_URL` empty, alerts go to the log only.
@@ -147,8 +156,14 @@ With `ALERT_NOTIFY_URL` empty, alerts go to the log only.
   recovery message. The monitor itself keeps running.
 - If the monitor container is recreated after a crash, the new container
   waits until the lease of the old process expires (up to 90 s) and shows as
-  restarting meanwhile. A configuration error also keeps it restarting;
+  restarting meanwhile. A restart inside the same container waits one lease
+  renewal period (35 s) to make sure the old process is gone. A `serve` that
+  finds another process holding its lease exits, so two monitors never run on
+  one database. A configuration error also keeps it restarting;
   `docker compose logs monitor` names the variable at fault.
+- Docker does not restart a container that is only unhealthy. When the
+  tunnel shows as unhealthy and check-notification fails with
+  `tunnel_unavailable`, restart it: `docker compose restart tunnel`.
 - Every restart of cloudflared gives the quick tunnel a new address. The next
   check-notification run moves the rule to the new address and checks
   notifications through it in the same run.

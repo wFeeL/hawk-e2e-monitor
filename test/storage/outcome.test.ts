@@ -96,6 +96,40 @@ describe('outcomeOf', () => {
       status: 'failed' }, CONTEXT).degraded).toEqual([]);
   });
 
+  it('accept_uncertain: the collector did not confirm the event', () => {
+    const result = runResultFixture({ stages: [stageFixture('collector_accept', 'uncertain'), stageFixture('event_visible')] });
+
+    expect(outcomeOf(result, CONTEXT)).toMatchObject({ status: 'ok',
+      degraded: ['accept_uncertain'] });
+  });
+
+  it('accept_uncertain: the collector did not confirm the repeated event', () => {
+    const result = runResultFixture({ stages: [stageFixture('collector_accept'),
+      stageFixture('event_repeated', 'ok', 10, { details: { repeatUncertain: true } })] });
+
+    expect(outcomeOf(result, CONTEXT).degraded).toEqual(['accept_uncertain']);
+  });
+
+  it('accept_uncertain is given once when both sends were unconfirmed, and a confirmed repeat adds nothing', () => {
+    const both = runResultFixture({ stages: [stageFixture('collector_accept', 'uncertain'),
+      stageFixture('event_repeated', 'ok', 10, { details: { repeatUncertain: true } })] });
+    const confirmed = runResultFixture({ stages: [stageFixture('collector_accept'),
+      stageFixture('event_repeated', 'ok', 10, { details: { repeatUncertain: false } })] });
+
+    expect(outcomeOf(both, CONTEXT).degraded).toEqual(['accept_uncertain']);
+    expect(outcomeOf(confirmed, CONTEXT).degraded).toEqual([]);
+  });
+
+  it('lists the codes as single_channel, quota_usage, accept_uncertain', () => {
+    const result = notificationResult({ stages: [stageFixture('api_availability', 'ok', 10, { details: { quotaLow: true } }),
+      stageFixture('collector_accept', 'uncertain'),
+      stageFixture('notification_formed', 'ok', 50)],
+    notification: { loop: { latencyMs: 20 },
+      unmatched: 0 } });
+
+    expect(outcomeOf(result, CONTEXT).degraded).toEqual(['single_channel', 'quota_usage', 'accept_uncertain']);
+  });
+
   it('both channels arrived is not degraded', () => {
     expect(outcomeOf(notificationResult(), CONTEXT).degraded).toEqual([]);
   });
