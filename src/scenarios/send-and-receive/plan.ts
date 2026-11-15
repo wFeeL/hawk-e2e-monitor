@@ -50,6 +50,8 @@ export interface PlanOptions {
   transport?: Transport;
   /** Forces the repeat. */
   repeat?: boolean;
+  /** Forces the catcher type, for a scenario whose event must reach one worker whatever the transport. */
+  catcherType?: string;
   /** Id of the run when the caller made it, such as the scheduler, which records the run before it starts. */
   runId?: string;
 }
@@ -136,7 +138,7 @@ export function planRun(config: Config, options: PlanOptions, scenario: Scenario
     runId,
     sequence,
     transport,
-    catcherType: transport === 'http' ? HTTP_CATCHER : WS_CATCHER,
+    catcherType: options.catcherType ?? (transport === 'http' ? HTTP_CATCHER : WS_CATCHER),
     repeat: options.repeat ?? shouldRepeat(sequence, config.transportMode, config.repeatEveryNRuns),
     title: buildTitle(config.instanceId, runId, scenario),
     context: { runId,

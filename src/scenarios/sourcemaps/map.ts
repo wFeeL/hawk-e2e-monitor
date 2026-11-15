@@ -1,4 +1,5 @@
-const SOURCE_NAME = 'e2e-source.js';
+/** Name of the original file in the map, with no path. */
+export const SOURCE_NAME = 'e2e-source.js';
 // One segment: line 1 column 0 of the minified file to line 6 column 0 of the source (generated column 0, source 0, line +5, column 0).
 const MAPPINGS = 'AAKA';
 const MARGIN = 5;

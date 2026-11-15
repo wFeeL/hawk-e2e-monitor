@@ -132,4 +132,21 @@ describe('buildRunners', () => {
     expect(seen).toHaveLength(1);
     expect(JSON.parse(seen[0] ?? 'null')).toHaveLength(1);
   });
+
+  it('builds the runner of sourcemaps over the clients, with no receiver and no wait', async () => {
+    const built = await buildRunners(await contextFor('sourcemaps'));
+
+    expect(Object.keys(built.runners)).toEqual(['sourcemaps']);
+    expect(built.beforeFirstRun).toEqual({});
+    expect(built.readiness).toEqual([]);
+    expect(built.receiverPort).toBeUndefined();
+
+    const result = await built.runners.sourcemaps?.({ runId: 'raaaaaaaaaaaaaaac',
+      sequence: 1,
+      signal: new AbortController().signal });
+
+    expect(result).toMatchObject({ status: 'ok',
+      scenario: 'sourcemaps',
+      runId: 'raaaaaaaaaaaaaaac' });
+  });
 });

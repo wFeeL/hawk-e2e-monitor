@@ -10,6 +10,7 @@ import type { MutableRedactor } from '../errors/redact.js';
 import { collectorEndpoints, decodeIntegrationToken } from '../hawk/token.js';
 import { createLogger } from '../log/logger.js';
 import { startReceiver } from '../receiver/server.js';
+import { runSourcemaps } from '../scenarios/sourcemaps/run.js';
 import { runNewProject } from '../scenarios/new-project/run.js';
 import { createdProjects } from '../storage/created-projects.js';
 import { openDatabase } from '../storage/database.js';
@@ -194,6 +195,24 @@ const runNewProjectCommand: CheckScenario = async (command, config, io, deps, ma
 };
 
 /**
+ * Runs `sourcemaps` and prints the result.
+ * @param command Parsed `check` command.
+ * @param config Validated configuration.
+ * @param io Output streams.
+ * @param deps Replacements for the default dependencies, for tests.
+ * @param masking Redactor shared with the logger.
+ * @returns Exit code.
+ */
+const runSourcemapsCommand: CheckScenario = async (command, config, io, deps, masking) => {
+  const result = await runSourcemaps({ ...defaultDeps(config, io, masking),
+    ...deps.pollScheduleMs === undefined ? {} : { pollScheduleMs: deps.pollScheduleMs } }, { sequence: command.sequence });
+
+  io.stdout(`${JSON.stringify(result)}\n`);
+
+  return summarize(result, io, masking);
+};
+
+/**
  * Stands in for a scenario whose command is not written yet.
  * @param command Parsed `check` command.
  * @param _config Validated configuration.
@@ -229,7 +248,7 @@ const CHECKS: Readonly<Record<ScenarioName, CheckScenario>> = {
   [SEND_AND_RECEIVE_EVENT]: runSendAndReceiveCommand,
   [CHECK_NOTIFICATION]: runNotificationCommand,
   [NEW_PROJECT]: runNewProjectCommand,
-  [SOURCEMAPS]: runMissingCommand,
+  [SOURCEMAPS]: runSourcemapsCommand,
   [SENTRY_ENVELOPE]: runMissingCommand,
   [ENDPOINTS_PROBE]: runProbeCommand,
 };

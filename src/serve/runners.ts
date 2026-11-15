@@ -2,6 +2,7 @@ import type { ScenarioRunner } from '../scheduler/scheduler.js';
 import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, NEW_PROJECT, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS } from '../scenarios/names.js';
 import type { ScenarioName } from '../scenarios/names.js';
 import { runEndpointsProbe } from '../scenarios/endpoints-probe/run.js';
+import { runSourcemaps } from '../scenarios/sourcemaps/run.js';
 import { runNewProject } from '../scenarios/new-project/run.js';
 import { createdProjects } from '../storage/created-projects.js';
 import { runSendAndReceive } from '../scenarios/send-and-receive/run.js';
@@ -96,12 +97,33 @@ const setupNewProject: SetupScenario = async (context): Promise<ScenarioSetup> =
   });
 };
 
+/**
+ * Sets up `sourcemaps`, which needs nothing besides the clients.
+ * @param context Everything a scenario needs to be set up.
+ * @returns Its runner.
+ */
+const setupSourcemaps: SetupScenario = async (context): Promise<ScenarioSetup> => {
+  const { config, clock, logger, masking, api, collector, overrides } = context;
+
+  return Promise.resolve({
+    runner: async ({ runId, sequence, signal }) => runSourcemaps({ config,
+      collector,
+      api,
+      clock,
+      logger,
+      redact: masking.redact,
+      ...overrides.pollScheduleMs === undefined ? {} : { pollScheduleMs: overrides.pollScheduleMs },
+      signal }, { sequence,
+      runId }),
+  });
+};
+
 /** One entry per scenario; a new scenario is added here. */
 const SETUPS: Readonly<Record<ScenarioName, SetupScenario>> = {
   [SEND_AND_RECEIVE_EVENT]: setupSendAndReceive,
   [CHECK_NOTIFICATION]: setupCheckNotification,
   [NEW_PROJECT]: setupNewProject,
-  [SOURCEMAPS]: setupMissing,
+  [SOURCEMAPS]: setupSourcemaps,
   [SENTRY_ENVELOPE]: setupMissing,
   [ENDPOINTS_PROBE]: setupProbe,
 };

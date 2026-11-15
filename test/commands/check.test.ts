@@ -475,3 +475,17 @@ describe('check new-project', () => {
     }
   });
 });
+
+describe('check sourcemaps', () => {
+  it('prints the result of a run and exits 0', async () => {
+    const { stdout, code } = await runCommand({ kind: 'check',
+      scenario: 'sourcemaps',
+      sequence: 1,
+      repeat: false });
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({ scenario: 'sourcemaps',
+      status: 'ok',
+      catcherType: 'errors/javascript' });
+  });
+});
