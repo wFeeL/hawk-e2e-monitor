@@ -47,6 +47,34 @@ export interface RunEvent {
   totalCount: number;
 }
 
+/** What the run learned about the notifications of its event. */
+export interface RunNotification {
+  /** The webhook notification. */
+  webhook?: {
+    /** Time from the collector's answer to the first webhook POST. */
+    latencyMs: number;
+    /** Id of the event named in the webhook, when the body had one. */
+    eventId?: string;
+  };
+  /** The loop notification. */
+  loop?: {
+    /** Time from the collector's answer to the first loop POST. */
+    latencyMs: number;
+  };
+  /** POSTs with a valid secret but no run id of this run. */
+  unmatched: number;
+}
+
+/** What provisioning did for this run. */
+export interface RunProvisioning {
+  /** Whether the rule was left, created or replaced. */
+  action: 'none' | 'created' | 'updated';
+  /** Extra rules deleted. */
+  deleted: number;
+  /** Whether matching changed. */
+  matchChanged: boolean;
+}
+
 /** Everything a run reports. */
 export interface RunResult {
   /** Random id of the run. */
@@ -91,4 +119,8 @@ export interface RunResult {
   stages: StageResult[];
   /** Outcome of cleanup. */
   cleanup: CleanupResult;
+  /** Notifications, for `check-notification` runs that got to read them. */
+  notification?: RunNotification;
+  /** Provisioning, for `check-notification` runs that got past the setup. */
+  provisioning?: RunProvisioning;
 }

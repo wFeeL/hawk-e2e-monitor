@@ -134,11 +134,13 @@ describe('healthy fake', () => {
     expect(hawk.api.removeCalls).toBe(1);
   });
 
-  it('eventLatencyMs does not exceed the duration of event_visible', async () => {
+  it('eventLatencyMs is measured from the accept and fits into the run', async () => {
     const result = await run();
 
+    // The latency starts at the end of collector_accept, so it also holds the gap before event_visible starts; only the run bounds it.
     expect(result.eventLatencyMs).toBeTypeOf('number');
-    expect(result.eventLatencyMs).toBeLessThanOrEqual(stageOf(result, 'event_visible').durationMs);
+    expect(result.eventLatencyMs).toBeGreaterThanOrEqual(0);
+    expect(result.eventLatencyMs).toBeLessThanOrEqual(result.durationMs);
   });
 
   it('describes the run: ids, title, transport and timestamps', async () => {
@@ -680,5 +682,60 @@ describe('late duplicate', () => {
     const result = await run();
 
     expect(stageOf(result, 'cleanup').details).toBeUndefined();
+  });
+});
+
+describe('cancelling from outside', () => {
+  /**
+   * Wraps the API so the first search aborts the run and finds nothing, as if the caller cancelled mid-poll.
+   * @param api Real client.
+   * @param cancel Aborts the run.
+   * @returns Client with the same calls.
+   */
+  function cancelOnFirstSearch(api: HawkApi, cancel: () => void): HawkApi {
+    let first = true;
+
+    return { ...api,
+      findEvents: async (projectId, runId, signal) => {
+        if (first) {
+          first = false;
+          cancel();
+
+          return [];
+        }
+
+        return api.findEvents(projectId, runId, signal);
+      } };
+  }
+
+  it('an abort in the middle of event_visible is run_timeout "the run was cancelled" and cleanup still runs', async () => {
+    const { deps } = createTestDeps(hawk);
+    const outside = new AbortController();
+    const result = await runSendAndReceive({ ...deps,
+      signal: outside.signal,
+      api: cancelOnFirstSearch(deps.api, () => {
+        outside.abort();
+      }) }, { sequence: 1 });
+
+    expect(result).toMatchObject({ status: 'failed',
+      failedStage: 'event_visible',
+      errorClass: 'run_timeout',
+      message: 'The run was cancelled' });
+    expect(stageOf(result, 'event_repeated').status).toBe('skipped');
+    expect(result.cleanup.status).toBe('ok');
+    expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
+  });
+
+  it('a signal that is already aborted fails the first stage and still runs cleanup', async () => {
+    const { deps } = createTestDeps(hawk);
+    const result = await runSendAndReceive({ ...deps,
+      signal: AbortSignal.abort() }, { sequence: 1 });
+
+    expect(result).toMatchObject({ status: 'failed',
+      failedStage: 'collector_availability',
+      errorClass: 'run_timeout',
+      message: 'The run was cancelled' });
+    expect(result.stages.slice(1, 5).every(stage => stage.status === 'skipped')).toBe(true);
+    expect(stageOf(result, 'cleanup').status).toBe('skipped');
   });
 });

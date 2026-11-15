@@ -17,7 +17,7 @@ export interface Verdict {
  * @param stage Stage result with a class and text.
  * @returns Error with the recorded class and text.
  */
-function errorOf(stage: StageResult): CheckError {
+export function errorOf(stage: StageResult): CheckError {
   return new CheckError(stage.errorClass ?? 'monitor_internal', {}, { message: stage.message });
 }
 

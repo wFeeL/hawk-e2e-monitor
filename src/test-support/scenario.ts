@@ -14,7 +14,9 @@ import type { Receiver } from '../receiver/server.js';
 import type { NotificationContext } from '../scenarios/check-notification/stages.js';
 import { planRun } from '../scenarios/send-and-receive/plan.js';
 import type { RunPlan } from '../scenarios/send-and-receive/plan.js';
-import { createScenarioRedactor } from '../scenarios/send-and-receive/run.js';
+import { createMutableRedactor } from '../errors/redact.js';
+import type { NotificationDeps } from '../scenarios/check-notification/run.js';
+import { createScenarioRedactor, scenarioSecrets } from '../scenarios/send-and-receive/run.js';
 import type { ScenarioDeps } from '../scenarios/send-and-receive/run.js';
 import type { ScenarioContext } from '../scenarios/send-and-receive/stages.js';
 import { systemClock } from '../time/clock.js';
@@ -190,8 +192,10 @@ export interface NotificationTestOptions extends TestScenarioOptions {
 
 /** The parts a notification scenario needs besides the F1 dependencies. */
 export interface NotificationTestDeps {
-  /** F1 dependencies. */
+  /** F1 dependencies; their redactor learns the values that `addSecret` gets. */
   deps: ScenarioDeps;
+  /** Everything `runCheckNotification` takes. */
+  notificationDeps: NotificationDeps;
   /** Logger kept inside `deps`. */
   logger: MemoryLogger;
   /** Receiver on a random loopback port. */
@@ -246,20 +250,33 @@ export async function createNotificationTestDeps(hawk: FakeHawk, options: Notifi
   }
 
   const secrets: string[] = [];
+  const masking = createMutableRedactor(scenarioSecrets(deps.config));
+  const addSecret = (value: string): void => {
+    secrets.push(value);
+    masking.add(value);
+  };
+  const provisioner = options.provisioner ?? createProvisioner({ ...provisionerDeps,
+    clock: systemClock });
+  const resolveAddress = options.resolveAddress ?? (() => Promise.resolve(address));
+  const maskedDeps = { ...deps,
+    redact: masking.redact };
 
   return {
-    deps,
+    deps: maskedDeps,
+    notificationDeps: { ...maskedDeps,
+      receiver,
+      provisioner,
+      resolveAddress,
+      retryDelaysMs: RETRY_DELAYS_MS,
+      addSecret },
     logger,
     receiver,
     address,
-    provisioner: options.provisioner ?? createProvisioner({ ...provisionerDeps,
-      clock: systemClock }),
-    resolveAddress: options.resolveAddress ?? (() => Promise.resolve(address)),
+    provisioner,
+    resolveAddress,
     retryDelaysMs: RETRY_DELAYS_MS,
     secrets,
-    addSecret: (value) => {
-      secrets.push(value);
-    },
+    addSecret,
     close: async () => receiver.close(),
   };
 }

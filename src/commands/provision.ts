@@ -6,11 +6,11 @@ import { ConfigFailure, formatConfigErrors, notificationSettings } from '../conf
 import type { Config } from '../config/load.js';
 import { createMutableRedactor } from '../errors/redact.js';
 import { isCheckError } from '../errors/taxonomy.js';
-import { decodeIntegrationToken, tokenKey } from '../hawk/token.js';
 import { createLogger } from '../log/logger.js';
 import { resolvePublicAddress } from '../notifications/address.js';
 import type { PublicAddress } from '../notifications/address.js';
 import { createProvisioner } from '../notifications/provisioning.js';
+import { scenarioSecrets } from '../scenarios/send-and-receive/run.js';
 import { systemClock } from '../time/clock.js';
 import type { Clock } from '../time/clock.js';
 import type { CheckIo } from './check.js';
@@ -30,22 +30,6 @@ export interface ProvisionDeps {
 }
 
 /**
- * Lists the values that must never reach the output.
- * @param config Validated configuration.
- * @returns Password, tokens and the receiver secret.
- */
-function startingSecrets(config: Config): string[] {
-  const secrets = [config.hawk.password, config.hawk.integrationToken, config.notifications.receiverSecret ?? ''];
-  const token = decodeIntegrationToken(config.hawk.integrationToken);
-
-  if (token !== undefined) {
-    secrets.push(token.secret, tokenKey(token));
-  }
-
-  return secrets;
-}
-
-/**
  * Brings the notification rule of the instance to the wanted state and prints the result.
  * @param command Parsed `provision` command.
  * @param config Validated configuration.
@@ -54,7 +38,7 @@ function startingSecrets(config: Config): string[] {
  * @returns Exit code: 0 on success, 1 on a failure.
  */
 export async function runProvisionCommand(command: ProvisionCommand, config: Config, io: CheckIo, deps: Partial<ProvisionDeps> = {}): Promise<number> {
-  const { redact, add } = createMutableRedactor(startingSecrets(config));
+  const { redact, add } = createMutableRedactor(scenarioSecrets(config));
   const clock = deps.clock ?? systemClock;
   const logger = createLogger({ level: config.logLevel,
     write: (line) => {

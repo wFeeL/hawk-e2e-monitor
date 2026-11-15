@@ -624,6 +624,23 @@ describe('fake notifier knobs', () => {
     expect(of(receiver, 'webhook')).toHaveLength(1);
   });
 
+  it('delayMs can differ by channel', async () => {
+    const { store, receiver, notifier } = await setup();
+
+    notifier.knobs.delayMs = { loop: 300 };
+
+    const event = ingest(store);
+
+    await notifier.delivered(event.id);
+
+    expect(of(receiver, 'webhook')).toHaveLength(1);
+    expect(of(receiver, 'loop')).toEqual([]);
+
+    await notifier.idle();
+
+    expect(of(receiver, 'loop')).toHaveLength(1);
+  });
+
   it('a removed event is not sent', async () => {
     const { store, receiver, notifier } = await setup();
 
