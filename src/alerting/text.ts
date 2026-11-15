@@ -151,9 +151,9 @@ function episodeLine(input: AlertTextInput): string | undefined {
  */
 function latencyLine(row: RunRow, result: RunResult | undefined): string | undefined {
   const parts = [
-    row.eventLatencyMs === undefined ? undefined : `event latency: ${String(row.eventLatencyMs)} ms`,
-    result?.notification?.webhook === undefined ? undefined : `webhook ${String(result.notification.webhook.latencyMs)} ms`,
-    result?.notification?.loop === undefined ? undefined : `loop ${String(result.notification.loop.latencyMs)} ms`,
+    row.eventLatencyMs === undefined ? undefined : `event latency: ${String(Math.round(row.eventLatencyMs))} ms`,
+    result?.notification?.webhook === undefined ? undefined : `webhook ${String(Math.round(result.notification.webhook.latencyMs))} ms`,
+    result?.notification?.loop === undefined ? undefined : `loop ${String(Math.round(result.notification.loop.latencyMs))} ms`,
   ].filter(part => part !== undefined);
 
   return parts.length === 0 ? undefined : parts.join(' | ');
@@ -183,7 +183,7 @@ function bodyLines(input: AlertTextInput): Line[] {
   switch (kind) {
     case 'failed':
     case 'still_failing': {
-      const stages = row.stages.map(stage => `${stage.name} ${String(stage.durationMs)} ms ${stage.status}`).join(', ');
+      const stages = row.stages.map(stage => `${stage.name} ${String(Math.round(stage.durationMs))} ms ${stage.status}`).join(', ');
       const latency = latencyLine(row, result);
 
       return [
