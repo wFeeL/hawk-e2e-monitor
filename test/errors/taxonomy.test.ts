@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CULPRIT_OF, CheckError, ERROR_CLASSES, isCheckError } from '../../src/errors/taxonomy.js';
+import { CULPRITS, CULPRIT_OF, CheckError, ERROR_CLASSES, isCheckError } from '../../src/errors/taxonomy.js';
 import type { Culprit, ErrorClass } from '../../src/errors/taxonomy.js';
 
 const EXPECTED_CULPRITS: readonly (readonly [ErrorClass, Culprit])[] = [
@@ -55,5 +55,15 @@ describe('taxonomy', () => {
     const error = new CheckError('collector_unavailable', {}, { message: 'custom text' });
 
     expect(error.message).toBe('custom text');
+  });
+});
+
+describe('CULPRITS', () => {
+  it('lists every culprit once and covers the culprit of each class', () => {
+    expect(CULPRITS).toEqual(['hawk', 'monitor', 'config', 'network']);
+
+    for (const errorClass of ERROR_CLASSES) {
+      expect(CULPRITS).toContain(CULPRIT_OF[errorClass]);
+    }
   });
 });

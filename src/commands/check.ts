@@ -16,7 +16,8 @@ import { runSendAndReceive, scenarioSecrets } from '../scenarios/send-and-receiv
 import type { ScenarioDeps } from '../scenarios/send-and-receive/run.js';
 import { systemClock } from '../time/clock.js';
 import { refusalWhileServing } from './serving.js';
-import { CHECK_NOTIFICATION } from '../scenarios/names.js';
+import { CHECK_NOTIFICATION, SEND_AND_RECEIVE_EVENT } from '../scenarios/names.js';
+import type { ScenarioName } from '../scenarios/names.js';
 
 /** Where the command writes. */
 export interface CheckIo {
@@ -138,6 +139,35 @@ async function runNotificationCommand(command: CheckCommand, config: Config, io:
   }
 }
 
+/** Runs one scenario for `check` and returns the exit code. */
+type CheckScenario = (command: CheckCommand, config: Config, io: CheckIo, deps: Partial<NotificationDeps>, masking: MutableRedactor) => Promise<number>;
+
+/**
+ * Runs `send-and-receive-event` and prints the result.
+ * @param command Parsed `check` command.
+ * @param config Validated configuration.
+ * @param io Output streams.
+ * @param deps Replacements for the default dependencies, for tests.
+ * @param masking Redactor shared with the logger.
+ * @returns Exit code.
+ */
+const runSendAndReceiveCommand: CheckScenario = async (command, config, io, deps, masking) => {
+  const result = await runSendAndReceive({ ...defaultDeps(config, io, masking),
+    ...deps }, { sequence: command.sequence,
+    transport: command.transport,
+    repeat: command.repeat ? true : undefined });
+
+  io.stdout(`${JSON.stringify(result)}\n`);
+
+  return summarize(result, io, masking);
+};
+
+/** One entry per scenario; a new scenario is added here. */
+const CHECKS: Readonly<Record<ScenarioName, CheckScenario>> = {
+  [SEND_AND_RECEIVE_EVENT]: runSendAndReceiveCommand,
+  [CHECK_NOTIFICATION]: runNotificationCommand,
+};
+
 /**
  * Runs one scenario and prints the result.
  * @param command Parsed `check` command.
@@ -157,16 +187,5 @@ export async function runCheckCommand(command: CheckCommand, config: Config, io:
 
   const masking = createMutableRedactor(scenarioSecrets(config));
 
-  if (command.scenario === CHECK_NOTIFICATION) {
-    return runNotificationCommand(command, config, io, deps, masking);
-  }
-
-  const result = await runSendAndReceive({ ...defaultDeps(config, io, masking),
-    ...deps }, { sequence: command.sequence,
-    transport: command.transport,
-    repeat: command.repeat ? true : undefined });
-
-  io.stdout(`${JSON.stringify(result)}\n`);
-
-  return summarize(result, io, masking);
+  return CHECKS[command.scenario](command, config, io, deps, masking);
 }

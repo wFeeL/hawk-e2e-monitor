@@ -13,6 +13,7 @@ import type { AlertKind } from './state.js';
 import { alertText, plainAlertText, storageFailingText } from './text.js';
 import type { AlertTextInput } from './text.js';
 import { MS_PER_DAY } from '../time/units.js';
+import { scenarioSettings } from '../config/scenario.js';
 
 const FLUSH_BATCH = 50;
 const MAX_RETRY_PAUSE_MS = 600_000;
@@ -292,7 +293,7 @@ export function createAlerter(deps: AlerterDeps): Alerter {
         }
       }
 
-      const decision = decideAlert(previous, row, monitoring, now);
+      const decision = decideAlert(previous, row, { alertAfterFailures: scenarioSettings(config, row.scenario).alertAfterFailures }, now);
       const { kind } = decision;
 
       // A state derived without the stored one would hide the real episode from every later run, so it is not kept.

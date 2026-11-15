@@ -55,7 +55,13 @@ export interface UsageCommand {
 export type Command = CheckCommand | HistoryCommand | ProvisionCommand | ServeCommand | UsageCommand;
 
 /** Usage text printed for an unknown command. */
-export const USAGE = 'Usage: hawk-e2e-monitor [serve]\n       hawk-e2e-monitor check send-and-receive-event [--sequence <n>] [--transport http|ws] [--repeat]\n       hawk-e2e-monitor check check-notification [--sequence <n>] [--transport http|ws] [--repeat]\n       hawk-e2e-monitor provision [--no-wait]\n       hawk-e2e-monitor history [--scenario <name>] [--limit <n>] [--stats]\n';
+export const USAGE = [
+  'Usage: hawk-e2e-monitor [serve]',
+  ...SCENARIO_NAMES.map(name => `       hawk-e2e-monitor check ${name} [--sequence <n>] [--transport http|ws] [--repeat]`),
+  '       hawk-e2e-monitor provision [--no-wait]',
+  '       hawk-e2e-monitor history [--scenario <name>] [--limit <n>] [--stats]',
+  '',
+].join('\n');
 
 const MAX_HISTORY_COMMAND_LIMIT = 1000;
 const SEQUENCE_PATTERN = /^[1-9]\d*$/u;

@@ -18,8 +18,11 @@ export const ERROR_CLASSES = [
 /** One of `ERROR_CLASSES`. */
 export type ErrorClass = (typeof ERROR_CLASSES)[number];
 
-/** Who is to blame for a failure. */
-export type Culprit = 'hawk' | 'monitor' | 'config' | 'network';
+/** Who can be to blame for a failure. */
+export const CULPRITS = ['hawk', 'monitor', 'config', 'network'] as const;
+
+/** One of `CULPRITS`. */
+export type Culprit = (typeof CULPRITS)[number];
 
 /** Culprit of each class. */
 export const CULPRIT_OF: Readonly<Record<ErrorClass, Culprit>> = Object.fromEntries([

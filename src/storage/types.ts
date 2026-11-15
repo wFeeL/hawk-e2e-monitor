@@ -9,11 +9,17 @@ export type RunStatus = 'aborted' | 'failed' | 'ok' | 'running' | 'skipped';
 /** Why a run did not happen or did not count. */
 export type SkipReason = 'overlap' | 'rule_cache_warmup';
 
-/** What started a run. */
-export type RunTrigger = 'manual' | 'schedule';
+/** What can start a run. */
+export const RUN_TRIGGERS = ['manual', 'schedule'] as const;
 
-/** A condition under which an `ok` run still deserves a warning. */
-export type DegradedCode = 'quota_usage' | 'single_channel';
+/** What started a run. */
+export type RunTrigger = (typeof RUN_TRIGGERS)[number];
+
+/** Conditions under which an `ok` run still deserves a warning. */
+export const DEGRADED_CODES = ['quota_usage', 'single_channel'] as const;
+
+/** One of `DEGRADED_CODES`. */
+export type DegradedCode = (typeof DEGRADED_CODES)[number];
 
 /** Alert state of a scenario. */
 export type AlertLevelState = 'degraded' | 'failing' | 'ok';

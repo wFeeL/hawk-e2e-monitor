@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { testConfig } from '../support/config.js';
 import { runResultFixture, stageFixture } from '../support/run-result.js';
 import type { RunResult } from '../../src/engine/result.js';
-import { abortedOutcome, eventsPerRun, outcomeOf, eventsSentPer30Days, rowOf } from '../../src/storage/outcome.js';
+import { abortedOutcome, eventsPerRun, isMonitorAbort, isVerdict, outcomeOf, eventsSentPer30Days, rowOf } from '../../src/storage/outcome.js';
 
 const CONTEXT = { loopEnabled: true };
 
@@ -190,5 +190,41 @@ describe('projection', () => {
 
     expect(eventsSentPer30Days(one)).toBe(DAY_RUNS * 30);
     expect(eventsSentPer30Days(two)).toBe(DAY_RUNS * 30 * 2);
+  });
+});
+
+describe('isVerdict', () => {
+  it('counts ok, failed and the warmup skip, not an overlap skip or a running run', () => {
+    expect(isVerdict({ status: 'ok' })).toBe(true);
+    expect(isVerdict({ status: 'failed' })).toBe(true);
+    expect(isVerdict({ status: 'skipped',
+      skipReason: 'rule_cache_warmup' })).toBe(true);
+    expect(isVerdict({ status: 'skipped',
+      skipReason: 'overlap' })).toBe(false);
+    expect(isVerdict({ status: 'running' })).toBe(false);
+  });
+
+  it('counts an abort only on request and never one by a stop or restart of the monitor', () => {
+    expect(isVerdict({ status: 'aborted',
+      errorClass: 'run_hung' })).toBe(false);
+    expect(isVerdict({ status: 'aborted',
+      errorClass: 'run_hung' }, { aborts: true })).toBe(true);
+    expect(isVerdict({ status: 'aborted',
+      errorClass: 'monitor_stopped' }, { aborts: true })).toBe(false);
+    expect(isVerdict({ status: 'aborted',
+      errorClass: 'monitor_restarted' }, { aborts: true })).toBe(false);
+  });
+});
+
+describe('isMonitorAbort', () => {
+  it('is true for a stop and a restart only', () => {
+    expect(isMonitorAbort({ status: 'aborted',
+      errorClass: 'monitor_stopped' })).toBe(true);
+    expect(isMonitorAbort({ status: 'aborted',
+      errorClass: 'monitor_restarted' })).toBe(true);
+    expect(isMonitorAbort({ status: 'aborted',
+      errorClass: 'run_hung' })).toBe(false);
+    expect(isMonitorAbort({ status: 'failed',
+      errorClass: 'monitor_stopped' })).toBe(false);
   });
 });

@@ -425,6 +425,63 @@ describe('stats', () => {
   });
 });
 
+describe('lastVerdict', () => {
+  it('returns the newest run with a verdict and skips overlaps and running runs', () => {
+    const history = memoryHistory();
+
+    store(history, { runId: 'old',
+      sequence: 1,
+      startedAt: at(-3 * HOUR_MS) });
+    store(history, { runId: 'failed',
+      sequence: 2,
+      startedAt: at(-2 * HOUR_MS),
+      outcome: { status: 'failed',
+        errorClass: 'event_not_found' } });
+    history.recordSkip({ runId: 'overlap',
+      scenario: SCENARIO,
+      sequence: 3,
+      trigger: 'schedule',
+      at: at(-HOUR_MS),
+      reason: 'overlap' });
+    history.startRun({ runId: 'going',
+      scenario: SCENARIO,
+      sequence: 3,
+      trigger: 'schedule',
+      startedAt: at(-HOUR_MS / 2) });
+
+    expect(history.lastVerdict(SCENARIO)?.runId).toBe('failed');
+    expect(history.lastVerdict('check-notification')).toBeUndefined();
+  });
+
+  it('takes the warmup skip and, on request, an abort that is not a stop of the monitor', () => {
+    const history = memoryHistory();
+
+    store(history, { runId: 'ok',
+      startedAt: at(-3 * HOUR_MS) });
+    store(history, { runId: 'hung',
+      sequence: 2,
+      startedAt: at(-2 * HOUR_MS),
+      outcome: { status: 'aborted',
+        errorClass: 'run_hung' } });
+    store(history, { runId: 'stopped',
+      sequence: 3,
+      startedAt: at(-HOUR_MS),
+      outcome: { status: 'aborted',
+        errorClass: 'monitor_stopped' } });
+
+    expect(history.lastVerdict(SCENARIO)?.runId).toBe('ok');
+    expect(history.lastVerdict(SCENARIO, { aborts: true })?.runId).toBe('hung');
+
+    store(history, { runId: 'warm',
+      sequence: 4,
+      startedAt: at(-HOUR_MS / 2),
+      outcome: { status: 'skipped',
+        skipReason: 'rule_cache_warmup' } });
+
+    expect(history.lastVerdict(SCENARIO)?.runId).toBe('warm');
+  });
+});
+
 describe('late marks', () => {
   it('markLateEvent only on failed runs, once', () => {
     const history = memoryHistory();

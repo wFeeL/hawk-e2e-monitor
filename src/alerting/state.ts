@@ -1,5 +1,5 @@
-import type { ErrorClass } from '../errors/taxonomy.js';
 import type { AlertStateRow } from '../storage/history.js';
+import { isMonitorAbort } from '../storage/outcome.js';
 import type { DegradedCode, RunRow } from '../storage/types.js';
 
 /** What a transition tells the operator. */
@@ -19,9 +19,6 @@ export interface AlertDecision {
   kind?: AlertKind;
 }
 
-/** Aborts caused by the monitor itself; they say nothing about Hawk. */
-const MONITOR_ABORTS: readonly ErrorClass[] = ['monitor_stopped', 'monitor_restarted'];
-
 /**
  * Tells whether a run leaves the alert state untouched.
  * @param row Finished run.
@@ -29,7 +26,7 @@ const MONITOR_ABORTS: readonly ErrorClass[] = ['monitor_stopped', 'monitor_resta
  */
 function isIgnored(row: RunRow): boolean {
   return row.status === 'skipped'
-    || (row.status === 'aborted' && row.errorClass !== undefined && MONITOR_ABORTS.includes(row.errorClass));
+    || isMonitorAbort(row);
 }
 
 /**

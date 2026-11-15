@@ -6,6 +6,8 @@ import type { NotificationChannel } from '../notifications/types.js';
 import type { ScenarioName } from '../scenarios/names.js';
 import type { AlertLevelState, DegradedCode, RunOutcome, RunRow, RunStatus, RunTrigger, SkipReason, StageRow } from './types.js';
 import { MS_PER_DAY } from '../time/units.js';
+import { isMonitorAbort, isVerdict } from './outcome.js';
+import type { VerdictOptions } from './outcome.js';
 
 /** Runs a listing returns when the caller gives no limit. */
 export const DEFAULT_LIST_LIMIT = 20;
@@ -13,7 +15,6 @@ const WINDOW_DAYS = 7;
 const SHORT_WINDOW_DAYS = 1;
 const P50 = 0.5;
 const P95 = 0.95;
-const MONITOR_ABORTS: readonly ErrorClass[] = ['monitor_stopped', 'monitor_restarted'];
 
 /** What `startRun` records. */
 export interface RunStart {
@@ -207,6 +208,13 @@ export interface History {
    * @returns Rows, newest first.
    */
   list(options: ListOptions): RunRow[];
+  /**
+   * Finds the newest run that carries a verdict.
+   * @param scenario Scenario whose runs are searched.
+   * @param options `aborts` also counts an abort that is not a stop or restart of the monitor.
+   * @returns The row, or undefined when no run has a verdict.
+   */
+  lastVerdict(scenario: ScenarioName, options?: VerdictOptions): RunRow | undefined;
   /**
    * Computes statistics.
    * @param now End of the windows.
@@ -442,7 +450,10 @@ export function createHistory(db: DatabaseSync): History {
       } else if (status === 'failed') {
         counts.failed += 1;
       } else if (status === 'aborted') {
-        counts[errorClass !== undefined && MONITOR_ABORTS.includes(errorClass) ? 'monitorAborts' : 'aborted'] += 1;
+        counts[isMonitorAbort({ status: 'aborted',
+          ...errorClass === undefined ? {} : { errorClass } })
+          ? 'monitorAborts'
+          : 'aborted'] += 1;
       } else if (status === 'skipped') {
         counts.skipped += 1;
       }
@@ -547,6 +558,23 @@ export function createHistory(db: DatabaseSync): History {
       : all('SELECT * FROM runs WHERE scenario = ? ORDER BY started_at DESC, id DESC LIMIT ?', options.scenario, options.limit);
 
     return rows.map(toRow);
+  };
+
+  const lastVerdict: History['lastVerdict'] = (scenario, options = {}) => {
+    const rows = db.prepare('SELECT * FROM runs WHERE scenario = ? AND status != \'running\' ORDER BY started_at DESC, id DESC').iterate(scenario);
+
+    for (const row of rows) {
+      const errorClass = text(row, 'error_class') as ErrorClass | undefined;
+      const skipReason = text(row, 'skip_reason') as SkipReason | undefined;
+
+      if (isVerdict({ status: required(row, 'status') as RunStatus,
+        ...errorClass === undefined ? {} : { errorClass },
+        ...skipReason === undefined ? {} : { skipReason } }, options)) {
+        return toRow(row);
+      }
+    }
+
+    return undefined;
   };
 
   const stats: History['stats'] = (now, scenarios) => {
@@ -684,6 +712,7 @@ export function createHistory(db: DatabaseSync): History {
     abortRunning,
     get,
     list,
+    lastVerdict,
     stats,
     markLateEvent,
     markLateNotification,
