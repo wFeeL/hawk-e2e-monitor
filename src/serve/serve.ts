@@ -25,6 +25,7 @@ import { LEASE_REFRESH_MS, liveLease, releaseLease, writeLease } from '../storag
 import { systemClock } from '../time/clock.js';
 import type { Clock } from '../time/clock.js';
 import { scenarioSettings } from '../config/scenario.js';
+import { SCENARIO_NAMES } from '../scenarios/names.js';
 import { createMetrics } from '../metrics/metrics.js';
 import { SERVICE_VERSION } from '../version.js';
 import { createServeHeartbeat } from './heartbeat-setup.js';
@@ -165,6 +166,18 @@ function createClients(config: Config, clock: Clock): HawkClients {
 }
 
 /**
+ * Deletes the runs and delivered alerts that are older than the retention of their scenario.
+ * @param history Store whose old rows go.
+ * @param config Validated configuration with the retention of each scenario.
+ * @param now Current time; the cutoff of a scenario is its retention before it.
+ */
+function pruneHistory(history: History, config: Config, now: Date): void {
+  for (const scenario of SCENARIO_NAMES) {
+    history.prune(new Date(now.getTime() - scenarioSettings(config, scenario).retentionDays * MS_PER_DAY).toISOString(), { scenario });
+  }
+}
+
+/**
  * Opens the history and names the file when that fails.
  * @param config Validated configuration.
  * @returns History over the opened database.
@@ -238,7 +251,7 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
       logger.warn('runs of an earlier process were still marked running', { aborted });
     }
 
-    history.prune(new Date(now.getTime() - monitoring.retentionDays * MS_PER_DAY).toISOString());
+    pruneHistory(history, config, now);
 
     const renew = (): void => {
       writeLease(history, { pid: identity.pid,
@@ -253,7 +266,7 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
         logger.error('could not renew the lease', { error });
       }),
       every(clock, MS_PER_DAY, background.signal, () => {
-        history.prune(new Date(clock.wallTime().getTime() - monitoring.retentionDays * MS_PER_DAY).toISOString());
+        pruneHistory(history, config, clock.wallTime());
       }, (error) => {
         logger.error('could not prune the history', { error });
       }),

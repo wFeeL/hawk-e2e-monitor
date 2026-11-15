@@ -25,6 +25,7 @@ const WATCHDOG_MS = 33_600;
 const CLEANUP_MS = 600;
 const SEND = 'send-and-receive-event';
 const NOTIFY = 'check-notification';
+const PROBE = 'endpoints-probe';
 
 /** A call of a fake runner. */
 interface Call extends ScenarioRunOptions {
@@ -65,7 +66,7 @@ interface Setup {
   /** Rows reported through `onRunFinished`. */
   finished: FinishedRow[];
   /** Fake runners by scenario. */
-  runners: Record<typeof NOTIFY | typeof SEND, FakeRunner>;
+  runners: Record<typeof NOTIFY | typeof PROBE | typeof SEND, FakeRunner>;
   /** The `exit` spy. */
   exit: ReturnType<typeof vi.fn<(code: number) => void>>;
   /** Configuration used. */
@@ -133,12 +134,14 @@ function setup(options: SetupOptions = {}): Setup {
       intervalMs: options.intervalMs ?? INTERVAL_MS,
       staggerMs: STAGGER_MS } };
   const runners = { [SEND]: fakeRunner(clock, SEND),
-    [NOTIFY]: fakeRunner(clock, NOTIFY) };
+    [NOTIFY]: fakeRunner(clock, NOTIFY),
+    [PROBE]: fakeRunner(clock, PROBE) };
   const finished: FinishedRow[] = [];
   const exit = vi.fn<(code: number) => void>();
   let counter = 0;
   const scheduler = createScheduler({ runners: { [SEND]: runners[SEND].run,
-    [NOTIFY]: runners[NOTIFY].run },
+    [NOTIFY]: runners[NOTIFY].run,
+    [PROBE]: runners[PROBE].run },
   history,
   clock,
   logger,
@@ -597,6 +600,35 @@ describe('failures of the runner', () => {
     }
 
     expect(runners[NOTIFY].calls.length).toBeGreaterThanOrEqual(3);
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it('good runs of the probe between three hung runs of another scenario do not reset the count', async () => {
+    const { scheduler, clock, runners, exit } = setup({ scenarios: [SEND, PROBE] });
+    const STEP_MS = 5000;
+
+    /**
+     * Moves the time on and ends the probe run that has started, as a probe that answers at once would.
+     * @param ms Time to move on.
+     */
+    const advance = async (ms: number): Promise<void> => {
+      for (let elapsed = 0; elapsed < ms; elapsed += STEP_MS) {
+        await clock.advance(STEP_MS);
+        runners[PROBE].calls.at(-1)?.resolve();
+        await settle(clock);
+      }
+    };
+
+    scheduler.start();
+    await settle(clock);
+
+    // The send scenario hangs at 0 s, 600 s and 1200 s and is abandoned 33.6 s later; the probe is good in between.
+    await advance(1200_000);
+    expect(exit).not.toHaveBeenCalled();
+    await advance(60_000);
+
+    expect(runners[PROBE].calls.length).toBeGreaterThan(12);
+    expect(exit).toHaveBeenCalledTimes(1);
     expect(exit).toHaveBeenCalledWith(1);
   });
 

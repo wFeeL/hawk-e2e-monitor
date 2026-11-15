@@ -40,5 +40,8 @@ export const SCENARIO_TRAITS: Readonly<Record<ScenarioName, ScenarioTraits>> = {
     hiddenByDefault: true },
 };
 
+/** Scenarios that `GET /runs` and `history` leave out unless one is named. */
+export const HIDDEN_SCENARIOS: readonly ScenarioName[] = SCENARIO_NAMES.filter(name => SCENARIO_TRAITS[name].hiddenByDefault);
+
 /** Scenarios that send test events. */
 export const EVENT_SCENARIOS: readonly ScenarioName[] = SCENARIO_NAMES.filter(name => SCENARIO_TRAITS[name].sendsEvents);

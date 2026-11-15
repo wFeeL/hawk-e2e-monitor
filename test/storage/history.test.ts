@@ -66,7 +66,7 @@ interface Stored {
   /** Id of the run. */
   runId: string;
   /** Scenario, `send-and-receive-event` by default. */
-  scenario?: 'check-notification' | 'send-and-receive-event';
+  scenario?: 'check-notification' | 'endpoints-probe' | 'send-and-receive-event';
   /** Run number, 1 by default. */
   sequence?: number;
   /** Start time, an hour before `NOW` by default. */
@@ -632,7 +632,88 @@ describe('alerts', () => {
   });
 });
 
+describe('list without scenarios', () => {
+  it('leaves out the scenarios in exceptScenarios and applies the limit to what is left', () => {
+    const history = memoryHistory();
+
+    store(history, { runId: 'raaaaaaaaaaaaaaaa',
+      startedAt: at(-3 * HOUR_MS) });
+    store(history, { runId: 'rbbbbbbbbbbbbbbbb',
+      scenario: 'endpoints-probe',
+      startedAt: at(-2 * HOUR_MS) });
+    store(history, { runId: 'rcccccccccccccccc',
+      scenario: 'endpoints-probe',
+      sequence: 2,
+      startedAt: at(-HOUR_MS) });
+
+    expect(history.list({ limit: 1,
+      exceptScenarios: ['endpoints-probe'] }).map(row => row.runId)).toEqual(['raaaaaaaaaaaaaaaa']);
+    expect(history.list({ limit: 10 }).map(row => row.runId)).toEqual(['rcccccccccccccccc', 'rbbbbbbbbbbbbbbbb', 'raaaaaaaaaaaaaaaa']);
+    expect(history.list({ limit: 10,
+      scenario: 'endpoints-probe',
+      exceptScenarios: ['check-notification'] })).toHaveLength(2);
+    expect(history.list({ limit: 10,
+      exceptScenarios: [] })).toHaveLength(3);
+  });
+});
+
 describe('prune', () => {
+  it('with a scenario removes only the old runs and the delivered alerts of that scenario', () => {
+    const history = memoryHistory();
+    const old = at(-10 * 24 * HOUR_MS);
+
+    store(history, { runId: 'raaaaaaaaaaaaaaaa',
+      startedAt: old });
+    store(history, { runId: 'rbbbbbbbbbbbbbbbb',
+      scenario: 'endpoints-probe',
+      startedAt: old });
+    store(history, { runId: 'rcccccccccccccccc',
+      scenario: 'endpoints-probe',
+      sequence: 2,
+      startedAt: at(-2 * 24 * HOUR_MS) });
+
+    for (const scenario of [SCENARIO, 'endpoints-probe'] as const) {
+      history.saveAlert({ scenario,
+        state: 'ok',
+        failureStreak: 0,
+        episodeFailures: 0,
+        degraded: [],
+        updatedAt: at(0) }, { text: scenario,
+        at: old });
+    }
+
+    history.alertAttempt(1, { sentAt: old });
+    history.alertAttempt(2, { sentAt: old });
+
+    expect(history.prune(at(-7 * 24 * HOUR_MS), { scenario: 'endpoints-probe' })).toBe(1);
+    expect(history.get('rbbbbbbbbbbbbbbbb')).toBeUndefined();
+    expect(history.get('rcccccccccccccccc')).toBeDefined();
+    expect(history.get('raaaaaaaaaaaaaaaa')).toBeDefined();
+    expect(history.pendingAlerts(at(HOUR_MS), 10)).toEqual([]);
+    expect(history.prune(at(-7 * 24 * HOUR_MS), { scenario: SCENARIO })).toBe(1);
+    expect(history.get('raaaaaaaaaaaaaaaa')).toBeUndefined();
+  });
+
+  it('keeps the delivered alerts of other scenarios when it prunes one scenario', () => {
+    const db = openDatabase(':memory:');
+    const history = createHistory(db);
+    const old = at(-10 * 24 * HOUR_MS);
+    const count = (): unknown => db.prepare('SELECT COUNT(*) AS n FROM alert_outbox').get();
+
+    history.saveAlert({ scenario: SCENARIO,
+      state: 'ok',
+      failureStreak: 0,
+      episodeFailures: 0,
+      degraded: [],
+      updatedAt: at(0) }, { text: 'send alert',
+      at: old });
+    history.alertAttempt(1, { sentAt: old });
+    history.prune(at(-7 * 24 * HOUR_MS), { scenario: 'endpoints-probe' });
+    expect(count()).toEqual({ n: 1 });
+    history.prune(at(-7 * 24 * HOUR_MS), { scenario: SCENARIO });
+    expect(count()).toEqual({ n: 0 });
+  });
+
   it('prune removes old runs with stages, finished outbox rows and keeps the rest', () => {
     const db = openDatabase(':memory:');
     const history = createHistory(db);

@@ -150,8 +150,16 @@ export type RunWithResult = RunRow & {
 export interface ListOptions {
   /** Only runs of this scenario. */
   scenario?: ScenarioName;
+  /** Leaves out the runs of these scenarios. */
+  exceptScenarios?: readonly ScenarioName[];
   /** Most rows to return. */
   limit: number;
+}
+
+/** What `prune` is limited to. */
+export interface PruneOptions {
+  /** Only runs and delivered alerts of this scenario; all of them by default. */
+  scenario?: ScenarioName;
 }
 
 /** A message to queue together with a state change. */
@@ -289,9 +297,10 @@ export interface History {
   /**
    * Deletes old data.
    * @param before ISO time.
+   * @param options Limits the deletion to one scenario.
    * @returns Number of runs deleted, those that finished before it; delivered or dropped alerts before it go too.
    */
-  prune(before: string): number;
+  prune(before: string, options?: PruneOptions): number;
   /** Closes the database. */
   close(): void;
 }
@@ -553,11 +562,15 @@ export function createHistory(db: DatabaseSync): History {
   };
 
   const list: History['list'] = (options) => {
-    const rows = options.scenario === undefined
-      ? all('SELECT * FROM runs ORDER BY started_at DESC, id DESC LIMIT ?', options.limit)
-      : all('SELECT * FROM runs WHERE scenario = ? ORDER BY started_at DESC, id DESC LIMIT ?', options.scenario, options.limit);
+    const except = options.exceptScenarios ?? [];
+    const filters = [
+      ...options.scenario === undefined ? [] : ['scenario = ?'],
+      ...except.length === 0 ? [] : [`scenario NOT IN (${except.map(() => '?').join(', ')})`],
+    ];
+    const where = filters.length === 0 ? '' : ` WHERE ${filters.join(' AND ')}`;
+    const params: SQLInputValue[] = [...options.scenario === undefined ? [] : [options.scenario], ...except, options.limit];
 
-    return rows.map(toRow);
+    return all(`SELECT * FROM runs${where} ORDER BY started_at DESC, id DESC LIMIT ?`, ...params).map(toRow);
   };
 
   const lastVerdict: History['lastVerdict'] = (scenario, options = {}) => {
@@ -690,11 +703,19 @@ export function createHistory(db: DatabaseSync): History {
     run('DELETE FROM kv WHERE key = ?', key);
   };
 
-  const prune: History['prune'] = (before) => {
+  const prune: History['prune'] = (before, options = {}) => {
     return transaction(() => {
-      const removed = run('DELETE FROM runs WHERE finished_at IS NOT NULL AND finished_at < ?', before);
+      if (options.scenario === undefined) {
+        const removed = run('DELETE FROM runs WHERE finished_at IS NOT NULL AND finished_at < ?', before);
 
-      run('DELETE FROM alert_outbox WHERE sent_at < ? OR dropped_at < ?', before, before);
+        run('DELETE FROM alert_outbox WHERE sent_at < ? OR dropped_at < ?', before, before);
+
+        return removed;
+      }
+
+      const removed = run('DELETE FROM runs WHERE scenario = ? AND finished_at IS NOT NULL AND finished_at < ?', options.scenario, before);
+
+      run('DELETE FROM alert_outbox WHERE scenario = ? AND (sent_at < ? OR dropped_at < ?)', options.scenario, before, before);
 
       return removed;
     });

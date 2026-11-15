@@ -95,7 +95,7 @@ function seed(fill: (history: History) => void): void {
  * @param scenario Scenario of the run.
  * @param hoursAgo Age of the start.
  */
-function store(history: History, runId: string, scenario: 'check-notification' | 'send-and-receive-event', hoursAgo: number): void {
+function store(history: History, runId: string, scenario: 'check-notification' | 'endpoints-probe' | 'send-and-receive-event', hoursAgo: number): void {
   const startedAt = new Date(NOW.getTime() - hoursAgo * 3_600_000).toISOString();
 
   history.startRun({ runId,
@@ -142,6 +142,24 @@ describe('runHistoryCommand', () => {
     expect(filtered.stdout.trimEnd().split('\n')).toHaveLength(2);
     expect((run({ ...LIST,
       limit: 1 })).stdout.trimEnd().split('\n')).toHaveLength(1);
+  });
+
+  it('leaves the probe out of the list unless it is named', () => {
+    seed((history) => {
+      store(history, 'raaaaaaaaaaaaaaaa', 'send-and-receive-event', 3);
+      store(history, 'rbbbbbbbbbbbbbbbb', 'endpoints-probe', 2);
+      store(history, 'rcccccccccccccccc', 'endpoints-probe', 1);
+    });
+
+    const ids = (command: HistoryCommand): string[] => run(command).stdout.trimEnd()
+      .split('\n')
+      .map(line => (JSON.parse(line) as RowShape).runId);
+
+    expect(ids(LIST)).toEqual(['raaaaaaaaaaaaaaaa']);
+    expect(ids({ ...LIST,
+      limit: 1 })).toEqual(['raaaaaaaaaaaaaaaa']);
+    expect(ids({ ...LIST,
+      scenario: 'endpoints-probe' })).toEqual(['rcccccccccccccccc', 'rbbbbbbbbbbbbbbbb']);
   });
 
   it('--stats prints one JSON array with a window per configured scenario', () => {

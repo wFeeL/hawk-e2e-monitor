@@ -714,6 +714,62 @@ describe('serve: the probe', () => {
   });
 });
 
+/**
+ * Stores a finished `ok` run that started some days ago.
+ * @param history History to write to.
+ * @param runId Id given to the run.
+ * @param scenario Scenario the run belongs to.
+ * @param daysAgo Age of the run.
+ */
+function seedRun(history: History, runId: string, scenario: typeof NOTIFY | typeof PROBE | typeof SEND, daysAgo: number): void {
+  const startedAt = new Date(Date.now() - daysAgo * 86_400_000).toISOString();
+
+  history.startRun({ runId,
+    scenario,
+    sequence: 1,
+    trigger: 'schedule',
+    startedAt });
+  history.finishRun(runId, { status: 'ok',
+    finishedAt: startedAt,
+    durationMs: 10,
+    degraded: [] });
+}
+
+describe('serve: the probe in the history', () => {
+  it('GET /runs leaves the probe out unless it is named', async () => {
+    const harness = await launch({ intervalMs: 600_000,
+      seed: (history) => {
+        seedRun(history, 'rsendsendsendsend', SEND, 0.01);
+        seedRun(history, 'rprobeprobeprobep', PROBE, 0.005);
+      } });
+
+    await vi.waitFor(() => {
+      expect(finishedRows(harness)).not.toHaveLength(0);
+    }, WAIT);
+
+    const all = await (await get(harness, '/runs')).json() as RunRow[];
+    const probes = await (await get(harness, `/runs?scenario=${PROBE}`)).json() as RunRow[];
+
+    expect(all.map(row => row.scenario)).not.toContain(PROBE);
+    expect(all.map(row => row.runId)).toContain('rsendsendsendsend');
+    expect(probes.map(row => row.runId)).toEqual(['rprobeprobeprobep']);
+  });
+
+  it('keeps the probe for its own retention and the other scenarios for theirs, pruning at the start', async () => {
+    const harness = await launch({ intervalMs: 600_000,
+      seed: (history) => {
+        seedRun(history, 'rprobeoldoldoldo', PROBE, 8);
+        seedRun(history, 'rprobenewnewnewn', PROBE, 3);
+        seedRun(history, 'rsendeightdayold', SEND, 8);
+        seedRun(history, 'rsendfortydayold', SEND, 40);
+      } });
+    const kept = inspect(harness, history => ['rprobeoldoldoldo', 'rprobenewnewnewn', 'rsendeightdayold', 'rsendfortydayold']
+      .filter(runId => history.get(runId) !== undefined));
+
+    expect(kept).toEqual(['rprobenewnewnewn', 'rsendeightdayold']);
+  });
+});
+
 describe('serve: manual runs', () => {
   const RUN_TOKEN = 'serve-run-token-0123456789-0123456789';
   const bearer = Object.fromEntries([['authorization', `Bearer ${RUN_TOKEN}`]]);

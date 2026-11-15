@@ -102,6 +102,14 @@ describe('heartbeatReason', () => {
       lastVerdictAt: () => NOW - MINUTE_MS }))).toContain(NOTIFY);
   });
 
+  it('does not ask the probe for a verdict', () => {
+    const input = healthy({ scenarios: [SEND, 'endpoints-probe'],
+      lastVerdictAt: scenario => scenario === 'endpoints-probe' ? undefined : NOW,
+      startedWallMs: NOW - 1000 * MINUTE_MS });
+
+    expect(heartbeatReason(input)).toBeUndefined();
+  });
+
   it('names alerts that are not delivered: a backlog over 30 minutes or 3 rejections in a row', () => {
     const limit = 30 * MINUTE_MS;
 

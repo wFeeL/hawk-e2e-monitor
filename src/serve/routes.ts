@@ -5,7 +5,7 @@ import type { RouteHandler } from '../http/internal-server.js';
 import { sendJson, sendText } from '../http/respond.js';
 import type { MonitorMetrics } from '../metrics/metrics.js';
 import { manualRunHandler } from './manual-runs.js';
-import { SCENARIO_NAMES } from '../scenarios/names.js';
+import { HIDDEN_SCENARIOS, SCENARIO_NAMES } from '../scenarios/names.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import { DEFAULT_LIST_LIMIT } from '../storage/history.js';
 import type { History, ListOptions } from '../storage/history.js';
@@ -80,7 +80,9 @@ function listRuns(deps: RouteDeps): RouteHandler {
 
     const options: ListOptions = { limit };
 
-    if (scenario !== undefined) {
+    if (scenario === undefined) {
+      options.exceptScenarios = HIDDEN_SCENARIOS;
+    } else {
       options.scenario = scenario;
     }
 

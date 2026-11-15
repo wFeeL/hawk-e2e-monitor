@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EVENT_SCENARIOS, SCENARIO_NAMES, SCENARIO_TRAITS } from '../../src/scenarios/names.js';
+import { EVENT_SCENARIOS, HIDDEN_SCENARIOS, SCENARIO_NAMES, SCENARIO_TRAITS } from '../../src/scenarios/names.js';
 
 describe('SCENARIO_TRAITS', () => {
   it('has a row for every scenario name', () => {
@@ -11,6 +11,10 @@ describe('SCENARIO_TRAITS', () => {
     expect(SCENARIO_TRAITS['endpoints-probe']).toEqual({ sendsEvents: false,
       inHeartbeat: false,
       hiddenByDefault: true });
+  });
+
+  it('derives the scenarios hidden by default from the table', () => {
+    expect(HIDDEN_SCENARIOS).toEqual(['endpoints-probe']);
   });
 
   it('derives the event scenarios from the table', () => {
