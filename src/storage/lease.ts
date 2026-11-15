@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { openDatabase } from './database.js';
+import { EmptyDatabaseError, openDatabase } from './database.js';
 import { createHistory } from './history.js';
 import type { History } from './history.js';
 
@@ -195,27 +195,61 @@ export function liveLease(history: History, now: Date): Lease | undefined {
   return lease !== undefined && now.getTime() - Date.parse(lease.at) < LEASE_TTL_MS ? lease : undefined;
 }
 
+/** No `serve` holds the database. */
+export interface ServeLeaseNone {
+  /** Discriminant. */
+  kind: 'none';
+}
+
+/** A live `serve` holds the database. */
+export interface ServeLeaseLive {
+  /** Discriminant. */
+  kind: 'live';
+  /** The live lease. */
+  lease: Lease;
+}
+
+/** The file exists but cannot be read, so nothing is known about `serve`. */
+export interface ServeLeaseUnreadable {
+  /** Discriminant. */
+  kind: 'unreadable';
+  /** Reason from the open or the read. */
+  error: string;
+}
+
+/** What a CLI command learns about `serve` from the database file. */
+export type ServeLeaseLookup = ServeLeaseLive | ServeLeaseNone | ServeLeaseUnreadable;
+
 /**
  * Looks for a running `serve` from a CLI command.
- * Opens the database read-only and only when the file exists; anything unreadable counts as no lease.
+ * Opens the database read-only and only when the file exists. A missing file or one without a schema
+ * (`serve` writes the schema before the lease) holds no lease; any other failure is reported, not guessed.
  * @param databasePath Path of the history file.
  * @param now Current wall-clock time.
- * @returns The live lease, or undefined.
+ * @returns The live lease, no lease, or the reason the file could not be read.
  */
-export function serveLeaseOf(databasePath: string, now: Date): Lease | undefined {
+export function serveLeaseOf(databasePath: string, now: Date): ServeLeaseLookup {
   if (!existsSync(databasePath)) {
-    return undefined;
+    return { kind: 'none' };
   }
 
   try {
     const history = createHistory(openDatabase(databasePath, { readOnly: true }));
 
     try {
-      return liveLease(history, now);
+      const lease = liveLease(history, now);
+
+      return lease === undefined
+        ? { kind: 'none' }
+        : { kind: 'live',
+            lease };
     } finally {
       history.close();
     }
-  } catch {
-    return undefined;
+  } catch (error) {
+    return error instanceof EmptyDatabaseError
+      ? { kind: 'none' }
+      : { kind: 'unreadable',
+          error: error instanceof Error ? error.message : String(error) };
   }
 }

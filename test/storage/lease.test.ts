@@ -207,17 +207,27 @@ describe('serveLeaseOf', () => {
   it('finds a live lease in the file and leaves the file as it was', () => {
     seedLease(database.path, LEASE);
 
-    expect(serveLeaseOf(database.path, later(1000))).toEqual(LEASE);
-    expect(serveLeaseOf(database.path, later(LEASE_TTL_MS + 1))).toBeUndefined();
+    expect(serveLeaseOf(database.path, later(1000))).toEqual({ kind: 'live',
+      lease: LEASE });
+    expect(serveLeaseOf(database.path, later(LEASE_TTL_MS + 1))).toEqual({ kind: 'none' });
   });
 
   it('does not create a missing file', () => {
-    expect(serveLeaseOf(database.path, NOW)).toBeUndefined();
+    expect(serveLeaseOf(database.path, NOW)).toEqual({ kind: 'none' });
     expect(existsSync(database.path)).toBe(false);
   });
 
-  it('treats an unreadable file as no lease', async () => {
+  it('treats a file of 0 bytes as no lease, because serve always writes the schema first', async () => {
+    await writeFile(database.path, '');
+    expect(serveLeaseOf(database.path, NOW)).toEqual({ kind: 'none' });
+  });
+
+  it('reports a file that is not a database as unreadable with the reason', async () => {
     await writeFile(database.path, 'this is not a database');
-    expect(serveLeaseOf(database.path, NOW)).toBeUndefined();
+
+    const lookup = serveLeaseOf(database.path, NOW);
+
+    expect(lookup.kind).toBe('unreadable');
+    expect(lookup).toMatchObject({ error: expect.stringMatching(/\S/u) as string });
   });
 });
