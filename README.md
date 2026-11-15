@@ -82,7 +82,8 @@ of the project that would catch the monitor's titles is reported as degraded
 (`grouping_pattern`).
 
 - **Threshold rule.** check-notification keeps a second notification rule for
-  the instance: "seen more than 2 times in an hour". On repeat runs
+  the instance: Hawk sends it on the second event of the same error within an
+  hour. On repeat runs
   (`REPEAT_EVERY_N_RUNS`) the stage `threshold_formed` waits for exactly one
   threshold webhook after the repeat. A threshold webhook before the repeat
   fails the run with `threshold_early`.
@@ -185,8 +186,14 @@ With `ALERT_NOTIFY_URL` empty, alerts go to the log only.
 - A run cut short by a restart of the monitor is recorded as aborted with
   `monitor_restarted`, a run cut short by `docker compose stop` as
   `monitor_stopped`. Neither counts as a failure of Hawk.
-- A run that does not finish within `RUN_TIMEOUT_MS + CLEANUP_TIMEOUT_MS +
-  WATCHDOG_GRACE_MS` is cancelled and recorded as `run_hung`. After three such
+- A run of send-and-receive-event or check-notification that does not finish
+  within `RUN_TIMEOUT_MS + CLEANUP_TIMEOUT_MS + WATCHDOG_GRACE_MS` is cancelled
+  and recorded as `run_hung`. For the other scenarios the limit is the sum of
+  the timeouts of their own stages plus `CLEANUP_TIMEOUT_MS` and
+  `WATCHDOG_GRACE_MS`. `RUN_TIMEOUT_MS` must cover all stages of
+  check-notification, including the threshold stage
+  (`NOTIFICATION_TIMEOUT_MS + HTTP_TIMEOUT_MS`); the configuration check names
+  the sum when it does not. After three such
   runs of one scenario in a row the process exits and the container restart
   policy starts it again.
 - Restarts and deploys of Hawk show up as failed runs with the stage and the
