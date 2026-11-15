@@ -69,5 +69,52 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  prometheus:
+    profiles: [observability]
+    image: docker.io/prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+    volumes:
+      - ./deploy/prometheus:/etc/prometheus:ro,Z
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    restart: unless-stopped
+    logging: *logging
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  grafana:
+    profiles: [observability]
+    image: docker.io/grafana/grafana:13.2.6@sha256:b21409d7951ddcfd63a4b49083e4ef2cc35bc1437d071813bf82bfb238b00bca
+    env_file:
+      - path: .env.grafana
+        required: false
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    # Refuse to start with the default password when .env.grafana is missing.
+    entrypoint: ["/bin/sh", "-c", "[ -n \"$$GF_SECURITY_ADMIN_PASSWORD\" ] || { echo 'GF_SECURITY_ADMIN_PASSWORD is empty: copy grafana.env.example to .env.grafana' >&2; exit 1; }; exec /run.sh"]
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro,Z
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro,Z
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    restart: unless-stopped
+    logging: *logging
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   monitor-data:
+  prometheus-data:
+  grafana-data:
