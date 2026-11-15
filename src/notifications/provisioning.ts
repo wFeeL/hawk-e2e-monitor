@@ -337,26 +337,30 @@ export function createProvisioner(deps: ProvisionerDeps): Provisioner {
     }
   };
 
+  const provision: Provisioner['provision'] = async (address, signal) => {
+    const { difference, ...result } = await decide(address, signal);
+
+    if (result.matchChanged) {
+      markMatchChange();
+    }
+
+    const repeated = result.matchChanged && previousMatchChanged;
+
+    previousMatchChanged = result.matchChanged;
+
+    if (repeated) {
+      throw new CheckError('provisioning_unstable', { detail: difference ?? CREATED_AGAIN });
+    }
+
+    return result;
+  };
+
+  const warmupRemainingMs: Provisioner['warmupRemainingMs'] = () => {
+    return lastMatchChangeAtMs === undefined ? 0 : Math.max(0, deps.warmupMs - (clock.monotonicMs() - lastMatchChangeAtMs));
+  };
+
   return {
-    async provision(address, signal) {
-      const { difference, ...result } = await decide(address, signal);
-
-      if (result.matchChanged) {
-        markMatchChange();
-      }
-
-      const repeated = result.matchChanged && previousMatchChanged;
-
-      previousMatchChanged = result.matchChanged;
-
-      if (repeated) {
-        throw new CheckError('provisioning_unstable', { detail: difference ?? CREATED_AGAIN });
-      }
-
-      return result;
-    },
-    warmupRemainingMs() {
-      return lastMatchChangeAtMs === undefined ? 0 : Math.max(0, deps.warmupMs - (clock.monotonicMs() - lastMatchChangeAtMs));
-    },
+    provision,
+    warmupRemainingMs,
   };
 }

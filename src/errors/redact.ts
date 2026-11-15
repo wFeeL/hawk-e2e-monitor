@@ -46,11 +46,13 @@ export interface MutableRedactor {
 export function createMutableRedactor(secrets: readonly string[]): MutableRedactor {
   const known = [...secrets];
 
+  const add: MutableRedactor['add'] = (secret) => {
+    known.push(secret);
+  };
+
   return {
     redact: text => createRedactor(known)(text),
-    add: (secret) => {
-      known.push(secret);
-    },
+    add,
   };
 }
 

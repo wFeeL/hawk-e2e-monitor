@@ -151,18 +151,26 @@ export function createLogger(options: LoggerOptions): Logger {
     }
   };
 
+  const debug: Logger['debug'] = (msg, fields) => {
+    log('debug', msg, fields);
+  };
+
+  const info: Logger['info'] = (msg, fields) => {
+    log('info', msg, fields);
+  };
+
+  const warn: Logger['warn'] = (msg, fields) => {
+    log('warn', msg, fields);
+  };
+
+  const error: Logger['error'] = (msg, fields) => {
+    log('error', msg, fields);
+  };
+
   return {
-    debug: (msg, fields) => {
-      log('debug', msg, fields);
-    },
-    info: (msg, fields) => {
-      log('info', msg, fields);
-    },
-    warn: (msg, fields) => {
-      log('warn', msg, fields);
-    },
-    error: (msg, fields) => {
-      log('error', msg, fields);
-    },
+    debug,
+    info,
+    warn,
+    error,
   };
 }

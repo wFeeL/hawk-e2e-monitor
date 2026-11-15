@@ -569,81 +569,95 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     });
   };
 
+  const start: Scheduler['start'] = () => {
+    if (started) {
+      return;
+    }
+
+    started = true;
+    startedMono = clock.monotonicMs();
+    selfCheck();
+
+    for (const state of states.values()) {
+      firstTick(state).catch((error: unknown) => {
+        logger.error('first tick failed', { scenario: state.name,
+          error });
+      });
+    }
+  };
+
+  const stop: Scheduler['stop'] = async () => {
+    if (stopped) {
+      return;
+    }
+
+    stopped = true;
+    stopper.abort();
+
+    for (const state of states.values()) {
+      state.timer?.abort();
+
+      const handle = state.running;
+
+      if (handle !== undefined && !handle.finished) {
+        handle.abandoned = true;
+        handle.timers.abort();
+        handle.controller.abort();
+        finish(state, handle, abortedOutcome('monitor_stopped', {}, wallIso(), clock.monotonicMs() - handle.startedMono));
+      }
+
+      handle?.timers.abort();
+      state.running = undefined;
+    }
+
+    await Promise.resolve();
+  };
+
+  const runNow: Scheduler['runNow'] = (scenario, trigger) => {
+    const state = states.get(scenario);
+
+    if (state === undefined) {
+      throw new Error(`Scenario ${scenario} is not scheduled`);
+    }
+
+    if (state.running !== undefined) {
+      return { started: false,
+        runningRunId: state.running.start.runId };
+    }
+
+    return startRun(state, trigger);
+  };
+
+  const status: Scheduler['status'] = () => {
+    return [...states.values()].map(state => ({ scenario: state.name,
+      ...state.lastTickAt === undefined ? {} : { lastTickAt: state.lastTickAt },
+      ...state.lastTickMono === undefined ? {} : { lastTickMonoMs: state.lastTickMono },
+      ...state.running === undefined ? {} : { runningRunId: state.running.start.runId },
+      storageFailed }));
+  };
+
+  const healthy: Scheduler['healthy'] = (nowMonoMs) => {
+    const health = evaluate(nowMonoMs ?? clock.monotonicMs());
+
+    return health.scheduler && health.storage;
+  };
+
+  const health: Scheduler['health'] = (nowMonoMs) => {
+    return evaluate(nowMonoMs ?? clock.monotonicMs());
+  };
+
+  const activeRunIds: Scheduler['activeRunIds'] = () => {
+    return new Set([...states.values()].flatMap(state => state.running === undefined ? [] : [state.running.start.runId]));
+  };
+
   return {
-    start() {
-      if (started) {
-        return;
-      }
-
-      started = true;
-      startedMono = clock.monotonicMs();
-      selfCheck();
-
-      for (const state of states.values()) {
-        firstTick(state).catch((error: unknown) => {
-          logger.error('first tick failed', { scenario: state.name,
-            error });
-        });
-      }
-    },
-    async stop() {
-      if (stopped) {
-        return;
-      }
-
-      stopped = true;
-      stopper.abort();
-
-      for (const state of states.values()) {
-        state.timer?.abort();
-
-        const handle = state.running;
-
-        if (handle !== undefined && !handle.finished) {
-          handle.abandoned = true;
-          handle.timers.abort();
-          handle.controller.abort();
-          finish(state, handle, abortedOutcome('monitor_stopped', {}, wallIso(), clock.monotonicMs() - handle.startedMono));
-        }
-
-        handle?.timers.abort();
-        state.running = undefined;
-      }
-
-      await Promise.resolve();
-    },
-    runNow(scenario, trigger) {
-      const state = states.get(scenario);
-
-      if (state === undefined) {
-        throw new Error(`Scenario ${scenario} is not scheduled`);
-      }
-
-      if (state.running !== undefined) {
-        return { started: false,
-          runningRunId: state.running.start.runId };
-      }
-
-      return startRun(state, trigger);
-    },
-    status() {
-      return [...states.values()].map(state => ({ scenario: state.name,
-        ...state.lastTickAt === undefined ? {} : { lastTickAt: state.lastTickAt },
-        ...state.lastTickMono === undefined ? {} : { lastTickMonoMs: state.lastTickMono },
-        ...state.running === undefined ? {} : { runningRunId: state.running.start.runId },
-        storageFailed }));
-    },
-    healthy(nowMonoMs) {
-      const health = evaluate(nowMonoMs ?? clock.monotonicMs());
-
-      return health.scheduler && health.storage;
-    },
-    health(nowMonoMs) {
-      return evaluate(nowMonoMs ?? clock.monotonicMs());
-    },
-    activeRunIds() {
-      return new Set([...states.values()].flatMap(state => state.running === undefined ? [] : [state.running.start.runId]));
-    },
+    start,
+    stop,
+    runNow,
+    status,
+    healthy,
+    health,
+    activeRunIds,
     failures: () => writeFailures,
   };
 }

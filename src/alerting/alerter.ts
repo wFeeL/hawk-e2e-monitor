@@ -260,106 +260,114 @@ export function createAlerter(deps: AlerterDeps): Alerter {
     }
   };
 
-  return {
-    onRunFinished(row, result) {
+  const onRunFinished: Alerter['onRunFinished'] = (row, result) => {
+    try {
+      const now = nowIso();
+      let kind: AlertKind | undefined;
+      let text: string | undefined;
+
       try {
-        const now = nowIso();
-        let kind: AlertKind | undefined;
-        let text: string | undefined;
+        const previous = memory.get(row.scenario) ?? history.alertState(row.scenario);
+        const decision = decideAlert(previous, row, monitoring, now);
+
+        kind = decision.kind;
+        memory.set(row.scenario, decision.state);
+
+        if (kind !== undefined) {
+          text = alertText({ kind,
+            instanceId: config.instanceId,
+            scenario: row.scenario,
+            row,
+            state: decision.state,
+            ...result === undefined ? {} : { result },
+            now }, redact);
+        }
 
         try {
-          const previous = memory.get(row.scenario) ?? history.alertState(row.scenario);
-          const decision = decideAlert(previous, row, monitoring, now);
-
-          kind = decision.kind;
-          memory.set(row.scenario, decision.state);
-
-          if (kind !== undefined) {
-            text = alertText({ kind,
-              instanceId: config.instanceId,
-              scenario: row.scenario,
-              row,
-              state: decision.state,
-              ...result === undefined ? {} : { result },
-              now }, redact);
+          if (decision.state !== previous) {
+            history.saveAlert(decision.state, text === undefined
+              ? undefined
+              : { text,
+                  runId: row.runId,
+                  at: now });
           }
 
-          try {
-            if (decision.state !== previous) {
-              history.saveAlert(decision.state, text === undefined
-                ? undefined
-                : { text,
-                    runId: row.runId,
-                    at: now });
-            }
-
-            storageWorked();
-          } catch (error) {
-            storageFailed(error, 'save');
-
-            if (text !== undefined) {
-              sendAfterStorageFailure(text, row.scenario, error);
-            }
-
-            return kind;
-          }
+          storageWorked();
         } catch (error) {
-          storageFailed(error, 'read');
+          storageFailed(error, 'save');
+
+          if (text !== undefined) {
+            sendAfterStorageFailure(text, row.scenario, error);
+          }
 
           return kind;
         }
-
-        if (kind !== undefined) {
-          requestFlush();
-        }
+      } catch (error) {
+        storageFailed(error, 'read');
 
         return kind;
-      } catch (error) {
-        logger.error('alerter failed', { error });
-
-        return undefined;
-      }
-    },
-    flush,
-    start() {
-      if (started) {
-        return;
       }
 
-      started = true;
-      loop = (async (): Promise<void> => {
-        for (;;) {
-          try {
-            await clock.sleep(monitoring.alertRetryMs, stopper.signal);
-          } catch {
-            return;
-          }
+      if (kind !== undefined) {
+        requestFlush();
+      }
 
-          requestFlush();
+      return kind;
+    } catch (error) {
+      logger.error('alerter failed', { error });
+
+      return undefined;
+    }
+  };
+
+  const start: Alerter['start'] = () => {
+    if (started) {
+      return;
+    }
+
+    started = true;
+    loop = (async (): Promise<void> => {
+      for (;;) {
+        try {
+          await clock.sleep(monitoring.alertRetryMs, stopper.signal);
+        } catch {
+          return;
         }
-      })();
-    },
-    async stop() {
-      stopper.abort();
-      await loop;
-      await flushing?.catch(() => undefined);
-      await direct;
-    },
-    health() {
-      let backlogAgeMs: number | null = null;
 
-      try {
-        const oldest = history.oldestUnsentAlert();
-
-        backlogAgeMs = oldest === undefined ? null : Date.parse(nowIso()) - Date.parse(oldest);
-      } catch (error) {
-        storageFailed(error, 'health');
+        requestFlush();
       }
+    })();
+  };
 
-      return { backlogAgeMs,
-        rejectedInRow,
-        storageFailing };
-    },
+  const stop: Alerter['stop'] = async () => {
+    stopper.abort();
+    await loop;
+    await flushing?.catch(() => undefined);
+    await direct;
+  };
+
+  const health: Alerter['health'] = () => {
+    let backlogAgeMs: number | null = null;
+
+    try {
+      const oldest = history.oldestUnsentAlert();
+
+      backlogAgeMs = oldest === undefined ? null : Date.parse(nowIso()) - Date.parse(oldest);
+    } catch (error) {
+      storageFailed(error, 'health');
+    }
+
+    return { backlogAgeMs,
+      rejectedInRow,
+      storageFailing };
+  };
+
+  return {
+    onRunFinished,
+    flush,
+    start,
+    stop,
+    health,
     failures: () => storageFailures,
   };
 }

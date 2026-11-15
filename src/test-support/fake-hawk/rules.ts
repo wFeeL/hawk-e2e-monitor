@@ -343,66 +343,74 @@ export function createFakeRules(options: FakeRulesOptions, newId: () => string =
     return rule;
   };
 
+  const create: FakeRules['create'] = (projectId, input) => {
+    const record = asRecord(input);
+
+    if (record === undefined) {
+      return badInput('input must be an object');
+    }
+
+    const built = build('', record);
+
+    if ('code' in built) {
+      return built;
+    }
+
+    // The id is taken after the checks, so a refused rule does not use one up.
+    built.id = newId();
+    rulesOf(projectId).unshift(built);
+    changed(projectId);
+
+    return structuredClone(built);
+  };
+
+  const update: FakeRules['update'] = (projectId, input) => {
+    const record = asRecord(input);
+
+    if (record === undefined || typeof record.ruleId !== 'string') {
+      return badInput('input must be an object with a ruleId');
+    }
+
+    const built = build(record.ruleId, record);
+
+    if ('code' in built) {
+      return built;
+    }
+
+    const rules = rulesOf(projectId);
+    const index = rules.findIndex(rule => rule.id === built.id);
+
+    if (index === -1) {
+      return null;
+    }
+
+    rules[index] = built;
+    changed(projectId);
+
+    return structuredClone(built);
+  };
+
+  const remove: FakeRules['remove'] = (projectId, ruleId) => {
+    const rules = rulesOf(projectId);
+    const index = rules.findIndex(rule => rule.id === ruleId);
+
+    if (index !== -1) {
+      rules.splice(index, 1);
+      changed(projectId);
+    }
+  };
+
+  const seed: FakeRules['seed'] = (projectId, rule) => {
+    rulesOf(projectId).unshift(structuredClone(rule));
+    changed(projectId);
+  };
+
   return {
     list: projectId => structuredClone(rulesOf(projectId)),
-    create(projectId, input) {
-      const record = asRecord(input);
-
-      if (record === undefined) {
-        return badInput('input must be an object');
-      }
-
-      const built = build('', record);
-
-      if ('code' in built) {
-        return built;
-      }
-
-      // The id is taken after the checks, so a refused rule does not use one up.
-      built.id = newId();
-      rulesOf(projectId).unshift(built);
-      changed(projectId);
-
-      return structuredClone(built);
-    },
-    update(projectId, input) {
-      const record = asRecord(input);
-
-      if (record === undefined || typeof record.ruleId !== 'string') {
-        return badInput('input must be an object with a ruleId');
-      }
-
-      const built = build(record.ruleId, record);
-
-      if ('code' in built) {
-        return built;
-      }
-
-      const rules = rulesOf(projectId);
-      const index = rules.findIndex(rule => rule.id === built.id);
-
-      if (index === -1) {
-        return null;
-      }
-
-      rules[index] = built;
-      changed(projectId);
-
-      return structuredClone(built);
-    },
-    remove(projectId, ruleId) {
-      const rules = rulesOf(projectId);
-      const index = rules.findIndex(rule => rule.id === ruleId);
-
-      if (index !== -1) {
-        rules.splice(index, 1);
-        changed(projectId);
-      }
-    },
-    seed(projectId, rule) {
-      rulesOf(projectId).unshift(structuredClone(rule));
-      changed(projectId);
-    },
+    create,
+    update,
+    remove,
+    seed,
     version: projectId => versions.get(projectId) ?? 0,
   };
 }

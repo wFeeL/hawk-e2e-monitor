@@ -128,74 +128,82 @@ export function createFakeStore(newId: () => string = objectIdLike): FakeStore {
     return events;
   };
 
+  const ingest: FakeStore['ingest'] = (projectId, catcherType, payload) => {
+    const events = eventsOf(projectId);
+    const groupHash = createHash('sha256').update(catcherType + titleOf(payload))
+      .digest('hex');
+    const existing = [...events.values()].find(event => event.groupHash === groupHash);
+
+    if (existing) {
+      const repetitionId = newId();
+
+      existing.totalCount += 1;
+      existing.repetitionIds.push(repetitionId);
+      existing.lastRepetitionId = repetitionId;
+      announce(projectId, existing, false);
+
+      return existing;
+    }
+
+    const created: StoredEvent = {
+      id: newId(),
+      groupHash,
+      totalCount: 1,
+      catcherType,
+      payload,
+      repetitionIds: [],
+      lastRepetitionId: undefined,
+      timestamp: Math.floor(Date.now() / MS_PER_SECOND),
+    };
+
+    events.set(created.id, created);
+    announce(projectId, created, true);
+
+    return created;
+  };
+
+  const search: FakeStore['search'] = (projectId, text) => {
+    const needle = text.slice(0, SEARCH_LIMIT).toLowerCase();
+
+    return [...eventsOf(projectId).values()].filter((event) => {
+      const { context } = event.payload;
+      const haystacks = [titleOf(event.payload)];
+
+      if (context !== undefined) {
+        haystacks.push(JSON.stringify(context));
+      }
+
+      return haystacks.some(haystack => haystack.toLowerCase().includes(needle));
+    });
+  };
+
+  const setTimestamp: FakeStore['setTimestamp'] = (projectId, eventId, seconds) => {
+    const event = eventsOf(projectId).get(eventId);
+
+    if (event === undefined) {
+      return false;
+    }
+
+    event.timestamp = seconds;
+
+    return true;
+  };
+
+  const subscribe: FakeStore['subscribe'] = (listener) => {
+    listeners.add(listener);
+
+    return () => {
+      listeners.delete(listener);
+    };
+  };
+
   return {
-    ingest(projectId, catcherType, payload) {
-      const events = eventsOf(projectId);
-      const groupHash = createHash('sha256').update(catcherType + titleOf(payload))
-        .digest('hex');
-      const existing = [...events.values()].find(event => event.groupHash === groupHash);
-
-      if (existing) {
-        const repetitionId = newId();
-
-        existing.totalCount += 1;
-        existing.repetitionIds.push(repetitionId);
-        existing.lastRepetitionId = repetitionId;
-        announce(projectId, existing, false);
-
-        return existing;
-      }
-
-      const created: StoredEvent = {
-        id: newId(),
-        groupHash,
-        totalCount: 1,
-        catcherType,
-        payload,
-        repetitionIds: [],
-        lastRepetitionId: undefined,
-        timestamp: Math.floor(Date.now() / MS_PER_SECOND),
-      };
-
-      events.set(created.id, created);
-      announce(projectId, created, true);
-
-      return created;
-    },
-    search(projectId, text) {
-      const needle = text.slice(0, SEARCH_LIMIT).toLowerCase();
-
-      return [...eventsOf(projectId).values()].filter((event) => {
-        const { context } = event.payload;
-        const haystacks = [titleOf(event.payload)];
-
-        if (context !== undefined) {
-          haystacks.push(JSON.stringify(context));
-        }
-
-        return haystacks.some(haystack => haystack.toLowerCase().includes(needle));
-      });
-    },
-    setTimestamp(projectId, eventId, seconds) {
-      const event = eventsOf(projectId).get(eventId);
-
-      if (event === undefined) {
-        return false;
-      }
-
-      event.timestamp = seconds;
-
-      return true;
-    },
+    ingest,
+    search,
+    setTimestamp,
     get: (projectId, eventId) => eventsOf(projectId).get(eventId),
     remove: (projectId, eventId) => eventsOf(projectId).delete(eventId),
     all: projectId => [...eventsOf(projectId).values()],
-    subscribe(listener) {
-      listeners.add(listener);
-
-      return () => {
-        listeners.delete(listener);
-      };
-    },
+    subscribe,
   };
 }

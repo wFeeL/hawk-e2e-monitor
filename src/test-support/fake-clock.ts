@@ -59,45 +59,49 @@ export function createFakeClock(start: FakeClockStart = {}): FakeClock {
 
   const earliest = (): Sleeper | undefined => [...sleepers].sort((a, b) => a.wake - b.wake || a.seq - b.seq)[0];
 
+  const sleep: FakeClock['sleep'] = async (ms, signal) => new Promise<void>((resolve, reject) => {
+    if (signal?.aborted === true) {
+      reject(new DOMException('The operation was aborted', 'AbortError'));
+
+      return;
+    }
+
+    seq += 1;
+    const sleeper: Sleeper = { wake: now + Math.max(ms, 0),
+      seq,
+      resolve: () => {
+        signal?.removeEventListener('abort', sleeper.abort);
+        resolve();
+      },
+      abort: () => {
+        sleepers.delete(sleeper);
+        reject(new DOMException('The operation was aborted', 'AbortError'));
+      } };
+
+    signal?.addEventListener('abort', sleeper.abort, { once: true });
+    sleepers.add(sleeper);
+  });
+
+  const advance: FakeClock['advance'] = async (ms) => {
+    const target = now + ms;
+
+    await flush();
+
+    for (let next = earliest(); next !== undefined && next.wake <= target; next = earliest()) {
+      sleepers.delete(next);
+      now = Math.max(now, next.wake);
+      next.resolve();
+      await flush();
+    }
+
+    now = target;
+  };
+
   return {
     monotonicMs: () => now,
     wallTime: () => new Date(startWall + (now - startMonotonic)),
-    sleep: async (ms, signal) => new Promise<void>((resolve, reject) => {
-      if (signal?.aborted === true) {
-        reject(new DOMException('The operation was aborted', 'AbortError'));
-
-        return;
-      }
-
-      seq += 1;
-      const sleeper: Sleeper = { wake: now + Math.max(ms, 0),
-        seq,
-        resolve: () => {
-          signal?.removeEventListener('abort', sleeper.abort);
-          resolve();
-        },
-        abort: () => {
-          sleepers.delete(sleeper);
-          reject(new DOMException('The operation was aborted', 'AbortError'));
-        } };
-
-      signal?.addEventListener('abort', sleeper.abort, { once: true });
-      sleepers.add(sleeper);
-    }),
+    sleep,
     pending: () => sleepers.size,
-    advance: async (ms) => {
-      const target = now + ms;
-
-      await flush();
-
-      for (let next = earliest(); next !== undefined && next.wake <= target; next = earliest()) {
-        sleepers.delete(next);
-        now = Math.max(now, next.wake);
-        next.resolve();
-        await flush();
-      }
-
-      now = target;
-    },
+    advance,
   };
 }

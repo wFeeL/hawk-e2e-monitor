@@ -240,32 +240,36 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
     return report;
   };
 
+  const start: Sweeper['start'] = () => {
+    if (sweepIntervalMs === 0 || loop !== undefined) {
+      return;
+    }
+
+    loop = (async (): Promise<void> => {
+      let pauseMs = deps.firstPassDelayMs ?? FIRST_PASS_DELAY_MS;
+
+      for (;;) {
+        try {
+          await clock.sleep(pauseMs, stopper.signal);
+        } catch {
+          return;
+        }
+
+        await sweepOnce(stopper.signal);
+        pauseMs = sweepIntervalMs;
+      }
+    })();
+  };
+
+  const stop: Sweeper['stop'] = async () => {
+    stopper.abort();
+    await loop;
+  };
+
   return {
     sweepOnce,
-    start() {
-      if (sweepIntervalMs === 0 || loop !== undefined) {
-        return;
-      }
-
-      loop = (async (): Promise<void> => {
-        let pauseMs = deps.firstPassDelayMs ?? FIRST_PASS_DELAY_MS;
-
-        for (;;) {
-          try {
-            await clock.sleep(pauseMs, stopper.signal);
-          } catch {
-            return;
-          }
-
-          await sweepOnce(stopper.signal);
-          pauseMs = sweepIntervalMs;
-        }
-      })();
-    },
-    async stop() {
-      stopper.abort();
-      await loop;
-    },
+    start,
+    stop,
     failures: () => failures,
   };
 }

@@ -126,19 +126,27 @@ function maskedLogger(logger: Logger, masking: MutableRedactor): Logger {
     return redactDeep(Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, serializeError(value)])), masking.redact);
   };
 
+  const debug: Logger['debug'] = (msg, fields) => {
+    logger.debug(masking.redact(msg), mask(fields));
+  };
+
+  const info: Logger['info'] = (msg, fields) => {
+    logger.info(masking.redact(msg), mask(fields));
+  };
+
+  const warn: Logger['warn'] = (msg, fields) => {
+    logger.warn(masking.redact(msg), mask(fields));
+  };
+
+  const error: Logger['error'] = (msg, fields) => {
+    logger.error(masking.redact(msg), mask(fields));
+  };
+
   return {
-    debug: (msg, fields) => {
-      logger.debug(masking.redact(msg), mask(fields));
-    },
-    info: (msg, fields) => {
-      logger.info(masking.redact(msg), mask(fields));
-    },
-    warn: (msg, fields) => {
-      logger.warn(masking.redact(msg), mask(fields));
-    },
-    error: (msg, fields) => {
-      logger.error(masking.redact(msg), mask(fields));
-    },
+    debug,
+    info,
+    warn,
+    error,
   };
 }
 

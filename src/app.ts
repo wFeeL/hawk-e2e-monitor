@@ -83,28 +83,30 @@ export async function startApp(config: Config, deps: AppDeps): Promise<AppHandle
 
   let stopPromise: Promise<void> | undefined;
 
+  const stop: AppHandle['stop'] = () => {
+    stopPromise ??= new Promise<void>((resolve, reject) => {
+      // Connections still busy after the timeout are cut so shutdown ends.
+      const timer = setTimeout(() => {
+        server.closeAllConnections();
+      }, config.shutdownTimeoutMs);
+
+      timer.unref();
+      server.close((error) => {
+        clearTimeout(timer);
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      });
+      server.closeIdleConnections();
+    });
+
+    return stopPromise;
+  };
+
   return {
     port: (server.address() as AddressInfo).port,
-    stop: () => {
-      stopPromise ??= new Promise<void>((resolve, reject) => {
-        // Connections still busy after the timeout are cut so shutdown ends.
-        const timer = setTimeout(() => {
-          server.closeAllConnections();
-        }, config.shutdownTimeoutMs);
-
-        timer.unref();
-        server.close((error) => {
-          clearTimeout(timer);
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
-        });
-        server.closeIdleConnections();
-      });
-
-      return stopPromise;
-    },
+    stop,
   };
 }

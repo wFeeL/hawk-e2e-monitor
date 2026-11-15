@@ -348,29 +348,35 @@ export async function startReceiver(options: ReceiverOptions): Promise<Receiver>
     return snapshot(run.arrivals);
   };
 
+  const expect: Receiver['expect'] = (runId) => {
+    if (!runs.has(runId)) {
+      runs.set(runId, { arrivals: { webhook: [],
+        loop: [],
+        unmatched: 0 },
+      listeners: new Set() });
+    }
+  };
+
+  const release: Receiver['release'] = (runId) => {
+    runs.delete(runId);
+  };
+
+  const close: Receiver['close'] = async () => new Promise<void>((resolve) => {
+    server.close(() => {
+      resolve();
+    });
+    server.closeAllConnections();
+  });
+
   return {
     port,
     nonce,
-    expect: (runId) => {
-      if (!runs.has(runId)) {
-        runs.set(runId, { arrivals: { webhook: [],
-          loop: [],
-          unmatched: 0 },
-        listeners: new Set() });
-      }
-    },
+    expect,
     wait,
     counts: runId => snapshot(runs.get(runId)?.arrivals ?? { webhook: [],
       loop: [],
       unmatched: 0 }),
-    release: (runId) => {
-      runs.delete(runId);
-    },
-    close: async () => new Promise<void>((resolve) => {
-      server.close(() => {
-        resolve();
-      });
-      server.closeAllConnections();
-    }),
+    release,
+    close,
   };
 }

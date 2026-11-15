@@ -411,36 +411,40 @@ export function startFakeNotifier(options: FakeNotifierOptions): FakeNotifier {
     }
   });
 
+  const idle: FakeNotifier['idle'] = async () => {
+    if (pending === 0) {
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      idleWaiters.push(resolve);
+    });
+  };
+
+  const close: FakeNotifier['close'] = () => {
+    closed = true;
+    unsubscribe();
+    stop.abort();
+
+    for (const wake of [...sleepers]) {
+      wake();
+    }
+
+    for (const delivery of deliveries.values()) {
+      delivery.resolve();
+    }
+
+    pending = 0;
+    flushIdle();
+
+    return Promise.resolve();
+  };
+
   return {
     knobs,
     sent,
     delivered: async eventId => deliveryOf(eventId).promise,
-    idle: async () => {
-      if (pending === 0) {
-        return;
-      }
-
-      await new Promise<void>((resolve) => {
-        idleWaiters.push(resolve);
-      });
-    },
-    close: () => {
-      closed = true;
-      unsubscribe();
-      stop.abort();
-
-      for (const wake of [...sleepers]) {
-        wake();
-      }
-
-      for (const delivery of deliveries.values()) {
-        delivery.resolve();
-      }
-
-      pending = 0;
-      flushIdle();
-
-      return Promise.resolve();
-    },
+    idle,
+    close,
   };
 }
