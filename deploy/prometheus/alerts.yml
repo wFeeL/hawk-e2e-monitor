@@ -1,0 +1,37 @@
+groups:
+  - name: hawk-e2e-monitor
+    rules:
+      - alert: MonitorDown
+        expr: up{job="monitor"} == 0 or absent(up{job="monitor"})
+        for: 5m
+        annotations:
+          summary: The monitor does not answer on its metrics port.
+
+      - alert: ScenarioStale
+        expr: >
+          time() - hawk_e2e_last_run_timestamp_seconds{scenario!="endpoints-probe"}
+          > 2 * hawk_e2e_scenario_interval_seconds + 900
+        for: 5m
+        annotations:
+          summary: "{{ $labels.scenario }} has not finished a run for more than two intervals."
+
+      - alert: ScenarioFailing
+        expr: hawk_e2e_last_status{scenario!="endpoints-probe"} == 0
+        for: 1m
+        annotations:
+          summary: "The last run of {{ $labels.scenario }} failed."
+
+      - alert: SuccessRateLow
+        expr: >
+          (
+            sum by (scenario) (increase(hawk_e2e_runs_total{scenario!="endpoints-probe", status="ok"}[6h]))
+            / sum by (scenario) (increase(hawk_e2e_runs_total{scenario!="endpoints-probe", status=~"ok|failed|aborted"}[6h]))
+          ) < 0.9
+          and sum by (scenario) (increase(hawk_e2e_runs_total{scenario!="endpoints-probe", status=~"ok|failed|aborted"}[6h])) >= 6
+        annotations:
+          summary: "Less than 90% of {{ $labels.scenario }} runs passed in 6 hours."
+
+      - alert: AlertsNotDelivered
+        expr: hawk_e2e_alert_backlog_seconds > 1800
+        annotations:
+          summary: Alerts have waited for delivery to codex.bot for more than 30 minutes.
