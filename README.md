@@ -6,9 +6,10 @@ interface and checks that it passes the whole pipeline: accepted by the
 collector, processed by the workers, visible through the API, and turned into
 a notification.
 
-The project is in active development. The first check, send-and-receive-event,
-works as a one-off command; periodic runs, alerts and notification checks come
-next.
+Two checks exist: send-and-receive-event and check-notification. Each runs as
+a one-off command, and `serve` runs them on a schedule, keeps the history of
+every run and sends alerts to Telegram through @codex_bot. Metrics, a dashboard
+and a Telegram delivery check come next.
 
 ## Running one check
 
@@ -68,9 +69,81 @@ node --env-file-if-exists=.env dist/main.js check check-notification
 itself, but a run that had to change the rule skips the notification stage
 while Hawk's notifier still caches the old rules. `provision` waits out that
 time before it exits; after `provision --no-wait` the next check can fail
-with `notification_timeout` for about a minute. The check takes the same `--sequence`, `--transport` and
-`--repeat` options. A run where only one of the two channels arrived passes
+with `notification_timeout` for about a minute. The check takes the same
+`--sequence`, `--transport` and `--repeat` options. A run where only one of the two channels arrived passes
 with a warning.
+
+## Running continuously
+
+`serve` is the default command of the container image. It starts the first
+scenario listed in `SCENARIOS` right away and each next one
+`SCENARIO_STAGGER_MS` later. After that every scenario runs again
+`CHECK_INTERVAL_MS` after the start of its previous run. A tick that comes while the previous run of the same scenario is
+still going is recorded as skipped.
+
+With Docker Compose the monitor starts together with a cloudflared quick
+tunnel for the notification receiver:
+
+```sh
+cp .env.example .env   # fill it in; leave TUNNEL_METRICS_URL unset, compose sets it
+docker compose up -d --build
+docker compose ps      # monitor becomes healthy within about 15 s
+```
+
+The history lives in SQLite in the `monitor-data` volume, so it survives
+`docker compose down` and image updates. Only the internal port is published,
+on `127.0.0.1:8090`:
+
+| Path | Answer |
+|---|---|
+| `GET /healthz` | 200 while the process and its scheduler work |
+| `GET /readyz` | 200 once startup finished |
+| `GET /runs?scenario=<name>&limit=<n>` | latest runs, newest first |
+| `GET /runs/<runId>` | the full result of one run: every stage, its duration and details |
+| `GET /stats` | success ratio, event latency percentiles and average stage durations |
+
+The same history is available from the command line:
+
+```sh
+docker compose exec monitor node dist/main.js history --limit 20
+docker compose exec monitor node dist/main.js history --stats
+```
+
+`check` and `provision` refuse to run while `serve` works on the same
+database, so that two processes do not change the notification rule at once.
+
+### Alerts
+
+Add @codex_bot to a Telegram chat, send it `/notify_start` and put the address
+it answers with into `ALERT_NOTIFY_URL`. The monitor sends a message when a
+scenario starts failing (after `ALERT_AFTER_FAILURES` failed runs in a row),
+when the reason of the failure changes, when it recovers, and when a run
+passes with a warning, for example only one notification channel arrived or
+the projected event count exceeds the plan limit. A message names the stage,
+the error class, the likely culprit and the time of every stage. Messages that
+the bot does not accept are retried with a growing pause for up to 24 hours.
+With `ALERT_NOTIFY_URL` empty, alerts go to the log only.
+
+### Restarts and failures
+
+- A run cut short by a restart of the monitor is recorded as aborted with
+  `monitor_restarted`, a run cut short by `docker compose stop` as
+  `monitor_stopped`. Neither counts as a failure of Hawk.
+- A run that does not finish within `RUN_TIMEOUT_MS + CLEANUP_TIMEOUT_MS +
+  WATCHDOG_GRACE_MS` is cancelled and recorded as `run_hung`. After three such
+  runs of one scenario in a row the process exits and the container restart
+  policy starts it again.
+- Restarts and deploys of Hawk show up as failed runs with the stage and the
+  error class, and the next run after Hawk is back passes and sends a
+  recovery message. The monitor itself keeps running.
+- Test events left behind by failed or interrupted runs are removed once an
+  hour (`SWEEP_INTERVAL_MS`) when they are older than `SWEEP_MIN_AGE_MS`.
+
+Every send-and-receive-event run sends one event, two on repeat runs, and
+every check-notification run sends one more. One scenario every 10 minutes is
+about 4,400 events a month, so the free plan of 1,000 events lasts about a
+week; the monitor warns when the projected count exceeds the workspace limit.
+Use a bigger plan or a longer interval.
 
 ## About this test assignment
 
@@ -104,7 +177,9 @@ This repository is a test assignment for CodeX.
   failure to its own error tracking: up to one error per missing channel in
   slow or failed runs. A notification that arrives after its run has finished
   finds no waiting run; the receiver answers it and the monitor only logs it.
-- Telegram delivery is not checked yet.
+- Telegram delivery is not checked yet. Alerts are sent to @codex_bot; the
+  monitor sees that the bot accepted a message, not that it reached the chat.
+- Docker Compose was run with podman 5.7 (`podman compose`), not with Docker.
 - Check timeouts are fixed values from the configuration. The service does not
   compute degradation thresholds from collected data.
 
@@ -112,6 +187,6 @@ TODO:
 
 - [x] send-and-receive-event
 - [x] check-notification (webhook and loop channels)
-- [ ] continuous-monitoring
-- [ ] observability: history, Prometheus metrics, Grafana dashboard, heartbeat
+- [x] continuous-monitoring: schedule, history, alerts, compose
+- [ ] observability: Prometheus metrics, Grafana dashboard, heartbeat
 - [ ] telegram delivery
