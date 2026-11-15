@@ -65,9 +65,10 @@ node --env-file-if-exists=.env dist/main.js check check-notification
 ```
 
 `provision` is optional: the check brings the rule to the expected state
-itself, but the first run after a rule change skips the notification stage
-while Hawk's notifier still caches the old rules (`provision --no-wait` skips
-that wait). The check takes the same `--sequence`, `--transport` and
+itself, but a run that had to change the rule skips the notification stage
+while Hawk's notifier still caches the old rules. `provision` waits out that
+time before it exits; after `provision --no-wait` the next check can fail
+with `notification_timeout` for about a minute. The check takes the same `--sequence`, `--transport` and
 `--repeat` options. A run where only one of the two channels arrived passes
 with a warning.
 
@@ -92,6 +93,18 @@ This repository is a test assignment for CodeX.
   notification rule of the monitor in the test project, and a public https
   address for the receiver (a cloudflared quick tunnel works). Whether the
   webhook and loop senders run on hawk.so is not confirmed.
+- check-notification needs the notifier enabled in the grouper and the webhook
+  and loop senders running in Hawk, and outgoing access to Cloudflare from the
+  monitor when a quick tunnel is used.
+- The receiver secret is part of the rule's channel addresses. Every member of
+  the workspace can read it in the project settings, and Hawk's sender writes
+  the address to its logs. Use a dedicated project and workspace.
+- The monitor removes the test event when its run ends. A sender that is still
+  late at that point fails to read the removed event, and Hawk reports that
+  failure to its own error tracking: up to one error per missing channel in
+  slow or failed runs. A notification that arrives after its run has finished
+  finds no waiting run; the receiver answers it and the monitor only logs it.
+- Telegram delivery is not checked yet.
 - Check timeouts are fixed values from the configuration. The service does not
   compute degradation thresholds from collected data.
 

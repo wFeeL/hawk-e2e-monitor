@@ -142,5 +142,5 @@ Errors inside a single HTTP request are handled locally: the request gets a
 | The notification is bound to its run by the run id in the raw body | by the parsed title | a malformed body would otherwise look like a missing notification |
 | The receiver address comes from `PUBLIC_BASE_URL` or from the `/quicktunnel` route of cloudflared metrics; the monitor does not start cloudflared | starting cloudflared as a child process | a quick tunnel gets a new hostname on every restart, so the rule is checked and updated in every run |
 | The secret is part of the receiver paths | a secret header | Hawk cannot set headers. Every member of the workspace can read the rule and its address |
-| Warmup by the time of the last rule change that affects matching | wait 60 s in every run | runs within 65 s after a change skip the notification stage |
+| Warmup by the time of the last rule change that affects matching, kept by the process that made the change | wait 60 s in every run | runs of that process within 65 s after the change skip the notification stage; `provision` waits the same time before it exits. A run of another process right after `provision --no-wait` can fail with `notification_timeout` |
 | The rule excludes send-and-receive-event titles | a separate title prefix per scenario | every send-and-receive event would otherwise produce two notifications |
