@@ -14,8 +14,12 @@ import { openDatabase } from '../../../src/storage/database.js';
 import { createdProjects } from '../../../src/storage/created-projects.js';
 import type { CreatedProjects } from '../../../src/storage/created-projects.js';
 import { createHistory } from '../../../src/storage/history.js';
+import { pendingProjects } from '../../../src/storage/pending-projects.js';
+import type { PendingProjects } from '../../../src/storage/pending-projects.js';
+import { createSweeper } from '../../../src/cleanup/sweep.js';
 import { startFakeHawk } from '../../support/fake-hawk/index.js';
 import type { FakeHawk } from '../../support/fake-hawk/index.js';
+import type { MemoryLogger } from '../../support/logger.js';
 import { createTestDeps } from '../../support/scenario.js';
 import type { TestDepsOptions } from '../../support/scenario.js';
 
@@ -35,6 +39,10 @@ interface Setup {
   deps: NewProjectDeps;
   /** The record of created projects. */
   record: CreatedProjects;
+  /** The runs whose project may exist without a known id. */
+  pending: PendingProjects;
+  /** History under both records. */
+  history: ReturnType<typeof createHistory>;
   /** Secrets the run asked to mask. */
   secrets: string[];
   /** Number of collector POSTs seen at the moment each id was recorded. */
@@ -52,7 +60,9 @@ function setup(options: TestDepsOptions = {}, overrides: Partial<NewProjectDeps>
     env: { SCENARIOS: 'new-project',
       NEW_PROJECT_TOKEN_TIMEOUT_MS: '2000',
       ...options.env } });
-  const record = createdProjects(createHistory(openDatabase(':memory:')));
+  const history = createHistory(openDatabase(':memory:'));
+  const record = createdProjects(history);
+  const pending = pendingProjects(history);
   const secrets: string[] = [];
   const postsAtRecord: number[] = [];
   const masking = createMutableRedactor(scenarioSecrets(deps.config));
@@ -71,9 +81,12 @@ function setup(options: TestDepsOptions = {}, overrides: Partial<NewProjectDeps>
         postsAtRecord.push(hawk.collector.posts);
         record.record(id);
       } },
+    pending,
     tokenPollMs: 30,
     ...overrides },
   record,
+  pending,
+  history,
   secrets,
   postsAtRecord };
 }
@@ -203,7 +216,7 @@ describe('failures', () => {
   it('a project that cannot be created fails project_created and has nothing to clean up', async () => {
     hawk.api.knobs.notAdmin = true;
 
-    const { deps, record } = setup();
+    const { deps, record, pending } = setup();
     const result = await runNewProject(deps, { sequence: 1 });
 
     expect(result).toMatchObject({ status: 'failed',
@@ -212,6 +225,7 @@ describe('failures', () => {
     expect(stageOf(result, 'token_accepted').status).toBe('skipped');
     expect(stageOf(result, 'cleanup').status).toBe('skipped');
     expect(record.ids()).toEqual([]);
+    expect(pending.list()).toEqual([]);
   });
 
   it('a failed removal is cleanup_failed, fails the run and keeps the id for the sweep', async () => {
@@ -298,5 +312,143 @@ describe('failures', () => {
       errorClass: 'cleanup_refused' });
     expect(stage.message).toContain('monitored');
     expect(hawk.projects.has(hawk.projectId)).toBe(true);
+  });
+});
+
+describe('a project whose id the monitor may not learn', () => {
+  const WARNING = 'The project of this run may still be created in Hawk; the sweep removes it';
+
+  /**
+   * Makes `createProject` fail without creating anything.
+   * @param base Dependencies of the run.
+   * @param error What it throws.
+   * @returns Dependencies with the failing call.
+   */
+  function failing(base: Setup, error: CheckError): NewProjectDeps {
+    return { ...base.deps,
+      api: { ...base.deps.api,
+        createProject: async () => Promise.reject(error) } };
+  }
+
+  it('a lost create is kept as pending with a warning, and the next sweep pass removes the project and drops the entry', async () => {
+    const base = setup();
+    let name = '';
+    const result = await runNewProject({ ...base.deps,
+      api: { ...base.deps.api,
+        createProject: async (_workspaceId, projectName) => {
+          name = projectName;
+
+          return Promise.reject(new CheckError('api_unavailable', { code: 'TIMEOUT' }));
+        } } }, { sequence: 1 });
+
+    expect(result).toMatchObject({ status: 'failed',
+      failedStage: 'project_created' });
+    expect(result.warnings).toContain(WARNING);
+    expect(base.pending.list()).toHaveLength(1);
+    expect(name).toBe(`[e2e:${base.deps.config.instanceId}] new-project ${base.pending.list()[0]?.runId ?? ''}`);
+
+    // The project shows up after the stage gave up.
+    const project = hawk.projects.create('fake-workspace', name);
+
+    if (project === undefined) {
+      throw new Error('the fake did not create the project');
+    }
+
+    const runId = base.pending.list()[0]?.runId ?? '';
+
+    project.creationDate = Date.now() - 2 * 3_600_000;
+    base.pending.drop(runId);
+    base.pending.add(runId, new Date(Date.now() - 2 * 3_600_000).toISOString());
+
+    const sweeper = createSweeper({ api: base.deps.api,
+      history: base.history,
+      clock: systemClock,
+      logger: base.deps.logger,
+      config: base.deps.config,
+      activeRunIds: () => new Set() });
+    const report = await sweeper.sweepOnce(new AbortController().signal);
+
+    expect(report.projects).toMatchObject({ removed: 1 });
+    expect(hawk.projects.has(project.id)).toBe(false);
+    expect(base.pending.list()).toEqual([]);
+  });
+
+  it.each([
+    ['a refused connection', new CheckError('api_unavailable', { code: 'ECONNREFUSED' })],
+    ['an unknown host', new CheckError('dns_error', {})],
+    ['a rejected query', new CheckError('api_query_rejected', { detail: 'no' })],
+    ['a failed login', new CheckError('api_auth_failed', {})],
+    ['a forbidden account', new CheckError('api_forbidden', {})],
+  ])('%s made nothing: the entry is dropped and there is no warning', async (_label, error) => {
+    const base = setup();
+    const result = await runNewProject(failing(base, error), { sequence: 1 });
+
+    expect(result.status).toBe('failed');
+    expect(result.warnings).not.toContain(WARNING);
+    expect(base.pending.list()).toEqual([]);
+  });
+
+  it.each([
+    ['an internal error of Hawk', new CheckError('api_error', { detail: 'index failed' })],
+    ['a timeout', new CheckError('api_unavailable', { code: 'TIMEOUT' })],
+  ])('%s may have made the project: the entry stays and the name is looked up', async (_label, error) => {
+    const base = setup();
+    const result = await runNewProject(failing(base, error), { sequence: 1 });
+
+    expect(result).toMatchObject({ status: 'failed',
+      failedStage: 'project_created' });
+    expect(result.warnings).toContain(WARNING);
+    expect(base.pending.list()).toHaveLength(1);
+    expect(hawk.api.operations).toContain('WorkspaceProjects');
+  });
+
+  it('a lookup that throws keeps the entry, adds the warning and is logged', async () => {
+    const base = setup();
+    const result = await runNewProject({ ...base.deps,
+      api: { ...base.deps.api,
+        createProject: async () => Promise.reject(new CheckError('api_unavailable', { code: 'TIMEOUT' })),
+        workspaceProjects: async () => Promise.reject(new CheckError('api_error', { detail: 'down' })) } }, { sequence: 1 });
+
+    expect(result.warnings).toContain(WARNING);
+    expect(base.pending.list()).toHaveLength(1);
+    expect((base.deps.logger as MemoryLogger).lines).toContainEqual(expect.objectContaining({ level: 'warn',
+      msg: 'could not look for the created project' }));
+  });
+
+  it('a project that is created is recorded and its pending entry dropped', async () => {
+    const base = setup();
+    const result = await runNewProject(base.deps, { sequence: 1 });
+
+    expect(result.status).toBe('ok');
+    expect(base.pending.list()).toEqual([]);
+  });
+
+  it('a project found by its name after a lost answer is recorded and its pending entry dropped', async () => {
+    const base = setup();
+    const result = await runNewProject({ ...base.deps,
+      api: { ...base.deps.api,
+        createProject: async (workspaceId, name, signal) => {
+          await base.deps.api.createProject(workspaceId, name, signal);
+
+          throw new CheckError('api_unavailable', { code: 'TIMEOUT' });
+        } } }, { sequence: 1 });
+
+    expect(result.status).toBe('ok');
+    expect(base.pending.list()).toEqual([]);
+  });
+
+  it('writes the entry before the project is asked for', async () => {
+    const base = setup();
+    const seen: number[] = [];
+
+    await runNewProject({ ...base.deps,
+      api: { ...base.deps.api,
+        createProject: async (workspaceId, name, signal) => {
+          seen.push(base.pending.list().length);
+
+          return base.deps.api.createProject(workspaceId, name, signal);
+        } } }, { sequence: 1 });
+
+    expect(seen).toEqual([1]);
   });
 });

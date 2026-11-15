@@ -2,12 +2,18 @@ import type { CollectorClient, CollectorMessage } from '../../clients/collector.
 import type { CreatedProject } from '../../clients/hawk-api.js';
 import type { StageOutcome, StageSpec } from '../../engine/stages.js';
 import { CheckError, isCheckError } from '../../errors/taxonomy.js';
+import type { ErrorClass } from '../../errors/taxonomy.js';
 import { decodeIntegrationToken, tokenKey } from '../../hawk/token.js';
+import type { Logger } from '../../log/logger.js';
 import type { CreatedProjects } from '../../storage/created-projects.js';
+import type { PendingProjects } from '../../storage/pending-projects.js';
 import { eventMessage, sendEventShape } from '../send-and-receive/stages.js';
 import type { EventShape, ScenarioContext } from '../send-and-receive/stages.js';
 
 const REFUSED = 'ECONNREFUSED';
+const MAY_EXIST_WARNING = 'The project of this run may still be created in Hawk; the sweep removes it';
+// Errors that say the request was refused or never left the machine, so no project was made.
+const NOTHING_MADE: readonly ErrorClass[] = ['dns_error', 'api_query_rejected', 'api_auth_failed', 'api_forbidden'];
 const NO_PROJECT_TEXT = 'There is no project with that id';
 
 /** Time between two sends while the collector may not know the new token yet. */
@@ -25,6 +31,10 @@ export interface CreatedProjectState {
 export interface NewProjectContext extends ScenarioContext {
   /** Record of the projects that were created and not removed yet. */
   projects: Pick<CreatedProjects, 'forget' | 'record'>;
+  /** Record of the runs whose project may exist without a known id. */
+  pending: Pick<PendingProjects, 'add' | 'drop'>;
+  /** Log of the run. */
+  logger: Logger;
   /** Adds a value that output must not show. */
   addSecret: (value: string) => void;
   /** Builds the client of the collector that serves the token of the new project. */
@@ -83,7 +93,7 @@ export function projectCreatedStage(timeoutMs: number): StageSpec<NewProjectCont
     name: 'project_created',
     timeoutMs,
     run: async (context, signal): Promise<StageOutcome> => {
-      const { api, clock, config, plan, projects } = context;
+      const { api, clock, config, logger, pending, plan, projects } = context;
 
       await api.ensureSession(signal);
 
@@ -91,22 +101,33 @@ export function projectCreatedStage(timeoutMs: number): StageSpec<NewProjectCont
       const name = `[e2e:${config.instanceId}] new-project ${plan.runId}`;
       let created: CreatedProject | undefined;
 
+      // Written before the request: an answer that is lost leaves the sweep a name to look for.
+      pending.add(plan.runId, clock.wallTime().toISOString());
+
       try {
         created = await api.createProject(workspaceId, name, signal);
       } catch (error) {
-        // A create that timed out may have made the project; one that never left the machine made nothing.
-        if (!isCheckError(error) || error.errorClass !== 'api_unavailable' || error.facts.code === REFUSED) {
+        if (isCheckError(error) && (NOTHING_MADE.includes(error.errorClass) || error.facts.code === REFUSED)) {
+          pending.drop(plan.runId);
+
           throw error;
         }
 
+        if (!isCheckError(error)) {
+          throw error;
+        }
+
+        // Even a failure that looks final may have made the project, so the name is looked up.
         try {
           created = await findCreated(context, workspaceId, name, signal);
-        } catch {
-          created = undefined;
+        } catch (lookupError) {
+          logger.warn('could not look for the created project', { error: lookupError instanceof Error ? lookupError.message : String(lookupError) });
         }
 
         if (created === undefined) {
-          throw error;
+          return { status: 'failed',
+            error,
+            details: { warning: MAY_EXIST_WARNING } };
         }
       }
 
@@ -123,6 +144,7 @@ export function projectCreatedStage(timeoutMs: number): StageSpec<NewProjectCont
         token: created.token };
       context.createdAtMs = clock.monotonicMs();
       projects.record(created.id);
+      pending.drop(plan.runId);
 
       return { status: 'ok',
         details: { projectId: created.id } };

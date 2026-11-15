@@ -6,6 +6,7 @@ import type { NewProjectDeps } from '../../../src/scenarios/new-project/run.js';
 import { projectCreatedStage, tokenAcceptedStage } from '../../../src/scenarios/new-project/stages.js';
 import { scenarioSecrets } from '../../../src/scenarios/send-and-receive/run.js';
 import { createdProjects } from '../../../src/storage/created-projects.js';
+import { pendingProjects } from '../../../src/storage/pending-projects.js';
 import { openDatabase } from '../../../src/storage/database.js';
 import { createHistory } from '../../../src/storage/history.js';
 import { createFakeClock } from '../../support/fake-clock.js';
@@ -36,11 +37,13 @@ function deps(): NewProjectDeps {
   const { deps: base } = createTestDeps(hawk, { clock,
     env: { SCENARIOS: 'new-project' } });
   const masking = createMutableRedactor(scenarioSecrets(base.config));
+  const history = createHistory(openDatabase(':memory:'));
 
   return { ...base,
     redact: masking.redact,
     addSecret: masking.add,
-    projects: createdProjects(createHistory(openDatabase(':memory:'))) };
+    projects: createdProjects(history),
+    pending: pendingProjects(history) };
 }
 
 /**

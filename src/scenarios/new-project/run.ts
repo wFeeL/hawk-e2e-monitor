@@ -5,6 +5,7 @@ import type { RunResult } from '../../engine/result.js';
 import { CheckError } from '../../errors/taxonomy.js';
 import { collectorEndpoints, decodeIntegrationToken } from '../../hawk/token.js';
 import type { CreatedProjects } from '../../storage/created-projects.js';
+import type { PendingProjects } from '../../storage/pending-projects.js';
 import { NEW_PROJECT } from '../names.js';
 import { buildRunResult, runSteps, stageWarnings } from '../run-steps.js';
 import { planRun } from '../send-and-receive/plan.js';
@@ -20,6 +21,8 @@ import type { NewProjectContext } from './stages.js';
 export interface NewProjectDeps extends ScenarioDeps {
   /** Record of the projects that were created and not removed yet, which the sweep reads. */
   projects: CreatedProjects;
+  /** Record of the runs whose project may exist without a known id, which the sweep looks for by name. */
+  pending: PendingProjects;
   /** Adds a value that output must not show, such as the new token. */
   addSecret: (value: string) => void;
   /** Builds the collector client for the token of the new project; reads the address from the token by default. */
@@ -76,6 +79,8 @@ export function createNewProjectContext(deps: NewProjectDeps, options: PlanOptio
     state,
     pollScheduleMs: deps.pollScheduleMs,
     projects: deps.projects,
+    pending: deps.pending,
+    logger: deps.logger,
     addSecret: deps.addSecret,
     makeCollector: deps.makeCollector ?? defaultCollectorFactory(deps),
     tokenPollMs: deps.tokenPollMs ?? TOKEN_POLL_MS };

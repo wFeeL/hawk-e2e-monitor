@@ -16,6 +16,7 @@ import { runNewProject } from '../scenarios/new-project/run.js';
 import { createdProjects } from '../storage/created-projects.js';
 import { openDatabase } from '../storage/database.js';
 import { createHistory } from '../storage/history.js';
+import { pendingProjects } from '../storage/pending-projects.js';
 import { runEndpointsProbe } from '../scenarios/endpoints-probe/run.js';
 import { runCheckNotification } from '../scenarios/check-notification/run.js';
 import type { NotificationDeps } from '../scenarios/check-notification/run.js';
@@ -229,7 +230,8 @@ const runNewProjectCommand: CheckScenario = async (command, config, io, deps, ma
     const result = await runNewProject({ ...defaultDeps(config, io, masking),
       ...deps.pollScheduleMs === undefined ? {} : { pollScheduleMs: deps.pollScheduleMs },
       addSecret: masking.add,
-      projects: createdProjects(history) }, { sequence: command.sequence });
+      projects: createdProjects(history),
+      pending: pendingProjects(history) }, { sequence: command.sequence });
 
     io.stdout(`${JSON.stringify(result)}\n`);
 

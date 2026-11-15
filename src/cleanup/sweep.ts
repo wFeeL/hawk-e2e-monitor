@@ -5,6 +5,7 @@ import { buildTitle } from '../scenarios/send-and-receive/plan.js';
 import { EVENT_SCENARIOS, SENTRY_ENVELOPE } from '../scenarios/names.js';
 import { createdProjects } from '../storage/created-projects.js';
 import type { History } from '../storage/history.js';
+import { pendingProjects } from '../storage/pending-projects.js';
 import type { Clock } from '../time/clock.js';
 
 const PAGE_SIZE = 50;
@@ -225,18 +226,23 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
    * Hawk checks no rights on `removeProject`, so a project goes only when every check says it is ours:
    * it was recorded by this monitor, sits in the workspace of the monitored project, is not that project,
    * carries the exact name of this instance, belongs to no running run and is old enough.
+   * A run whose project id was never learned is found by the exact name instead, under the same checks.
    * @param signal Ends the pass.
    * @returns What was done, undefined when nothing is recorded.
    */
   const sweepProjects = async (signal: AbortSignal): Promise<ProjectsReport | undefined> => {
     const record = createdProjects(history);
+    const pending = pendingProjects(history);
     const candidates = record.ids();
+    const nowMs = clock.wallTime().getTime();
+    const lookups = pending.list().filter(entry => !deps.activeRunIds().has(entry.runId) && nowMs - Date.parse(entry.at) >= sweepMinAgeMs);
 
-    if (candidates.length === 0) {
+    if (candidates.length === 0 && lookups.length === 0) {
       return undefined;
     }
 
-    const lists = await api.workspaceProjects([projectId, ...candidates], signal);
+    // A project without a known id can be found only in the full list.
+    const lists = await api.workspaceProjects(lookups.length > 0 ? [] : [projectId, ...candidates], signal);
     const home = lists.find(list => list.projects.some(project => project.id === projectId));
 
     if (home === undefined) {
@@ -272,6 +278,31 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
 
       if (await api.removeProject(id, signal)) {
         record.forget(id);
+        report.removed += 1;
+      } else {
+        logger.warn('sweep: Hawk did not remove a project', { runId });
+        report.skipped += 1;
+      }
+    }
+
+    for (const { runId } of lookups) {
+      signal.throwIfAborted();
+
+      const name = `[e2e:${config.instanceId}] new-project ${runId}`;
+      const project = home.projects.find(item => item.name === name);
+
+      if (project === undefined) {
+        pending.drop(runId);
+        report.gone += 1;
+      } else if (project.id === projectId) {
+        // Nothing here may ever remove it, so the entry has no use.
+        pending.drop(runId);
+        report.skipped += 1;
+      } else if (clock.wallTime().getTime() - project.createdAtMs < sweepMinAgeMs) {
+        report.skipped += 1;
+      } else if (await api.removeProject(project.id, signal)) {
+        record.forget(project.id);
+        pending.drop(runId);
         report.removed += 1;
       } else {
         logger.warn('sweep: Hawk did not remove a project', { runId });

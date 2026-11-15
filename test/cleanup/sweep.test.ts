@@ -7,6 +7,7 @@ import type { ScenarioName } from '../../src/scenarios/names.js';
 import { openDatabase } from '../../src/storage/database.js';
 import { createdProjects } from '../../src/storage/created-projects.js';
 import { createHistory } from '../../src/storage/history.js';
+import { pendingProjects } from '../../src/storage/pending-projects.js';
 import type { History } from '../../src/storage/history.js';
 import { testConfig } from '../support/config.js';
 import { createFakeClock } from '../support/fake-clock.js';
@@ -707,5 +708,127 @@ describe('sweepOnce of projects', () => {
 
     expect(report.error).toContain('monitored project');
     expect(hawk.projects.has(id)).toBe(true);
+  });
+});
+
+/** How a pending run and its project look. */
+interface PendingOptions {
+  /** Whether Hawk has the project. */
+  created?: boolean;
+  /** Age of the pending entry. */
+  entryAgeMs?: number;
+  /** Age of the project in Hawk. */
+  projectAgeMs?: number;
+  /** Workspace of the project. */
+  workspaceId?: string;
+}
+
+/**
+ * Records a run whose project id the monitor never learned, and puts its project into the fake Hawk.
+ * @param runId Run that asked for the project.
+ * @param options Differences from an old entry with an old project in the home workspace.
+ * @returns Id of the project, undefined when none was made.
+ */
+function pendingRun(runId: string, options: PendingOptions = {}): string | undefined {
+  pendingProjects(history).add(runId, new Date(Date.now() - (options.entryAgeMs ?? 2 * HOUR_MS)).toISOString());
+
+  return options.created === false
+    ? undefined
+    : hawk.projects.add({ id: `${runId.slice(1, 9)}${'0'.repeat(16)}`.slice(0, 24).replaceAll(/[^0-9a-f]/gu, 'b'),
+      name: `[e2e:${INSTANCE}] new-project ${runId}`,
+      workspaceId: options.workspaceId ?? 'fake-workspace',
+      token: `token-${runId}`,
+      creationDate: Date.now() - (options.projectAgeMs ?? 2 * HOUR_MS) }).id;
+}
+
+describe('sweepOnce of projects whose id was never learned', () => {
+  it('removes the project found by the name of an old pending run and drops the entry', async () => {
+    const id = pendingRun(PROJECT_RUN);
+    const report = await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.projects.has(id ?? '')).toBe(false);
+    expect(report.projects).toMatchObject({ removed: 1 });
+    expect(pendingProjects(history).list()).toEqual([]);
+  });
+
+  it('drops an old pending run whose project does not exist', async () => {
+    pendingRun(PROJECT_RUN, { created: false });
+
+    const report = await sweeper().sweepOnce(SIGNAL);
+
+    expect(report.projects).toMatchObject({ removed: 0,
+      gone: 1 });
+    expect(pendingProjects(history).list()).toEqual([]);
+    expect(hawk.api.operations).not.toContain('RemoveProject');
+  });
+
+  it('does not touch a project with the pending name in a foreign workspace', async () => {
+    const id = pendingRun(PROJECT_RUN, { workspaceId: 'foreign-workspace' });
+
+    await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.projects.has(id ?? '')).toBe(true);
+    expect(hawk.api.operations).not.toContain('RemoveProject');
+  });
+
+  it('leaves a young entry and a run that is going, without a look at Hawk', async () => {
+    const young = pendingRun(PROJECT_RUN, { entryAgeMs: 60_000 });
+    const going = pendingRun('rbbbbbbbbbbbbbbb');
+
+    active.add('rbbbbbbbbbbbbbbb');
+    await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.projects.has(young ?? '')).toBe(true);
+    expect(hawk.projects.has(going ?? '')).toBe(true);
+    expect(pendingProjects(history).list()).toHaveLength(2);
+    expect(hawk.api.operations).not.toContain('WorkspaceProjects');
+  });
+
+  it('keeps the entry of a project that is too young', async () => {
+    const id = pendingRun(PROJECT_RUN, { projectAgeMs: 60_000 });
+    const report = await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.projects.has(id ?? '')).toBe(true);
+    expect(report.projects).toMatchObject({ removed: 0,
+      skipped: 1 });
+    expect(pendingProjects(history).list()).toHaveLength(1);
+  });
+
+  it('keeps the entry when Hawk removes nothing', async () => {
+    pendingRun(PROJECT_RUN);
+    hawk.api.knobs.errors = Object.fromEntries([['RemoveProject', { code: 'INTERNAL_SERVER_ERROR',
+      message: 'boom' }]]);
+
+    const report = await sweeper().sweepOnce(SIGNAL);
+
+    expect(report.error).toContain('boom');
+    expect(pendingProjects(history).list()).toHaveLength(1);
+  });
+
+  it('never removes the monitored project, even under a pending name', async () => {
+    pendingProjects(history).add(PROJECT_RUN, new Date(Date.now() - 2 * HOUR_MS).toISOString());
+
+    const main = hawk.projects.get(hawk.projectId);
+
+    if (main) {
+      main.name = `[e2e:${INSTANCE}] new-project ${PROJECT_RUN}`;
+      main.creationDate = Date.now() - 2 * HOUR_MS;
+    }
+
+    await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.projects.has(hawk.projectId)).toBe(true);
+    expect(hawk.api.operations).not.toContain('RemoveProject');
+  });
+
+  it('keeps the entry and logs the error when the lookup fails', async () => {
+    pendingRun(PROJECT_RUN);
+
+    const report = await sweeper({ api: { ...api,
+      workspaceProjects: async () => Promise.reject(new Error('lookup down')) } }).sweepOnce(SIGNAL);
+
+    expect(report.error).toContain('lookup down');
+    expect(pendingProjects(history).list()).toHaveLength(1);
+    expect(logger.lines).toContainEqual(expect.objectContaining({ level: 'warn' }));
   });
 });
