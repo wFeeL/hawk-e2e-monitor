@@ -16,7 +16,7 @@ import { runSendAndReceive, scenarioSecrets } from '../scenarios/send-and-receiv
 import type { ScenarioDeps } from '../scenarios/send-and-receive/run.js';
 import { systemClock } from '../time/clock.js';
 import { refusalWhileServing } from './serving.js';
-import { CHECK_NOTIFICATION, SEND_AND_RECEIVE_EVENT } from '../scenarios/names.js';
+import { CHECK_NOTIFICATION, NEW_PROJECT, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS } from '../scenarios/names.js';
 import type { ScenarioName } from '../scenarios/names.js';
 
 /** Where the command writes. */
@@ -162,10 +162,26 @@ const runSendAndReceiveCommand: CheckScenario = async (command, config, io, deps
   return summarize(result, io, masking);
 };
 
+/**
+ * Stands in for a scenario whose command is not written yet.
+ * @param command Parsed `check` command.
+ * @param _config Validated configuration.
+ * @param io Output streams.
+ * @returns Exit code 1.
+ */
+const runMissingCommand: CheckScenario = async (command, _config, io) => {
+  io.stderr(`The scenario ${command.scenario} is not available yet\n`);
+
+  return Promise.resolve(1);
+};
+
 /** One entry per scenario; a new scenario is added here. */
 const CHECKS: Readonly<Record<ScenarioName, CheckScenario>> = {
   [SEND_AND_RECEIVE_EVENT]: runSendAndReceiveCommand,
   [CHECK_NOTIFICATION]: runNotificationCommand,
+  [NEW_PROJECT]: runMissingCommand,
+  [SOURCEMAPS]: runMissingCommand,
+  [SENTRY_ENVELOPE]: runMissingCommand,
 };
 
 /**

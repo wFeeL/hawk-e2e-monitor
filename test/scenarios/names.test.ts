@@ -8,6 +8,14 @@ describe('SCENARIO_TRAITS', () => {
 
   it('derives the event scenarios from the table', () => {
     expect(EVENT_SCENARIOS).toEqual(SCENARIO_NAMES.filter(name => SCENARIO_TRAITS[name].sendsEvents));
-    expect(EVENT_SCENARIOS).toEqual(['send-and-receive-event', 'check-notification']);
+    expect(EVENT_SCENARIOS).toEqual(['send-and-receive-event', 'check-notification', 'new-project', 'sourcemaps', 'sentry-envelope']);
+  });
+
+  it('gives the new scenarios the same traits', () => {
+    for (const name of ['new-project', 'sourcemaps', 'sentry-envelope'] as const) {
+      expect(SCENARIO_TRAITS[name]).toEqual({ sendsEvents: true,
+        inHeartbeat: true,
+        hiddenByDefault: false });
+    }
   });
 });

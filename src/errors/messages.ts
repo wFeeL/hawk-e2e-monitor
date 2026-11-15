@@ -64,6 +64,10 @@ function withDetail(base: string, detail: string | undefined): string {
 function notificationTimeoutText(facts: MessageFacts): string {
   const within = ifSet(facts.waitedMs, ms => ` within ${formatDuration(ms)}`) ?? '';
 
+  if (facts.channel === 'threshold') {
+    return `The threshold notification did not arrive${within}: the repeated event reached the notifier, but the rule that counts repetitions sent nothing`;
+  }
+
   return facts.detail === 'webhook_only'
     ? `The webhook did not arrive${within}; with the loop channel off the notifier and the sender cannot be told apart`
     : `Neither channel arrived${within}: the notifier or its queue did not hand the notification to a sender`;
@@ -146,6 +150,22 @@ export function describeError(errorClass: ErrorClass, facts: MessageFacts): stri
       return withDetail('The test event was not removed', facts.detail);
     case 'cleanup_refused':
       return withDetail('Found an event that is not ours, removal cancelled', facts.detail);
+    case 'api_garage_query_failed':
+      return withDetail('Hawk rejected a query that the Garage web client sends', facts.detail);
+    case 'field_not_masked':
+      return join(`Event field ${facts.field ?? 'value'} was stored unmasked`, [': got ', facts.actual], ['; expected [filtered]', '']);
+    case 'threshold_early':
+      return withDetail('The threshold notification arrived before the event was repeated', facts.detail);
+    case 'new_token_not_accepted':
+      return join('The collector did not accept the token of the new project', [' within ', ifSet(facts.waitedMs, formatDuration)], [': ', facts.detail]);
+    case 'release_rejected':
+      return join('The collector rejected the release upload', [': HTTP ', ifSet(facts.status, String)], [' ', facts.detail]);
+    case 'release_not_saved':
+      return join('The release files were not saved', [' within ', ifSet(facts.waitedMs, formatDuration)], [': ', facts.detail]);
+    case 'sourcemap_not_applied':
+      return join(`The source map was not applied: ${facts.field ?? 'the frame'}`, [' expected ', facts.expected], [', got ', facts.actual]);
+    case 'sentry_rejected':
+      return join('The collector rejected the Sentry envelope', [': HTTP ', ifSet(facts.status, String)], [' ', facts.detail]);
     case 'monitor_internal':
       return join('Internal monitor error', [': ', facts.detail], [' (', ifSet(facts.cause, text => `${text})`)]);
     case 'run_timeout':

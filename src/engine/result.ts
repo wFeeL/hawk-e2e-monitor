@@ -2,7 +2,21 @@ import type { Transport } from '../clients/collector.js';
 import type { Culprit, ErrorClass } from '../errors/taxonomy.js';
 
 /** Stages of a run, in execution order. */
-export const STAGE_NAMES = ['collector_availability', 'api_availability', 'notification_setup', 'collector_accept', 'event_visible', 'notification_formed', 'event_repeated', 'cleanup'] as const;
+export const STAGE_NAMES = [
+  'collector_availability',
+  'api_availability',
+  'notification_setup',
+  'project_created',
+  'token_accepted',
+  'release_uploaded',
+  'release_saved',
+  'collector_accept',
+  'event_visible',
+  'notification_formed',
+  'event_repeated',
+  'threshold_formed',
+  'cleanup',
+] as const;
 
 /** One of `STAGE_NAMES`. */
 export type StageName = (typeof STAGE_NAMES)[number];
@@ -62,6 +76,11 @@ export interface RunNotification {
   /** The loop notification. */
   loop?: {
     /** Time from the collector's answer to the first loop POST. */
+    latencyMs: number;
+  };
+  /** The threshold notification, which the repeated event triggers. */
+  threshold?: {
+    /** Time from the collector's answer to the repeat to the threshold POST. */
     latencyMs: number;
   };
   /** POSTs with a valid secret but no run id of this run. */

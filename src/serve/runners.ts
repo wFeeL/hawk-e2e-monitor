@@ -1,5 +1,5 @@
 import type { ScenarioRunner } from '../scheduler/scheduler.js';
-import { CHECK_NOTIFICATION, SEND_AND_RECEIVE_EVENT } from '../scenarios/names.js';
+import { CHECK_NOTIFICATION, NEW_PROJECT, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS } from '../scenarios/names.js';
 import type { ScenarioName } from '../scenarios/names.js';
 import { runSendAndReceive } from '../scenarios/send-and-receive/run.js';
 import type { Check } from '../http/internal-server.js';
@@ -39,10 +39,23 @@ const setupSendAndReceive: SetupScenario = async (context): Promise<ScenarioSetu
   });
 };
 
+/**
+ * Stands in for a scenario whose runner is not written yet.
+ * @returns Never.
+ * @throws Error always.
+ */
+const setupMissing: SetupScenario = async () => {
+  await Promise.resolve();
+  throw new Error('A selected scenario has no runner yet');
+};
+
 /** One entry per scenario; a new scenario is added here. */
 const SETUPS: Readonly<Record<ScenarioName, SetupScenario>> = {
   [SEND_AND_RECEIVE_EVENT]: setupSendAndReceive,
   [CHECK_NOTIFICATION]: setupCheckNotification,
+  [NEW_PROJECT]: setupMissing,
+  [SOURCEMAPS]: setupMissing,
+  [SENTRY_ENVELOPE]: setupMissing,
 };
 
 /**
