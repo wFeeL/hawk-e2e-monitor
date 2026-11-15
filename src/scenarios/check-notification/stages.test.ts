@@ -433,7 +433,8 @@ describe('notificationFormedStage', () => {
 
     expect(result.status).toBe('skipped');
     expect(result.details).toMatchObject({ reason: 'rule_cache_warmup',
-      warning: 'Notification check skipped: the notification rule changed 3 s ago, Hawk caches rules for 60 s' });
+      warning: 'Notification check skipped: the notification rule changed 3 s ago, Hawk caches rules for 60 s',
+      warmupRemainingMs: 62_500 });
     expect(parts.context.notification.arrivals).toBeUndefined();
   });
 

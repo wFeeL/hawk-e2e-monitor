@@ -75,6 +75,16 @@ describe('sendNotify', () => {
     expect(error.message).toBe(`codex.bot did not accept the alert: 404 ${'z'.repeat(200)}`);
   });
 
+  it('a 5xx is a temporary failure of the bot, a network error with the status', async () => {
+    const error = await rejection(sendNotify((await startBot({ status: 503,
+      body: 'busy' })).url, 'x', DEPS, SIGNAL));
+
+    expect(error.errorClass).toBe('network_error');
+    expect(error.culprit).toBe('network');
+    expect(error.facts.status).toBe(503);
+    expect(error.message).toBe('codex.bot answered 503 at 127.0.0.1');
+  });
+
   it('a refused connection is a network error that names the host but not the token', async () => {
     const fake = await startBot();
     const { url, token } = fake;

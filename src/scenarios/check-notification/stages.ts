@@ -287,6 +287,7 @@ export function notificationFormedStage(budgetMs: number): StageSpec<Notificatio
 
         return { status: 'skipped',
           details: { reason: 'rule_cache_warmup',
+            warmupRemainingMs: Math.max(0, settings.ruleCacheWarmupMs - (notification.ruleChangedAgoMs ?? 0)),
             warning: `Notification check skipped: the notification rule changed ${String(ago)} s ago, Hawk caches rules for 60 s` } };
       }
 
