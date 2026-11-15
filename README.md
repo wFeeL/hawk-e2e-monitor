@@ -8,8 +8,8 @@ a notification.
 
 Two checks exist: send-and-receive-event and check-notification. Each runs as
 a one-off command, and `serve` runs them on a schedule, keeps the history of
-every run and sends alerts to Telegram through @codex_bot. Metrics, a dashboard
-and a Telegram delivery check come next.
+every run and sends alerts to Telegram through @codex_bot. It also exposes
+Prometheus metrics, ships a Grafana dashboard and pings an external heartbeat.
 
 ## Running one check
 
@@ -162,6 +162,56 @@ the events that remain in a project, and the monitor removes its events after
 each run, so they barely use the quota. They do count against the rate limits
 of the collector.
 
+## Metrics, dashboard and heartbeat
+
+`GET /metrics` on the internal port serves Prometheus metrics: runs and
+failures by scenario, stage, error class and culprit, run, stage, event and
+notification latency histograms, the last status and run time of every
+scenario, the alert queue age and heartbeat failures.
+
+The `observability` profile adds Prometheus and Grafana with a provisioned
+dashboard and five alert rules (monitor down, scenario stale, scenario
+failing, success ratio below 90% in 6 hours, alerts not delivered):
+
+```sh
+cp grafana.env.example .env.grafana   # set GF_SECURITY_ADMIN_PASSWORD
+docker compose --profile observability up -d
+```
+
+Prometheus listens on `127.0.0.1:9090` and Grafana on `127.0.0.1:3000`
+(`PROMETHEUS_PORT` and `GRAFANA_PORT` change the host side). Grafana refuses to
+start without a password; the password applies on the first start of the
+`grafana-data` volume, later use `grafana cli admin reset-admin-password`. The
+files under `deploy/` must stay readable by the containers (755 for
+directories, 644 for files).
+
+With `HEARTBEAT_URL` set (for example a healthchecks.io check), the monitor
+pings it every `HEARTBEAT_INTERVAL_MS` while its scheduler and history work,
+no scenario is stuck, every scenario has finished a run within its interval
+plus its run limit, and alerts are delivered. A missing ping means the monitor
+itself is in trouble.
+
+### Running a check by hand
+
+With `RUN_TOKEN` set, `POST /runs/<scenario>` on the internal port starts a run
+at once:
+
+```sh
+curl -X POST -H "Authorization: Bearer $RUN_TOKEN" "http://127.0.0.1:8090/runs/send-and-receive-event?wait=true"
+```
+
+The answer is 202 with the run id, or 200 with the full result when
+`?wait=true` and the run ends within its limit; 409 while the scenario is
+running and 429 within `MANUAL_MIN_INTERVAL_MS` of the previous manual run.
+
+### Endpoints probe
+
+`endpoints-probe` checks the collector, the API and, with `GARAGE_URL`, that
+Garage serves its page and script bundle, every `PROBE_INTERVAL_MS`, without
+sending events. Its runs are hidden from `GET /runs` and `history` unless
+asked for by name, kept for `PROBE_RETENTION_DAYS`, and alert after
+`PROBE_ALERT_AFTER_FAILURES` failures in a row.
+
 ## About this test assignment
 
 This repository is a test assignment for CodeX.
@@ -205,5 +255,5 @@ TODO:
 - [x] send-and-receive-event
 - [x] check-notification (webhook and loop channels)
 - [x] continuous-monitoring: schedule, history, alerts, compose
-- [ ] observability: Prometheus metrics, Grafana dashboard, heartbeat
+- [x] observability: Prometheus metrics, Grafana dashboard, heartbeat, manual runs, endpoints probe
 - [ ] telegram delivery
