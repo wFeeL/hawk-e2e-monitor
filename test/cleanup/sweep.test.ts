@@ -475,6 +475,81 @@ function leftoverProject(runId: string, options: ProjectOptions = {}): string {
   return project.id;
 }
 
+/**
+ * Stores an event that came through the Sentry path: the title has the type of the exception in front, the context is under `e2e`.
+ * @param runId Run the event belongs to.
+ * @param options Differences from an event of this instance.
+ * @returns Id of the event.
+ */
+function sentryLeftover(runId: string, options: LeftoverOptions = {}): string {
+  const instanceId = options.instanceId ?? INSTANCE;
+  const stored = hawk.store.ingest(hawk.projectId, 'errors/default', { title: options.title ?? `E2eMonitorCheck: ${buildTitle(INSTANCE, runId, 'sentry-envelope')}`,
+    context: { e2e: { runId,
+      instanceId,
+      scenario: 'sentry-envelope' } } });
+
+  hawk.store.setTimestamp(hawk.projectId, stored.id, Math.floor((Date.now() - (options.ageMs ?? 2 * HOUR_MS)) / 1000));
+
+  return stored.id;
+}
+
+describe('sweepOnce of events from the Sentry path', () => {
+  it('removes the event of a finished run in the second form of the title', async () => {
+    const id = sentryLeftover('raaaaaaaaaaaaaaa');
+
+    finished('raaaaaaaaaaaaaaa', 'ok', 2 * HOUR_MS);
+
+    const report = await sweeper().sweepOnce(SIGNAL);
+
+    expect(report).toMatchObject({ scanned: 1,
+      removed: 1 });
+    expect(hawk.store.get(hawk.projectId, id)).toBeUndefined();
+  });
+
+  it('removes it when the monitor has no record of the run, once the event is old enough', async () => {
+    const id = sentryLeftover('raaaaaaaaaaaaaaa');
+
+    await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.store.get(hawk.projectId, id)).toBeUndefined();
+  });
+
+  it('leaves a young event and an event of a run that is going', async () => {
+    const young = sentryLeftover('raaaaaaaaaaaaaaa', { ageMs: 60_000 });
+    const going = sentryLeftover('rbbbbbbbbbbbbbbb');
+
+    active.add('rbbbbbbbbbbbbbbb');
+    await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.store.get(hawk.projectId, young)).toBeDefined();
+    expect(hawk.store.get(hawk.projectId, going)).toBeDefined();
+  });
+
+  it.each([
+    ['another instance in the context', { instanceId: 'other' }],
+    ['a title with another prefix', { title: `Other: ${buildTitle(INSTANCE, 'raaaaaaaaaaaaaaa', 'sentry-envelope')}` }],
+    ['a title with a prefix and another scenario', { title: `E2eMonitorCheck: ${buildTitle(INSTANCE, 'raaaaaaaaaaaaaaa', 'sourcemaps')}x` }],
+    ['text after the title', { title: `E2eMonitorCheck: ${buildTitle(INSTANCE, 'raaaaaaaaaaaaaaa', 'sentry-envelope')} and more` }],
+  ])('does not touch an event with %s', async (_name, options) => {
+    const id = sentryLeftover('raaaaaaaaaaaaaaa', options);
+
+    await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.store.get(hawk.projectId, id)).toBeDefined();
+  });
+
+  it('does not take the plain context of another scenario for the Sentry one', async () => {
+    const stored = hawk.store.ingest(hawk.projectId, 'errors/default', { title: `E2eMonitorCheck: ${buildTitle(INSTANCE, 'raaaaaaaaaaaaaaa', 'sentry-envelope')}`,
+      context: { instanceId: 'other',
+        runId: 'raaaaaaaaaaaaaaa' } });
+
+    hawk.store.setTimestamp(hawk.projectId, stored.id, Math.floor((Date.now() - 2 * HOUR_MS) / 1000));
+    await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.store.get(hawk.projectId, stored.id)).toBeDefined();
+  });
+});
+
 describe('sweepOnce of projects', () => {
   it('removes a recorded project of this instance that is old enough, and forgets it', async () => {
     const id = leftoverProject(PROJECT_RUN);

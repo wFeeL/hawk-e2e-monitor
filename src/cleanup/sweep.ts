@@ -2,7 +2,7 @@ import type { FoundEvent, HawkApi } from '../clients/hawk-api.js';
 import type { Config } from '../config/load.js';
 import type { Logger } from '../log/logger.js';
 import { buildTitle } from '../scenarios/send-and-receive/plan.js';
-import { EVENT_SCENARIOS } from '../scenarios/names.js';
+import { EVENT_SCENARIOS, SENTRY_ENVELOPE } from '../scenarios/names.js';
 import { createdProjects } from '../storage/created-projects.js';
 import type { History } from '../storage/history.js';
 import type { Clock } from '../time/clock.js';
@@ -12,6 +12,8 @@ const MAX_PAGES = 10;
 const TIMEOUT_FACTOR = 4;
 const FIRST_PASS_DELAY_MS = 300_000;
 const RUN_ID_PATTERN = /^[a-z]{16}$/u;
+// The collector puts the type of the exception in front of the value to make the title of an event that came as an envelope.
+const SENTRY_PREFIX = 'E2eMonitorCheck: ';
 
 /** What one pass of the sweep did. */
 export interface SweepReport {
@@ -91,24 +93,27 @@ export interface Sweeper {
 
 /**
  * Takes the run id out of the title of an event of this instance.
+ * The events of `sentry-envelope` have a second form of the title: the type of the exception and a colon in front.
  * @param instanceId Id of this monitor, which the title must carry.
  * @param title Title as the search returned it.
- * @returns The run id when the title is exactly what `buildTitle` makes for one of the scenarios.
+ * @returns The run id when the title is exactly what `buildTitle` makes for one of the scenarios, in the form that scenario uses.
  */
 function runIdOf(instanceId: string, title: string): string | undefined {
+  const viaSentry = title.startsWith(SENTRY_PREFIX);
+  const plain = viaSentry ? title.slice(SENTRY_PREFIX.length) : title;
   const prefix = `[e2e:${instanceId}] `;
 
-  if (!title.startsWith(prefix)) {
+  if (!plain.startsWith(prefix)) {
     return undefined;
   }
 
-  for (const scenario of EVENT_SCENARIOS) {
+  for (const scenario of EVENT_SCENARIOS.filter(name => (name === SENTRY_ENVELOPE) === viaSentry)) {
     const suffix = ` ${scenario}`;
 
-    if (title.endsWith(suffix)) {
-      const runId = title.slice(prefix.length, title.length - suffix.length);
+    if (plain.endsWith(suffix)) {
+      const runId = plain.slice(prefix.length, plain.length - suffix.length);
 
-      if (RUN_ID_PATTERN.test(runId) && buildTitle(instanceId, runId, scenario) === title) {
+      if (RUN_ID_PATTERN.test(runId) && buildTitle(instanceId, runId, scenario) === plain) {
         return runId;
       }
     }
@@ -127,14 +132,20 @@ function projectNamePattern(instanceId: string): RegExp {
 }
 
 /**
- * Reads `context.instanceId` of an event.
+ * Reads the instance id an event names in its context: `context.instanceId`, or `context.e2e.instanceId` for an event that came as a Sentry envelope.
  * @param context Context as Hawk returns it.
+ * @param title Title of the event, which tells the form.
  * @returns The id, or undefined when the context has none.
  */
-function contextInstance(context: unknown): unknown {
-  return typeof context === 'object' && context !== null && !Array.isArray(context)
-    ? (context as Record<string, unknown>).instanceId
-    : undefined;
+function contextInstance(context: unknown, title: string): unknown {
+  if (typeof context !== 'object' || context === null || Array.isArray(context)) {
+    return undefined;
+  }
+
+  const record = context as Record<string, unknown>;
+  const holder = title.startsWith(SENTRY_PREFIX) ? record.e2e : record;
+
+  return typeof holder === 'object' && holder !== null ? (holder as Record<string, unknown>).instanceId : undefined;
 }
 
 /**
@@ -170,7 +181,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
       lateMarked: false };
     const runId = runIdOf(config.instanceId, event.title);
 
-    if (runId === undefined || contextInstance(event.context) !== config.instanceId || deps.activeRunIds().has(runId)) {
+    if (runId === undefined || contextInstance(event.context, event.title) !== config.instanceId || deps.activeRunIds().has(runId)) {
       return left;
     }
 
@@ -188,7 +199,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
     const card = await api.eventCard(projectId, event.originalEventId, signal);
 
     // The event may be gone already, or Hawk may show something other than the search did.
-    if (card === null || runIdOf(config.instanceId, card.title) !== runId || contextInstance(card.context) !== config.instanceId) {
+    if (card === null || runIdOf(config.instanceId, card.title) !== runId || contextInstance(card.context, card.title) !== config.instanceId) {
       return left;
     }
 

@@ -10,6 +10,7 @@ import type { MutableRedactor } from '../errors/redact.js';
 import { collectorEndpoints, decodeIntegrationToken } from '../hawk/token.js';
 import { createLogger } from '../log/logger.js';
 import { startReceiver } from '../receiver/server.js';
+import { runSentryEnvelope } from '../scenarios/sentry-envelope/run.js';
 import { runSourcemaps } from '../scenarios/sourcemaps/run.js';
 import { runNewProject } from '../scenarios/new-project/run.js';
 import { createdProjects } from '../storage/created-projects.js';
@@ -213,16 +214,21 @@ const runSourcemapsCommand: CheckScenario = async (command, config, io, deps, ma
 };
 
 /**
- * Stands in for a scenario whose command is not written yet.
+ * Runs `sentry-envelope` and prints the result.
  * @param command Parsed `check` command.
- * @param _config Validated configuration.
+ * @param config Validated configuration.
  * @param io Output streams.
- * @returns Exit code 1.
+ * @param deps Replacements for the default dependencies, for tests.
+ * @param masking Redactor shared with the logger.
+ * @returns Exit code.
  */
-const runMissingCommand: CheckScenario = async (command, _config, io) => {
-  io.stderr(`The scenario ${command.scenario} is not available yet\n`);
+const runSentryEnvelopeCommand: CheckScenario = async (command, config, io, deps, masking) => {
+  const result = await runSentryEnvelope({ ...defaultDeps(config, io, masking),
+    ...deps.pollScheduleMs === undefined ? {} : { pollScheduleMs: deps.pollScheduleMs } }, { sequence: command.sequence });
 
-  return Promise.resolve(1);
+  io.stdout(`${JSON.stringify(result)}\n`);
+
+  return summarize(result, io, masking);
 };
 
 /**
@@ -249,7 +255,7 @@ const CHECKS: Readonly<Record<ScenarioName, CheckScenario>> = {
   [CHECK_NOTIFICATION]: runNotificationCommand,
   [NEW_PROJECT]: runNewProjectCommand,
   [SOURCEMAPS]: runSourcemapsCommand,
-  [SENTRY_ENVELOPE]: runMissingCommand,
+  [SENTRY_ENVELOPE]: runSentryEnvelopeCommand,
   [ENDPOINTS_PROBE]: runProbeCommand,
 };
 

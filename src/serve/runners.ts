@@ -2,6 +2,7 @@ import type { ScenarioRunner } from '../scheduler/scheduler.js';
 import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, NEW_PROJECT, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS } from '../scenarios/names.js';
 import type { ScenarioName } from '../scenarios/names.js';
 import { runEndpointsProbe } from '../scenarios/endpoints-probe/run.js';
+import { runSentryEnvelope } from '../scenarios/sentry-envelope/run.js';
 import { runSourcemaps } from '../scenarios/sourcemaps/run.js';
 import { runNewProject } from '../scenarios/new-project/run.js';
 import { createdProjects } from '../storage/created-projects.js';
@@ -41,16 +42,6 @@ const setupSendAndReceive: SetupScenario = async (context): Promise<ScenarioSetu
       signal }, { sequence,
       runId }),
   });
-};
-
-/**
- * Stands in for a scenario whose runner is not written yet.
- * @returns Never.
- * @throws Error always.
- */
-const setupMissing: SetupScenario = async () => {
-  await Promise.resolve();
-  throw new Error('A selected scenario has no runner yet');
 };
 
 /**
@@ -118,13 +109,34 @@ const setupSourcemaps: SetupScenario = async (context): Promise<ScenarioSetup> =
   });
 };
 
+/**
+ * Sets up `sentry-envelope`, which needs nothing besides the clients.
+ * @param context Everything a scenario needs to be set up.
+ * @returns Its runner.
+ */
+const setupSentryEnvelope: SetupScenario = async (context): Promise<ScenarioSetup> => {
+  const { config, clock, logger, masking, api, collector, overrides } = context;
+
+  return Promise.resolve({
+    runner: async ({ runId, sequence, signal }) => runSentryEnvelope({ config,
+      collector,
+      api,
+      clock,
+      logger,
+      redact: masking.redact,
+      ...overrides.pollScheduleMs === undefined ? {} : { pollScheduleMs: overrides.pollScheduleMs },
+      signal }, { sequence,
+      runId }),
+  });
+};
+
 /** One entry per scenario; a new scenario is added here. */
 const SETUPS: Readonly<Record<ScenarioName, SetupScenario>> = {
   [SEND_AND_RECEIVE_EVENT]: setupSendAndReceive,
   [CHECK_NOTIFICATION]: setupCheckNotification,
   [NEW_PROJECT]: setupNewProject,
   [SOURCEMAPS]: setupSourcemaps,
-  [SENTRY_ENVELOPE]: setupMissing,
+  [SENTRY_ENVELOPE]: setupSentryEnvelope,
   [ENDPOINTS_PROBE]: setupProbe,
 };
 

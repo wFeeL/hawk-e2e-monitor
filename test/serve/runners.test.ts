@@ -149,4 +149,19 @@ describe('buildRunners', () => {
       scenario: 'sourcemaps',
       runId: 'raaaaaaaaaaaaaaac' });
   });
+
+  it('builds the runner of sentry-envelope over the clients, with no receiver and no wait', async () => {
+    const built = await buildRunners(await contextFor('sentry-envelope'));
+
+    expect(Object.keys(built.runners)).toEqual(['sentry-envelope']);
+    expect(built.beforeFirstRun).toEqual({});
+    expect(built.readiness).toEqual([]);
+
+    const result = await built.runners['sentry-envelope']?.({ runId: 'raaaaaaaaaaaaaaad',
+      sequence: 1,
+      signal: new AbortController().signal });
+
+    expect(result).toMatchObject({ status: 'ok',
+      scenario: 'sentry-envelope' });
+  });
 });

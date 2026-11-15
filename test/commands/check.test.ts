@@ -489,3 +489,17 @@ describe('check sourcemaps', () => {
       catcherType: 'errors/javascript' });
   });
 });
+
+describe('check sentry-envelope', () => {
+  it('prints the result of a run and exits 0', async () => {
+    const { stdout, code } = await runCommand({ kind: 'check',
+      scenario: 'sentry-envelope',
+      sequence: 1,
+      repeat: false });
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({ scenario: 'sentry-envelope',
+      status: 'ok',
+      catcherType: 'errors/default' });
+  });
+});
