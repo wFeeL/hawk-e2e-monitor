@@ -51,6 +51,39 @@ export interface ScenarioContext {
   state: ScenarioState;
   /** Poll schedule override, for tests. */
   pollScheduleMs?: readonly number[];
+  /** What the event of the scenario looks like; the event of `send-and-receive-event` when absent. */
+  eventShape?: EventShape;
+}
+
+/** What the shared stages need to know about the event of a scenario. */
+export interface EventShape {
+  /** Project the event is sent to and looked for in. */
+  projectId: string;
+  /**
+   * Builds the message the collector gets.
+   * @param context Scenario context.
+   * @returns Message with the token of the project.
+   */
+  message(context: ScenarioContext): CollectorMessage;
+  /**
+   * Tells whether a search hit is the event of this run.
+   * @param event Event the search returned.
+   * @returns True for the event of the run.
+   */
+  matches(event: FoundEvent): boolean;
+  /**
+   * Compares the card with what was sent.
+   * @param card Event card from the API.
+   * @param expectedCount How many times the event must have been counted.
+   * @returns The first difference, or undefined.
+   */
+  check(card: FoundEvent, expectedCount: number): CheckError | undefined;
+  /**
+   * Tells whether an event may be removed by this run.
+   * @param event Event from the API.
+   * @returns True for our event.
+   */
+  isOurs(event: FoundEvent): boolean;
 }
 
 /**
@@ -136,48 +169,6 @@ export function apiAvailabilityStage(timeoutMs: number): StageSpec<ScenarioConte
 }
 
 /**
- * Stage 3: sends the event over the planned transport.
- * @param timeoutMs Time limit of the stage.
- * @param beforeSend Called right before the first send, for what must be in place before the event leaves.
- * @returns Stage spec.
- */
-export function collectorAcceptStage(timeoutMs: number, beforeSend?: () => void): StageSpec<ScenarioContext> {
-  return {
-    name: 'collector_accept',
-    timeoutMs,
-    run: async (context, signal): Promise<StageOutcome> => {
-      const { collector, clock, plan, state } = context;
-
-      beforeSend?.();
-
-      const startedMs = clock.monotonicMs();
-      const outcome = await collector.send(eventMessage(context), plan.transport, signal);
-
-      state.sendOutcome = outcome;
-
-      switch (outcome.kind) {
-        case 'accepted':
-          state.acceptedAtMs = clock.monotonicMs();
-
-          return { status: 'ok',
-            details: { attempts: outcome.attempts } };
-        case 'uncertain':
-          state.sendMayHaveReached = true;
-          state.acceptedAtMs = startedMs;
-
-          return { status: 'uncertain',
-            error: outcome.cause,
-            details: { attempts: outcome.attempts } };
-        case 'rejected':
-          return { status: 'failed',
-            error: outcome.error,
-            details: { attempts: outcome.attempts } };
-      }
-    },
-  };
-}
-
-/**
  * Reads a key of an event context.
  * @param context Context as the API returns it.
  * @param key Key to read.
@@ -248,6 +239,74 @@ export function isOurEvent(event: FoundEvent, plan: RunPlan, instanceId: string)
 }
 
 /**
+ * Builds the shape of the event of `send-and-receive-event`, which `check-notification` shares.
+ * @param context Scenario context with the plan and the configuration.
+ * @returns Shape whose project is the monitored one.
+ */
+export function sendEventShape(context: ScenarioContext): EventShape {
+  const { plan, config } = context;
+
+  return {
+    projectId: config.hawk.projectId,
+    message: eventMessage,
+    matches: event => event.title === plan.title || contextValue(event.context, 'runId') === plan.runId,
+    check: (card, expectedCount) => checkEventFields(card, plan, expectedCount),
+    isOurs: event => isOurEvent(event, plan, config.instanceId),
+  };
+}
+
+/**
+ * Picks the shape the context names, or the default one.
+ * @param context Scenario context.
+ * @returns Shape of the event.
+ */
+function shapeOf(context: ScenarioContext): EventShape {
+  return context.eventShape ?? sendEventShape(context);
+}
+
+/**
+ * Stage 3: sends the event over the planned transport.
+ * @param timeoutMs Time limit of the stage.
+ * @param beforeSend Called right before the first send, for what must be in place before the event leaves.
+ * @returns Stage spec.
+ */
+export function collectorAcceptStage(timeoutMs: number, beforeSend?: () => void): StageSpec<ScenarioContext> {
+  return {
+    name: 'collector_accept',
+    timeoutMs,
+    run: async (context, signal): Promise<StageOutcome> => {
+      const { collector, clock, plan, state } = context;
+
+      beforeSend?.();
+
+      const startedMs = clock.monotonicMs();
+      const outcome = await collector.send(shapeOf(context).message(context), plan.transport, signal);
+
+      state.sendOutcome = outcome;
+
+      switch (outcome.kind) {
+        case 'accepted':
+          state.acceptedAtMs = clock.monotonicMs();
+
+          return { status: 'ok',
+            details: { attempts: outcome.attempts } };
+        case 'uncertain':
+          state.sendMayHaveReached = true;
+          state.acceptedAtMs = startedMs;
+
+          return { status: 'uncertain',
+            error: outcome.cause,
+            details: { attempts: outcome.attempts } };
+        case 'rejected':
+          return { status: 'failed',
+            error: outcome.error,
+            details: { attempts: outcome.attempts } };
+      }
+    },
+  };
+}
+
+/**
  * Stage 4: waits until the event is visible in the API and checks its fields.
  * @param timeoutMs Time limit of the stage.
  * @returns Stage spec.
@@ -257,11 +316,12 @@ export function eventVisibleStage(timeoutMs: number): StageSpec<ScenarioContext>
     name: 'event_visible',
     timeoutMs,
     run: async (context, signal): Promise<StageOutcome> => {
-      const { api, clock, config, plan, state } = context;
-      const { projectId } = config.hawk;
+      const { api, clock, plan, state } = context;
+      const shape = shapeOf(context);
+      const { projectId } = shape;
       const poll = await pollUntil<FoundEvent>(async (probeSignal) => {
         const events = await api.findEvents(projectId, plan.runId, probeSignal);
-        const hit = events.find(event => event.title === plan.title || contextValue(event.context, 'runId') === plan.runId);
+        const hit = events.find(event => shape.matches(event));
 
         return hit
           ? { kind: 'found',
@@ -312,7 +372,7 @@ export function eventVisibleStage(timeoutMs: number): StageSpec<ScenarioContext>
 
       state.event = card;
 
-      const mismatch = checkEventFields(card, plan, 1);
+      const mismatch = shape.check(card, 1);
 
       if (mismatch) {
         throw mismatch;
@@ -336,8 +396,9 @@ export function eventRepeatedStage(timeoutMs: number): StageSpec<ScenarioContext
     name: 'event_repeated',
     timeoutMs,
     run: async (context, signal): Promise<StageOutcome> => {
-      const { api, clock, collector, config, plan, state } = context;
-      const { projectId } = config.hawk;
+      const { api, clock, collector, plan, state } = context;
+      const shape = shapeOf(context);
+      const { projectId } = shape;
 
       if (!plan.repeat) {
         return { status: 'skipped' };
@@ -349,7 +410,7 @@ export function eventRepeatedStage(timeoutMs: number): StageSpec<ScenarioContext
         throw new CheckError('monitor_internal', { detail: 'event_repeated ran without a found event' });
       }
 
-      const outcome = await collector.send(eventMessage(context), plan.transport, signal);
+      const outcome = await collector.send(shape.message(context), plan.transport, signal);
 
       state.repeatOutcome = outcome;
 
@@ -380,7 +441,7 @@ export function eventRepeatedStage(timeoutMs: number): StageSpec<ScenarioContext
       if (poll.outcome === 'found') {
         state.event = poll.value;
 
-        const duplicate = checkEventFields(poll.value, plan, 2);
+        const duplicate = shape.check(poll.value, 2);
 
         return duplicate
           ? { status: 'failed',
@@ -440,8 +501,10 @@ export function cleanupStage(timeoutMs: number): StageSpec<ScenarioContext> {
   return {
     name: 'cleanup',
     timeoutMs,
-    run: async ({ api, clock, config, plan, state }, signal): Promise<StageOutcome> => {
-      const { projectId } = config.hawk;
+    run: async (context, signal): Promise<StageOutcome> => {
+      const { api, clock, config, plan, state } = context;
+      const shape = shapeOf(context);
+      const { projectId } = shape;
       const refuse = (event: FoundEvent): CheckError => new CheckError('cleanup_refused', { detail: `"${event.title}" (${event.originalEventId})` });
       const details: Record<string, unknown> = {};
       let target = state.event;
@@ -467,7 +530,7 @@ export function cleanupStage(timeoutMs: number): StageSpec<ScenarioContext> {
             details: { found: false } };
         }
 
-        target = found.find(event => isOurEvent(event, plan, config.instanceId));
+        target = found.find(event => shape.isOurs(event));
 
         if (target === undefined) {
           throw refuse(first);
@@ -477,7 +540,7 @@ export function cleanupStage(timeoutMs: number): StageSpec<ScenarioContext> {
         details.foundBySearch = true;
         details.originalEventId = target.originalEventId;
       } else {
-        if (!isOurEvent(target, plan, config.instanceId)) {
+        if (!shape.isOurs(target)) {
           throw refuse(target);
         }
 

@@ -9,8 +9,9 @@ import type { FakeHawk } from '../../support/fake-hawk/index.js';
 import { testConfig } from '../../support/config.js';
 import { TIMEOUT_LIMITS, createTestScenario } from '../../support/scenario.js';
 import type { TestScenarioOptions } from '../../support/scenario.js';
+import { CheckError } from '../../../src/errors/taxonomy.js';
 import { planRun } from '../../../src/scenarios/send-and-receive/plan.js';
-import { apiAvailabilityStage, checkEventFields, cleanupStage, collectorAcceptStage, collectorAvailabilityStage, eventVisibleStage, isOurEvent } from '../../../src/scenarios/send-and-receive/stages.js';
+import { apiAvailabilityStage, checkEventFields, cleanupStage, collectorAcceptStage, collectorAvailabilityStage, eventMessage, eventVisibleStage, isOurEvent, sendEventShape } from '../../../src/scenarios/send-and-receive/stages.js';
 import type { ScenarioContext } from '../../../src/scenarios/send-and-receive/stages.js';
 
 const TIMEOUT_MS = 2000;
@@ -378,5 +379,74 @@ describe('cleanupStage pause', () => {
     expect(result.details).toMatchObject({ recheck: 'skipped' });
     expect(result).toMatchObject({ status: 'failed',
       errorClass: 'cleanup_failed' });
+  });
+});
+
+describe('event shape', () => {
+  it('collectorAcceptStage sends the message of the shape', async () => {
+    const { context, plan } = scenario();
+    const custom: ScenarioContext = { ...context,
+      eventShape: { ...sendEventShape(context),
+        message: base => ({ ...eventMessage(base),
+          payload: { ...eventMessage(base).payload,
+            title: `${plan.title} shaped` } }) } };
+
+    await run(collectorAcceptStage(TIMEOUT_MS), custom);
+
+    expect(hawk.store.all(hawk.projectId).map(event => event.payload.title)).toEqual([`${plan.title} shaped`]);
+  });
+
+  it('eventVisibleStage reads the project, matches and checks through the shape', async () => {
+    const { context } = scenario();
+
+    await run(collectorAcceptStage(TIMEOUT_MS), context);
+
+    const elsewhere: ScenarioContext = { ...context,
+      eventShape: { ...sendEventShape(context),
+        projectId: 'c'.repeat(24) } };
+
+    expect(await run(eventVisibleStage(TIMEOUT_MS), elsewhere)).toMatchObject({ status: 'failed',
+      errorClass: 'api_forbidden' });
+
+    const blind: ScenarioContext = { ...context,
+      eventShape: { ...sendEventShape(context),
+        matches: () => false } };
+
+    expect(await run(eventVisibleStage(300), blind)).toMatchObject({ errorClass: 'event_not_found' });
+
+    const strict: ScenarioContext = { ...context,
+      eventShape: { ...sendEventShape(context),
+        check: () => new CheckError('event_mismatch', { field: 'shape' }) } };
+
+    expect(await run(eventVisibleStage(TIMEOUT_MS), strict)).toMatchObject({ errorClass: 'event_mismatch' });
+  });
+
+  it('cleanupStage asks the shape whether the event is ours', async () => {
+    const { context } = scenario();
+
+    await run(collectorAcceptStage(TIMEOUT_MS), context);
+    await run(eventVisibleStage(TIMEOUT_MS), context);
+
+    const refusing: ScenarioContext = { ...context,
+      eventShape: { ...sendEventShape(context),
+        isOurs: () => false } };
+
+    expect(await run(cleanupStage(TIMEOUT_MS), refusing)).toMatchObject({ status: 'failed',
+      errorClass: 'cleanup_refused' });
+    expect(hawk.store.all(hawk.projectId)).toHaveLength(1);
+  });
+
+  it('the default shape is the one of send-and-receive-event', () => {
+    const { context, plan } = scenario();
+    const shape = sendEventShape(context);
+
+    expect(shape.projectId).toBe(context.config.hawk.projectId);
+    expect(shape.message(context).payload).toMatchObject({ title: plan.title });
+    expect(shape.matches({ originalEventId: 'e',
+      groupHash: 'g',
+      totalCount: 1,
+      catcherType: plan.catcherType,
+      title: plan.title,
+      context: {} })).toBe(true);
   });
 });

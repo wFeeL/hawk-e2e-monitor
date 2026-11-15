@@ -10,7 +10,7 @@ import type { Provisioner } from '../../notifications/provisioning.js';
 import type { Receiver } from '../../receiver/server.js';
 import { planRun } from '../send-and-receive/plan.js';
 import type { PlanOptions } from '../send-and-receive/plan.js';
-import { abortedStage, followOutsideSignal, toCleanupResult } from '../send-and-receive/run.js';
+import { abortedStage, followOutsideSignal, toCleanupResult } from '../run-steps.js';
 import type { ScenarioDeps } from '../send-and-receive/run.js';
 import { apiAvailabilityStage, cleanupStage, collectorAcceptStage, collectorAvailabilityStage, eventRepeatedStage, eventVisibleStage } from '../send-and-receive/stages.js';
 import type { ScenarioState } from '../send-and-receive/stages.js';
