@@ -6,6 +6,7 @@ import type { Redactor } from '../../src/errors/redact.js';
 import { openDatabase } from '../../src/storage/database.js';
 import { createHistory } from '../../src/storage/history.js';
 import type { History } from '../../src/storage/history.js';
+import { ALERT_STORAGE_PROBE_KEY } from '../../src/storage/keys.js';
 import type { RunRow } from '../../src/storage/types.js';
 import { testConfig } from '../support/config.js';
 import { createFakeClock } from '../support/fake-clock.js';
@@ -390,7 +391,7 @@ interface Switch {
 
 describe('alerter: storage failure', () => {
   /**
-   * Makes `saveAlert` throw while a switch is on.
+   * Makes `saveAlert` and `setKv` (the health probe write) throw while a switch is on.
    * @param state Holder of the switch.
    * @returns Wrapper for `SetupOptions.wrap`.
    */
@@ -402,6 +403,13 @@ describe('alerter: storage failure', () => {
         }
 
         history.saveAlert(...args);
+      },
+      setKv: (key, value): void => {
+        if (state.broken) {
+          throw new Error('disk full');
+        }
+
+        history.setKv(key, value);
       } });
   }
 
@@ -435,6 +443,82 @@ describe('alerter: storage failure', () => {
     await vi.waitFor(() => {
       expect(history.oldestUnsentAlert()).toBeDefined();
     });
+  });
+
+  it('an unchanged state from memory keeps the storage failing flag', async () => {
+    const control = { broken: true };
+    const { alerter, bot, clock } = await setup({ wrap: breakable(control) });
+
+    alerter.onRunFinished(failedRow(clock), NO_RESULT);
+    await vi.waitFor(() => {
+      expect(bot.requests).toHaveLength(2);
+    });
+    expect(alerter.health().storageFailing).toBe(true);
+
+    // A skipped run leaves the state as it is and writes nothing, so it proves nothing about the storage.
+    expect(alerter.onRunFinished(failedRow(clock, { status: 'skipped',
+      runId: 'rdddddddddddddddd' }), NO_RESULT)).toBeUndefined();
+    expect(alerter.health().storageFailing).toBe(true);
+
+    alerter.onRunFinished(failedRow(clock, { errorClass: 'collector_unavailable',
+      failedStage: 'collector_availability',
+      runId: 'rcccccccccccccccc' }), NO_RESULT);
+    await vi.waitFor(() => {
+      expect(bot.requests).toHaveLength(3);
+    });
+    expect(messages(bot)[2]).toContain('STILL FAILING');
+    expect(messages(bot).filter(text => text.includes('STORAGE FAILING'))).toHaveLength(1);
+  });
+
+  it('health clears the failing flag once a probe write works, without any state change', async () => {
+    const control = { broken: true };
+    const { alerter, bot, clock, history } = await setup({ wrap: breakable(control) });
+
+    alerter.onRunFinished(failedRow(clock), NO_RESULT);
+    await vi.waitFor(() => {
+      expect(bot.requests).toHaveLength(2);
+    });
+
+    const failures = alerter.failures();
+
+    expect(alerter.health().storageFailing).toBe(true);
+    expect(alerter.failures()).toBe(failures);
+
+    control.broken = false;
+    expect(alerter.health().storageFailing).toBe(false);
+    expect(history.getKv(ALERT_STORAGE_PROBE_KEY)).toBeDefined();
+
+    // The recovered storage makes a later failure a new episode that announces itself again.
+    control.broken = true;
+    alerter.onRunFinished(failedRow(clock, { errorClass: 'collector_unavailable',
+      failedStage: 'collector_availability',
+      runId: 'rcccccccccccccccc' }), NO_RESULT);
+    await vi.waitFor(() => {
+      expect(bot.requests).toHaveLength(4);
+    });
+    expect(messages(bot)[2]).toContain('STORAGE FAILING');
+  });
+
+  it('health does not write a probe while the storage is fine', async () => {
+    const { alerter, history } = await setup();
+
+    expect(alerter.health().storageFailing).toBe(false);
+    expect(history.getKv(ALERT_STORAGE_PROBE_KEY)).toBeUndefined();
+  });
+
+  it('health probes do not count as storage failures', async () => {
+    const { alerter, logger } = await setup({ wrap: history => ({ ...history,
+      oldestUnsentAlert: () => {
+        throw new Error('disk gone');
+      } }) });
+    const before = alerter.failures();
+
+    for (let probe = 0; probe < 5; probe += 1) {
+      expect(alerter.health().storageFailing).toBe(true);
+    }
+
+    expect(alerter.failures()).toBe(before);
+    expect(logger.lines.filter(line => line.msg === 'alert storage failed: health')).toHaveLength(5);
   });
 
   it('a new episode of the failure announces itself again', async () => {
@@ -472,6 +556,9 @@ describe('alerter: unreadable state and failing text', () => {
   it('an unreadable state still raises the alert directly, with STORAGE FAILING', async () => {
     const { alerter, bot, clock } = await setup({ wrap: history => ({ ...history,
       alertState: () => {
+        throw new Error('locked');
+      },
+      setKv: () => {
         throw new Error('locked');
       } }) });
 
