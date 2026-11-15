@@ -165,6 +165,7 @@ export const PROJECT_DAILY_EVENTS: GraphqlOperation = {
   ${EVENT_FRAGMENT}
 `,
   idempotent: true,
+  garage: true,
 };
 
 /** Card of one event as the event page of Garage asks for it. */
@@ -182,6 +183,7 @@ export const EVENT: GraphqlOperation = {
   ${EVENT_FRAGMENT}
 `,
   idempotent: true,
+  garage: true,
 };
 
 /** Deletes an event; repeating it after an unknown outcome is decided by the caller. */

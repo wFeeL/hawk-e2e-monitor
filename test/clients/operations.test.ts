@@ -236,14 +236,71 @@ describe('graphql transport', () => {
     }
   });
 
-  it('INTERNAL_SERVER_ERROR is api_error', async () => {
-    hawk.api.knobs.errors = injected('Event', 'INTERNAL_SERVER_ERROR', 'boom');
+  it('INTERNAL_SERVER_ERROR is api_error on an operation of the monitor', async () => {
+    hawk.api.knobs.errors = injected('RemoveEvent', 'INTERNAL_SERVER_ERROR', 'boom');
 
     const token = await login(transportFor());
-    const error = checkError(await failureOf(transportFor().request(EVENT, { projectId: hawk.projectId,
+    const error = checkError(await failureOf(transportFor().request(REMOVE_EVENT, { projectId: hawk.projectId,
       eventId: 'a'.repeat(24) }, token, signal)), 'api_error');
 
     expect(error.facts.detail).toBe('boom');
+  });
+
+  it.each([EVENT, PROJECT_DAILY_EVENTS])('errors[] on the Garage document $name is api_garage_query_failed', async (operation) => {
+    const token = await login(transportFor());
+
+    for (const code of ['INTERNAL_SERVER_ERROR', 'BAD_USER_INPUT', 'GRAPHQL_VALIDATION_FAILED']) {
+      hawk.api.knobs.errors = injected(operation.name, code, 'boom');
+
+      const error = checkError(await failureOf(transportFor().request(operation, { projectId: hawk.projectId,
+        eventId: 'a'.repeat(24),
+        originalEventId: 'a'.repeat(24),
+        search: 'x' }, token, signal)), 'api_garage_query_failed');
+
+      expect(error.facts.detail).toBe('boom');
+      expect(error.culprit).toBe('hawk');
+    }
+  });
+
+  it('errors[] on a Garage document answered with HTTP 400 is read as errors[]', async () => {
+    const token = await login(transportFor());
+
+    hawk.api.knobs.errors = Object.fromEntries([['Event', { code: 'GRAPHQL_VALIDATION_FAILED',
+      message: 'Cannot query field "x" on type "Event".',
+      status: 400 }]]);
+
+    const error = checkError(await failureOf(transportFor().request(EVENT, { projectId: hawk.projectId,
+      eventId: 'a'.repeat(24),
+      originalEventId: 'a'.repeat(24) }, token, signal)), 'api_garage_query_failed');
+
+    expect(error.facts).toMatchObject({ status: 400,
+      detail: 'Cannot query field "x" on type "Event".' });
+  });
+
+  it('HTTP 400 on an operation of the monitor stays api_query_rejected', async () => {
+    hawk.api.knobs.errors = Object.fromEntries([['ProjectToken', { code: 'GRAPHQL_VALIDATION_FAILED',
+      message: 'bad',
+      status: 400 }]]);
+
+    checkError(await failureOf(transportFor().request(PROJECT_TOKEN, { projectId: hawk.projectId }, 'x', signal)), 'api_query_rejected');
+  });
+
+  it('FORBIDDEN and the sign-in codes keep their own path on a Garage document', async () => {
+    const token = await login(transportFor());
+
+    checkError(await failureOf(transportFor().request(EVENT, { projectId: 'c'.repeat(24),
+      eventId: 'a'.repeat(24),
+      originalEventId: 'a'.repeat(24) }, token, signal)), 'api_forbidden');
+
+    hawk.api.knobs.errors = injected('Event', 'UNAUTHENTICATED', 'nope');
+
+    expect(await failureOf(transportFor().request(EVENT, { projectId: hawk.projectId,
+      eventId: 'a'.repeat(24),
+      originalEventId: 'a'.repeat(24) }, token, signal))).toBeInstanceOf(GraphqlFailure);
+  });
+
+  it('only the two Garage documents carry the garage flag', () => {
+    expect(ALL_OPERATIONS.filter(operation => operation.garage === true)).toEqual([PROJECT_DAILY_EVENTS, EVENT]);
   });
 
   it.each(['UNAUTHENTICATED', 'ACCESS_TOKEN_EXPIRED_ERROR', 'SSO_REQUIRED'])('%s is GraphqlFailure', async (code) => {

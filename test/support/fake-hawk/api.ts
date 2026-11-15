@@ -27,6 +27,8 @@ export interface FakeApiError {
   message: string;
   /** How many requests get the error; unlimited by default. */
   times?: number;
+  /** HTTP status of the answer, 200 by default; Apollo answers 400 for a document that fails validation. */
+  status?: number;
 }
 
 /** Workspace the fake reports for the project. */
@@ -111,13 +113,14 @@ interface Outcome {
 }
 
 /**
- * Builds an HTTP 200 GraphQL error.
+ * Builds a GraphQL error answer.
  * @param message Error message.
  * @param code `extensions.code`.
+ * @param status HTTP status, 200 by default.
  * @returns Outcome with `data: null`.
  */
-function failure(message: string, code: string): Outcome {
-  return { status: 200,
+function failure(message: string, code: string, status = 200): Outcome {
+  return { status,
     json: { data: null,
       errors: [{ message,
         extensions: { code } }] } };
@@ -394,7 +397,7 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
     const injected = takeError(name);
 
     if (injected) {
-      return failure(injected.message, injected.code);
+      return failure(injected.message, injected.code, injected.status);
     }
 
     if (!ANONYMOUS_OPERATIONS.has(name)) {
