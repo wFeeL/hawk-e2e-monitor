@@ -483,7 +483,7 @@ describe('alerts', () => {
     lastRunId: 'raaaaaaaaaaaaaaaa',
     episodeStartedAt: at(-1000),
     episodeFailures: 2,
-    degraded: ['quota_projection'],
+    degraded: ['quota_usage'],
     updatedAt: at(0) };
 
   it('saveAlert writes state and outbox, alertState reads them back', () => {
@@ -498,7 +498,7 @@ describe('alerts', () => {
 
     expect(history.alertState(SCENARIO)).toMatchObject({ state: 'ok',
       failureStreak: 2,
-      degraded: ['quota_projection'] });
+      degraded: ['quota_usage'] });
     expect(history.pendingAlerts(at(0), 10)).toEqual([{ id: 1,
       scenario: SCENARIO,
       runId: 'raaaaaaaaaaaaaaaa',

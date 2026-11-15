@@ -86,6 +86,7 @@ describe('apiAvailabilityStage', () => {
 
     expect(result.status).toBe('ok');
     expect(result.details?.warning).toBeUndefined();
+    expect(result.details?.quotaLow).toBeUndefined();
   });
 
   it('always records the quota in its details', async () => {
@@ -107,6 +108,7 @@ describe('apiAvailabilityStage', () => {
     const result = await run(apiAvailabilityStage(TIMEOUT_MS), scenario().context);
 
     expect(result.details).toEqual({ warning: 'Event quota is almost used: 95/100',
+      quotaLow: true,
       quota: { eventsCount: 95,
         eventsLimit: 100 } });
   });

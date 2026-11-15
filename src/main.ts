@@ -11,7 +11,7 @@ import type { ParsedEnv } from './config/schema.js';
 import { createLogger } from './log/logger.js';
 import { startServe } from './serve/serve.js';
 import type { ServeHandle } from './serve/serve.js';
-import { projectedEventsPer30Days } from './storage/outcome.js';
+import { eventsSentPer30Days } from './storage/outcome.js';
 import { SERVICE_VERSION } from './version.js';
 
 const STOP_SIGNALS = ['SIGTERM', 'SIGINT'] as const;
@@ -46,7 +46,8 @@ async function serve(config: Config, env: ParsedEnv): Promise<number> {
     logger.warn(warning);
   }
 
-  logger.info('projected events', { projectedEventsPer30Days: Math.round(projectedEventsPer30Days(config)) });
+  logger.info('events sent per 30 days', { eventsSentPer30Days: Math.round(eventsSentPer30Days(config)),
+    note: 'the quota ignores events that cleanup removes; the rate limits of the plan apply' });
 
   if (config.monitoring.alertNotifyUrl === undefined) {
     logger.warn('ALERT_NOTIFY_URL is not set: alerts are written to the log and not delivered');

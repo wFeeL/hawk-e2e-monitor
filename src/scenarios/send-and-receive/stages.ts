@@ -127,6 +127,7 @@ export function apiAvailabilityStage(timeoutMs: number): StageSpec<ScenarioConte
       return left < LOW_QUOTA_SHARE
         ? { status: 'ok',
             details: { warning: `Event quota is almost used: ${usage}`,
+              quotaLow: true,
               quota: recorded } }
         : { status: 'ok',
             details: { quota: recorded } };

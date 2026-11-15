@@ -13,7 +13,7 @@ export type SkipReason = 'overlap' | 'rule_cache_warmup';
 export type RunTrigger = 'manual' | 'schedule';
 
 /** A condition under which an `ok` run still deserves a warning. */
-export type DegradedCode = 'quota_projection' | 'single_channel';
+export type DegradedCode = 'quota_usage' | 'single_channel';
 
 /** Alert state of a scenario. */
 export type AlertLevelState = 'degraded' | 'failing' | 'ok';

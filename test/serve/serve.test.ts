@@ -359,7 +359,7 @@ describe('serve: scheduled runs and the history routes', () => {
     expect(text).not.toContain(TEST_RECEIVER_SECRET);
   });
 
-  it('warns once with DEGRADED when the projected spend exceeds the quota of the plan', async () => {
+  it('does not warn about the quota when the monitor sends many events but uses almost none of it', async () => {
     const hawk = await hawkFor();
 
     hawk.api.knobs.workspace = { isBlocked: false,
@@ -371,11 +371,28 @@ describe('serve: scheduled runs and the history routes', () => {
     await vi.waitFor(() => {
       expect(finishedRows(harness).filter(row => row.status === 'ok')).toHaveLength(2);
     }, WAIT);
-    expect(finishedRows(harness)[0]?.degraded).toEqual(['quota_projection']);
+    expect(finishedRows(harness).map(row => row.degraded)).toEqual([[], []]);
+    expect(harness.bot.requests).toHaveLength(0);
+  });
+
+  it('warns once with DEGRADED when the quota of the plan is nearly used', async () => {
+    const hawk = await hawkFor();
+
+    hawk.api.knobs.workspace = { isBlocked: false,
+      eventsLimit: 1000,
+      billingPeriodEventsCount: 950 };
+
+    const harness = await launch({}, hawk);
+
+    await vi.waitFor(() => {
+      expect(finishedRows(harness).filter(row => row.status === 'ok')).toHaveLength(2);
+    }, WAIT);
+    expect(finishedRows(harness)[0]?.degraded).toEqual(['quota_usage']);
     await vi.waitFor(() => {
       expect(titles(harness.bot)).toEqual(['DEGRADED']);
     }, WAIT);
-    expect(harness.bot.requests[0]?.form.message).toContain('quota_projection');
+    expect(harness.bot.requests[0]?.form.message).toContain('degraded: quota_usage');
+    expect(harness.bot.requests[0]?.form.message).toContain('Event quota is almost used: 950/1000');
   });
 
   it('filters and limits /runs and rejects bad parameters with a text', async () => {

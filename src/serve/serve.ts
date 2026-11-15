@@ -33,7 +33,6 @@ import { createHistory } from '../storage/history.js';
 import type { History } from '../storage/history.js';
 import { MATCH_CHANGED_KEY } from '../storage/keys.js';
 import { LEASE_REFRESH_MS, liveLease, releaseLease, writeLease } from '../storage/lease.js';
-import { projectedEventsPer30Days } from '../storage/outcome.js';
 import { systemClock } from '../time/clock.js';
 import type { Clock } from '../time/clock.js';
 import { createRoutes } from './routes.js';
@@ -542,7 +541,6 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
       onRunFinished: [(row, result) => {
         alerter.onRunFinished(row, result);
       }],
-      projectedEventsPer30Days: projectedEventsPer30Days(config),
       exit });
     const sweeper = createSweeper({ api,
       history,
