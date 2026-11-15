@@ -2,7 +2,7 @@ import type { Transport } from '../clients/collector.js';
 import type { Culprit, ErrorClass } from '../errors/taxonomy.js';
 
 /** Stages of a run, in execution order. */
-export type StageName = 'collector_availability' | 'api_availability' | 'collector_accept' | 'event_visible' | 'event_repeated' | 'cleanup';
+export type StageName = 'collector_availability' | 'api_availability' | 'notification_setup' | 'collector_accept' | 'event_visible' | 'notification_formed' | 'event_repeated' | 'cleanup';
 
 /** How a stage ended. */
 export type StageStatus = 'ok' | 'failed' | 'uncertain' | 'skipped';
@@ -45,6 +45,34 @@ export interface RunEvent {
   groupHash: string;
   /** Number of repetitions counted by Hawk. */
   totalCount: number;
+}
+
+/** What the run learned about the notifications of its event. */
+export interface RunNotification {
+  /** The webhook notification. */
+  webhook?: {
+    /** Time from the collector's answer to the first webhook POST. */
+    latencyMs: number;
+    /** Id of the event named in the webhook, when the body had one. */
+    eventId?: string;
+  };
+  /** The loop notification. */
+  loop?: {
+    /** Time from the collector's answer to the first loop POST. */
+    latencyMs: number;
+  };
+  /** POSTs with a valid secret but no run id of this run. */
+  unmatched: number;
+}
+
+/** What provisioning did for this run. */
+export interface RunProvisioning {
+  /** Whether the rule was left, created or replaced. */
+  action: 'none' | 'created' | 'updated';
+  /** Extra rules deleted. */
+  deleted: number;
+  /** Whether matching changed. */
+  matchChanged: boolean;
 }
 
 /** Everything a run reports. */
@@ -91,4 +119,8 @@ export interface RunResult {
   stages: StageResult[];
   /** Outcome of cleanup. */
   cleanup: CleanupResult;
+  /** Notifications, for `check-notification` runs that got to read them. */
+  notification?: RunNotification;
+  /** Provisioning, for `check-notification` runs that got past the setup. */
+  provisioning?: RunProvisioning;
 }

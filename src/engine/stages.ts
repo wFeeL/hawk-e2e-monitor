@@ -32,6 +32,9 @@ export interface StageRunnerOptions {
   graceMs?: number;
 }
 
+/** Reason that tells a stage the run was cancelled from outside, not that its deadline passed. */
+export const RUN_CANCELLED = 'run cancelled';
+
 type AbortReason = 'budget' | 'run';
 /** The body returned. */
 interface Returned {
@@ -90,13 +93,19 @@ function settle(run: () => Promise<StageOutcome>): Promise<Settled> {
  * @param name Which stage was skipped.
  * @param settled How the body ended, or `undefined` when it never did.
  * @param reason What aborted the stage, if anything.
+ * @param cancelled Whether the run was cancelled from outside.
  * @returns Status and error without timing fields.
  */
-function toOutcome(name: StageName, settled: Settled | undefined, reason: AbortReason | undefined): StageOutcome {
+function toOutcome(name: StageName, settled: Settled | undefined, reason: AbortReason | undefined, cancelled: boolean): StageOutcome {
+  const runTimeout = (): CheckError => new CheckError('run_timeout', cancelled
+    ? { stage: name,
+        detail: 'cancelled' }
+    : { stage: name });
+
   if (settled === undefined) {
     return { status: 'failed',
       error: reason === 'run'
-        ? new CheckError('run_timeout', { stage: name })
+        ? runTimeout()
         : new CheckError('monitor_internal', { stage: name,
           detail: 'stage did not finish after its deadline' }) };
   }
@@ -105,7 +114,7 @@ function toOutcome(name: StageName, settled: Settled | undefined, reason: AbortR
     // After the run deadline a thrown failure is mostly the abort itself, so it must not blame Hawk.
     if (reason === 'run') {
       return { status: 'failed',
-        error: new CheckError('run_timeout', { stage: name }) };
+        error: runTimeout() };
     }
 
     return { status: 'failed',
@@ -125,7 +134,7 @@ function toOutcome(name: StageName, settled: Settled | undefined, reason: AbortR
 
   if (reason === 'run' && (outcome.status === 'failed' || outcome.status === 'uncertain')) {
     return { ...outcome,
-      error: new CheckError('run_timeout', { stage: name }) };
+      error: runTimeout() };
   }
 
   return outcome;
@@ -180,7 +189,7 @@ export async function runStage<C>(spec: StageSpec<C>, context: C, options: Stage
       ]);
     }
 
-    const outcome = toOutcome(spec.name, settled, reason);
+    const outcome = toOutcome(spec.name, settled, reason, runSignal.reason === RUN_CANCELLED);
     const result: StageResult = { name: spec.name,
       status: outcome.status,
       startedAt,

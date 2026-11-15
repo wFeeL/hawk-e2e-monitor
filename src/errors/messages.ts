@@ -144,7 +144,9 @@ export function describeError(errorClass: ErrorClass, facts: MessageFacts): stri
     case 'monitor_internal':
       return join('Internal monitor error', [': ', facts.detail], [' (', ifSet(facts.cause, text => `${text})`)]);
     case 'run_timeout':
-      return join('The run did not finish', [' within ', ifSet(facts.waitedMs, ms => `${String(ms)} ms`)]);
+      return facts.detail === 'cancelled'
+        ? 'The run was cancelled'
+        : join('The run did not finish', [' within ', ifSet(facts.waitedMs, ms => `${String(ms)} ms`)]);
     case 'tunnel_unavailable':
       return withDetail('Tunnel gave no working public address', facts.detail);
     case 'receiver_unreachable':

@@ -1,4 +1,6 @@
 import type { Transport } from './clients/collector.js';
+import { SCENARIO_NAMES } from './scenarios/send-and-receive/plan.js';
+import type { ScenarioName } from './scenarios/send-and-receive/plan.js';
 
 /** Start the service. */
 export interface ServeCommand {
@@ -11,7 +13,7 @@ export interface CheckCommand {
   /** Discriminant. */
   kind: 'check';
   /** Scenario to run. */
-  scenario: 'send-and-receive-event';
+  scenario: ScenarioName;
   /** Run number; picks the transport and the repeat unless they are forced. */
   sequence: number;
   /** Forced transport. */
@@ -40,9 +42,8 @@ export interface UsageCommand {
 export type Command = CheckCommand | ProvisionCommand | ServeCommand | UsageCommand;
 
 /** Usage text printed for an unknown command. */
-export const USAGE = 'Usage: hawk-e2e-monitor [serve]\n       hawk-e2e-monitor check send-and-receive-event [--sequence <n>] [--transport http|ws] [--repeat]\n       hawk-e2e-monitor provision [--no-wait]\n';
+export const USAGE = 'Usage: hawk-e2e-monitor [serve]\n       hawk-e2e-monitor check send-and-receive-event [--sequence <n>] [--transport http|ws] [--repeat]\n       hawk-e2e-monitor check check-notification [--sequence <n>] [--transport http|ws] [--repeat]\n       hawk-e2e-monitor provision [--no-wait]\n';
 
-const SCENARIO = 'send-and-receive-event';
 const SEQUENCE_PATTERN = /^[1-9]\d*$/u;
 
 /**
@@ -67,12 +68,14 @@ function parseCheck(args: readonly string[]): CheckCommand | UsageCommand {
     return invalid('missing scenario');
   }
 
-  if (scenario !== SCENARIO) {
+  const known = SCENARIO_NAMES.find(name => name === scenario);
+
+  if (known === undefined) {
     return invalid(`unknown scenario "${scenario}"`);
   }
 
   const command: CheckCommand = { kind: 'check',
-    scenario: SCENARIO,
+    scenario: known,
     sequence: 1,
     repeat: false };
   const seen = new Set<string>();

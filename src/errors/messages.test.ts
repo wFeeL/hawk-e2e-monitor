@@ -36,6 +36,11 @@ describe('describeError', () => {
     }
   });
 
+  it('run_timeout says the run was cancelled when asked', () => {
+    expect(describeError('run_timeout', { detail: 'cancelled' })).toBe('The run was cancelled');
+    expect(describeError('run_timeout', {})).toBe('The run did not finish');
+  });
+
   it('collector_unavailable text', () => {
     expect(describeError('collector_unavailable', { url: 'http://c/',
       code: 'ECONNREFUSED',

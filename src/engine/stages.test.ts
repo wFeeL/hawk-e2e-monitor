@@ -2,7 +2,7 @@ import process from 'node:process';
 import { describe, expect, it } from 'vitest';
 import { CheckError } from '../errors/taxonomy.js';
 import { createFakeClock } from '../test-support/fake-clock.js';
-import { runStage, runStageGroup, skippedStage } from './stages.js';
+import { RUN_CANCELLED, runStage, runStageGroup, skippedStage } from './stages.js';
 import type { StageOutcome, StageSpec } from './stages.js';
 
 const neverAbort = (): AbortSignal => new AbortController().signal;
@@ -189,6 +189,22 @@ describe('runStage', () => {
     expect((await ignoring).errorClass).toBe('run_timeout');
     expect((await honoring).errorClass).toBe('run_timeout');
     expect(clock.pending()).toBe(0);
+  });
+
+  it('a run aborted with RUN_CANCELLED says it was cancelled', async () => {
+    const clock = createFakeClock();
+    const controller = new AbortController();
+    const running = runStage({ name: 'event_visible',
+      budgetMs: 100_000,
+      run: never }, undefined, { clock,
+      runSignal: controller.signal,
+      graceMs: 500 });
+
+    controller.abort(RUN_CANCELLED);
+    await clock.advance(500);
+
+    expect(await running).toMatchObject({ errorClass: 'run_timeout',
+      message: 'The run was cancelled' });
   });
 
   it('a stage that throws after the run deadline is run_timeout, not the thrown class', async () => {

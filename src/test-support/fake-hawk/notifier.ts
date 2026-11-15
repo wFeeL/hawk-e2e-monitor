@@ -14,8 +14,8 @@ export interface FakeNotifierKnobs {
   webhookOff?: boolean;
   /** The loop sender is not running. */
   loopOff?: boolean;
-  /** Pause before every send, in real time. */
-  delayMs?: number;
+  /** Pause before every send, in real time; a record sets it by channel. */
+  delayMs?: number | Partial<Record<NotificationChannel, number>>;
   /** Sends a channel twice; the second send waits for `after` when it is given. */
   duplicate?: DuplicateKnob;
   /** Rewrites a copy of the webhook body; the result is sent as JSON. */
@@ -341,8 +341,11 @@ export function startFakeNotifier(options: FakeNotifierOptions): FakeNotifier {
    * @param eventId Original event id.
    */
   const perform = async (channel: NotificationChannel, ruleId: string, eventId: string): Promise<void> => {
-    if (knobs.delayMs !== undefined && knobs.delayMs > 0) {
-      await sleep(knobs.delayMs);
+    const { delayMs } = knobs;
+    const pause = typeof delayMs === 'object' ? delayMs[channel] : delayMs;
+
+    if (pause !== undefined && pause > 0) {
+      await sleep(pause);
     }
 
     if (closed) {

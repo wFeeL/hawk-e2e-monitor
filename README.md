@@ -45,6 +45,32 @@ E2E_HAWK=1 npm run test:e2e
 Without `E2E_HAWK=1`, `npm run test:e2e` skips them. `npm test` runs the unit
 tests against a fake Hawk and needs no network.
 
+## Checking notifications
+
+`check check-notification` sends one event and waits for the webhook and loop
+notifications Hawk sends about it. Hawk accepts only public https addresses
+for these channels, so the receiver needs a public address. A cloudflared quick
+tunnel needs no account:
+
+```sh
+cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8091 --metrics 127.0.0.1:20241
+```
+
+Then set `RECEIVER_SECRET` and `TUNNEL_METRICS_URL=http://127.0.0.1:20241` (or
+`PUBLIC_BASE_URL` for a fixed address) in `.env` and run:
+
+```sh
+node --env-file-if-exists=.env dist/main.js provision      # creates the rule, waits 65 s for Hawk to reload rules
+node --env-file-if-exists=.env dist/main.js check check-notification
+```
+
+`provision` is optional: the check brings the rule to the expected state
+itself, but the first run after a rule change skips the notification stage
+while Hawk's notifier still caches the old rules (`provision --no-wait` skips
+that wait). The check takes the same `--sequence`, `--transport` and
+`--repeat` options. A run where only one of the two channels arrived passes
+with a warning.
+
 ## About this test assignment
 
 This repository is a test assignment for CodeX.
@@ -58,15 +84,21 @@ This repository is a test assignment for CodeX.
 - Which collector queue and worker processed an event is not visible from
   outside. The monitor checks that an event with the catcher type of each SDK
   goes all the way through.
-- So far the checks were run only against the fake Hawk in the unit tests. A
-  run against a live Hawk is still to be done.
+- The checks were run against a local Hawk built from the CodeX repositories
+  (collector, API and the workers up to the webhook and loop senders) and
+  against the fake Hawk in the unit tests. They were not run against
+  production hawk.so.
+- check-notification needs the workspace admin account to manage one
+  notification rule of the monitor in the test project, and a public https
+  address for the receiver (a cloudflared quick tunnel works). Whether the
+  webhook and loop senders run on hawk.so is not confirmed.
 - Check timeouts are fixed values from the configuration. The service does not
   compute degradation thresholds from collected data.
 
 TODO:
 
-- [x] send-and-receive-event (verified against the fake Hawk)
-- [ ] check-notification
+- [x] send-and-receive-event
+- [x] check-notification (webhook and loop channels)
 - [ ] continuous-monitoring
 - [ ] observability: history, Prometheus metrics, Grafana dashboard, heartbeat
 - [ ] telegram delivery

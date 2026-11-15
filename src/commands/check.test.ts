@@ -3,7 +3,15 @@ import type { RunResult } from '../engine/result.js';
 import type { CheckCommand } from '../cli.js';
 import { startFakeHawk } from '../test-support/fake-hawk/index.js';
 import type { FakeHawk } from '../test-support/fake-hawk/index.js';
-import { createTestDeps } from '../test-support/scenario.js';
+import { createServer } from 'node:http';
+import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { httpAddress } from '../test-support/address.js';
+import { TEST_RECEIVER_SECRET } from '../test-support/env.js';
+import { createNotificationTestDeps, createTestDeps } from '../test-support/scenario.js';
+import type { NotificationTestDeps, NotificationTestOptions } from '../test-support/scenario.js';
+import type { Config } from '../config/load.js';
+import type { NotificationDeps } from '../scenarios/check-notification/run.js';
 import { runCheckCommand } from './check.js';
 import type { CheckIo } from './check.js';
 
@@ -134,5 +142,194 @@ describe('runCheckCommand', () => {
       expect(stdout).not.toContain(secret);
       expect(stderr).not.toContain(secret);
     }
+  });
+});
+
+/** Configuration and dependencies of a command run. */
+interface Setup {
+  /** Configuration. */
+  config: Config;
+  /** Dependencies that replace the built ones. */
+  deps: Partial<NotificationDeps>;
+}
+
+/** Changes the setup of a command run. */
+type Adjust = (config: Config, deps: Partial<NotificationDeps>) => Setup;
+
+const NOTIFICATION_COMMAND: CheckCommand = { kind: 'check',
+  scenario: 'check-notification',
+  sequence: 1,
+  repeat: false };
+
+describe('runCheckCommand with check-notification', () => {
+  let parts: NotificationTestDeps | undefined;
+  const servers: Server[] = [];
+
+  afterEach(async () => {
+    await parts?.close();
+    parts = undefined;
+    for (const server of servers.splice(0)) {
+      server.closeAllConnections();
+      server.close();
+    }
+  });
+
+  /**
+   * Runs `check check-notification` with the pieces of a test setup and captures its output.
+   * @param options Setup overrides.
+   * @param adjust Changes the configuration and the dependencies before the run.
+   * @returns Exit code and both streams.
+   */
+  async function runNotification(options: NotificationTestOptions = {}, adjust: Adjust = (config, deps) => ({ config,
+    deps })): Promise<Captured> {
+    const setup = await createNotificationTestDeps(hawk, options);
+
+    parts = setup;
+
+    const captured: Captured = { code: -1,
+      stdout: '',
+      stderr: '' };
+    const io: CheckIo = {
+      stdout: (text) => {
+        captured.stdout += text;
+      },
+      stderr: (text) => {
+        captured.stderr += text;
+      },
+    };
+    const { config, deps } = adjust(setup.deps.config, { receiver: setup.receiver,
+      resolveAddress: setup.resolveAddress,
+      retryDelaysMs: setup.retryDelaysMs,
+      pollScheduleMs: setup.deps.pollScheduleMs });
+
+    captured.code = await runCheckCommand(NOTIFICATION_COMMAND, config, io, deps);
+
+    return captured;
+  }
+
+  /**
+   * Finds a port that is free right now.
+   * @returns Its number.
+   */
+  async function freePort(): Promise<number> {
+    const probe = createServer();
+
+    await new Promise<void>((resolve) => {
+      probe.listen(0, '127.0.0.1', resolve);
+    });
+
+    const { port } = probe.address() as AddressInfo;
+
+    await new Promise<void>((resolve) => {
+      probe.close(() => {
+        resolve();
+      });
+    });
+
+    return port;
+  }
+
+  it('prints the result of the new scenario and exits 0', async () => {
+    const { code, stdout, stderr } = await runNotification();
+    const result = JSON.parse(stdout) as RunResult;
+
+    expect(code).toBe(0);
+    expect(result).toMatchObject({ scenario: 'check-notification',
+      status: 'ok' });
+    expect(result.notification?.webhook).toBeDefined();
+    expect(stderr).toContain('ok\n');
+  });
+
+  it('puts the number of warnings into the summary', async () => {
+    hawk.notifier.knobs.loopOff = true;
+
+    const { code, stderr } = await runNotification();
+
+    expect(code).toBe(0);
+    expect(stderr).toContain('ok (1 warning)\n');
+  });
+
+  it('exits 1 with the failed stage and class on a failure', async () => {
+    hawk.notifier.knobs.off = true;
+
+    const { code, stdout, stderr } = await runNotification({ env: { NOTIFICATION_TIMEOUT_MS: '300' } });
+
+    expect(code).toBe(1);
+    expect((JSON.parse(stdout) as RunResult).errorClass).toBe('notification_timeout');
+    expect(stderr).toContain('failed notification_formed notification_timeout:');
+  });
+
+  it('logs and stdout hide the secret and the hostname, also in the text Hawk gives about an unresolvable host', async () => {
+    hawk.api.knobs.unresolvableHosts = ['127.0.0.1'];
+
+    const { code, stdout, stderr } = await runNotification({ preProvision: false,
+      env: { LOG_LEVEL: 'debug' } }, (config, deps) => ({ config,
+      deps: { ...deps,
+        resolveAddress: () => Promise.resolve(httpAddress(parts?.receiver.port ?? 0, 'tunnel')) } }));
+    const output = `${stdout}${stderr}`;
+
+    expect(code).toBe(1);
+    expect(stderr).toContain('failed notification_setup tunnel_unavailable:');
+    expect(stderr).toContain('run finished');
+    expect(output).toContain('***');
+    expect(output).not.toContain(TEST_RECEIVER_SECRET);
+    expect(output).not.toContain('127.0.0.1');
+  });
+
+  it('a missing secret is a configuration error and nothing runs', async () => {
+    const { code, stdout, stderr } = await runNotification({}, (config, deps) => ({ config: { ...config,
+      notifications: { ...config.notifications,
+        receiverSecret: undefined } },
+    deps }));
+
+    expect(code).toBe(1);
+    expect(stdout).toBe('');
+    expect(stderr).toContain('RECEIVER_SECRET');
+    expect(hawk.collector.posts).toBe(0);
+  });
+
+  it('keeps a receiver that the caller gave', async () => {
+    await runNotification();
+
+    const response = await fetch(`${parts?.address.baseUrl ?? ''}/hooks/probe/${TEST_RECEIVER_SECRET}`);
+
+    expect(await response.text()).toBe(parts?.receiver.nonce);
+  });
+
+  it('starts its own receiver on the configured port and closes it at the end', async () => {
+    const port = await freePort();
+    const own = httpAddress(port);
+    const { code, stderr } = await runNotification({}, (config, deps) => ({ config: { ...config,
+      notifications: { ...config.notifications,
+        receiverHost: '127.0.0.1',
+        receiverPort: port } },
+    deps: { ...deps,
+      receiver: undefined,
+      resolveAddress: () => Promise.resolve(own) } }));
+
+    expect(code, stderr).toBe(0);
+    await expect(fetch(`${own.baseUrl}/hooks/probe/${TEST_RECEIVER_SECRET}`)).rejects.toThrow();
+  });
+
+  it('a busy receiver port is a failure of the monitor, without a result', async () => {
+    const busy = createServer();
+
+    servers.push(busy);
+    await new Promise<void>((resolve) => {
+      busy.listen(0, '127.0.0.1', resolve);
+    });
+
+    const port = (busy.address() as AddressInfo).port;
+    const { code, stdout, stderr } = await runNotification({}, (config, deps) => ({ config: { ...config,
+      notifications: { ...config.notifications,
+        receiverHost: '127.0.0.1',
+        receiverPort: port } },
+    deps: { ...deps,
+      receiver: undefined } }));
+
+    expect(code).toBe(1);
+    expect(stdout).toBe('');
+    expect(stderr).toContain('failed monitor_internal:');
+    expect(hawk.collector.posts).toBe(0);
   });
 });
