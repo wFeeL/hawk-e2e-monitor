@@ -332,6 +332,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
     if (handle.abandoned) {
       logger.warn(error === undefined ? 'late result of an abandoned run' : 'late failure of an abandoned run', { runId: handle.start.runId });
+      // Its cleanup is over, so the scenario need not wait for the hold timer, which the abort above cancelled.
+      release(state, handle);
 
       return;
     }

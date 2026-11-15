@@ -526,6 +526,32 @@ describe('failures of the runner', () => {
     expect(rowOf(history, 'raaaaaaaaaaaaaaa').status).toBe('aborted');
   });
 
+  it('an abandoned run that settles within the cleanup timeout frees the scenario at once', async () => {
+    const { scheduler, clock, runners } = setup({ scenarios: [SEND] });
+
+    scheduler.start();
+    await settle(clock);
+    await clock.advance(WATCHDOG_MS);
+    expect(scheduler.runNow(SEND, 'manual')).toMatchObject({ started: false });
+    callOf(runners[SEND], 0).resolve();
+    await settle(clock);
+    expect(scheduler.activeRunIds().size).toBe(0);
+    expect(scheduler.runNow(SEND, 'manual')).toMatchObject({ started: true });
+    expect(runners[SEND].calls).toHaveLength(2);
+  });
+
+  it('an abandoned run that never settles frees the scenario when the cleanup timeout has passed', async () => {
+    const { scheduler, clock, runners } = setup({ scenarios: [SEND] });
+
+    scheduler.start();
+    await settle(clock);
+    await clock.advance(WATCHDOG_MS + CLEANUP_MS - 1);
+    expect(scheduler.runNow(SEND, 'manual')).toMatchObject({ started: false });
+    await clock.advance(1);
+    expect(scheduler.runNow(SEND, 'manual')).toMatchObject({ started: true });
+    expect(runners[SEND].calls).toHaveLength(2);
+  });
+
   it('keeps the scenario busy for the cleanup timeout after the abort, then a tick runs again', async () => {
     const { scheduler, clock, runners, history } = setup({ scenarios: [SEND] });
 
