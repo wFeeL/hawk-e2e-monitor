@@ -130,6 +130,21 @@ describe('alertText', () => {
     expect(lines(text).at(-1)).toBe('event latency: 2100 ms | webhook 3400 ms | loop 3600 ms');
   });
 
+  it('rounds stage durations and latencies to whole milliseconds', () => {
+    const row = failedRow({ eventLatencyMs: 2100.6,
+      stages: [{ name: 'collector_availability',
+        status: 'failed',
+        durationMs: 710.652_002 }] });
+    const result = notificationResult({ notification: { webhook: { latencyMs: 3400.49 },
+      loop: { latencyMs: 3600.5 },
+      unmatched: 0 } });
+    const text = lines(alertText(input({ row,
+      result }), IDENTITY));
+
+    expect(text).toContain('stages: collector_availability 711 ms failed');
+    expect(text.at(-1)).toBe('event latency: 2101 ms | webhook 3400 ms | loop 3601 ms');
+  });
+
   it('leaves the latency line out when there is no data', () => {
     const text = alertText(input({ row: failedRow({ eventLatencyMs: undefined }) }), IDENTITY);
 

@@ -244,6 +244,23 @@ describe('loadConfig', () => {
       message: 'must leave room for the recheck and removal: LATE_DUPLICATE_WAIT_MS + 4 * HTTP_TIMEOUT_MS must not exceed CLEANUP_TIMEOUT_MS (30001 ms)' }]);
   });
 
+  it.each([
+    ['HAWK_API_URL', 'http://localhost:6000/graphql'],
+    ['HAWK_COLLECTOR_URL', 'http://localhost:6666/'],
+    ['TUNNEL_METRICS_URL', 'http://localhost:1/metrics'],
+    ['ALERT_NOTIFY_URL', 'https://notify.example.test:22/u/x'],
+  ])('rejects a port that fetch blocks in %s', (variable, value) => {
+    const port = new URL(value).port;
+
+    expect(expectErrors(loadConfig(validEnv({ [variable]: value })))).toEqual([{ variable,
+      message: `uses port ${port}, which fetch blocks; pick another port` }]);
+  });
+
+  it('accepts ports next to the blocked ones', () => {
+    expectOk(loadConfig(validEnv({ HAWK_COLLECTOR_URL: 'http://localhost:6001/',
+      HAWK_API_URL: 'http://localhost:6664/graphql' })));
+  });
+
   it('the default timeouts are valid together', () => {
     expectOk(loadConfig(validEnv()));
   });

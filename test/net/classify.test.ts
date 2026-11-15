@@ -50,6 +50,15 @@ describe('classifyNetworkError', () => {
         beforeSend: false });
   });
 
+  it('names a port that fetch blocks, as the real fetch reports it', async () => {
+    const error = await fetch('http://127.0.0.1:6000/').catch((caught: unknown) => caught);
+
+    expect(classifyNetworkError(error, 'collector'))
+      .toEqual({ errorClass: 'collector_unavailable',
+        code: 'BAD_PORT',
+        beforeSend: true });
+  });
+
   it('keeps other codes and falls back to UNKNOWN', () => {
     expect(classifyNetworkError(fetchFailed('UND_ERR_SOCKET'), 'collector'))
       .toEqual({ errorClass: 'collector_unavailable',

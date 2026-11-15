@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { decodeIntegrationToken } from '../hawk/token.js';
+import { blockedPortOf } from '../net/blocked-ports.js';
 import { CHECK_NOTIFICATION, SCENARIO_NAMES, SEND_AND_RECEIVE_EVENT } from '../scenarios/names.js';
 import { boundedDurationMs, durationMs } from './duration.js';
 
@@ -92,12 +93,26 @@ export const STAGE_TIMEOUT_VARS = [
 ] as const;
 
 /**
+ * Rejects a URL whose port `fetch` refuses to connect to, so the mistake shows at startup.
+ * @param value Address that already passed the URL check.
+ * @param ctx Collects the issue.
+ */
+function rejectBlockedPort(value: string, ctx: z.RefinementCtx): void {
+  const port = blockedPortOf(value);
+
+  if (port !== undefined) {
+    ctx.addIssue({ code: 'custom',
+      message: `uses port ${String(port)}, which fetch blocks; pick another port` });
+  }
+}
+
+/**
  * Builds the schema for an http(s) URL variable.
  * @returns URL schema with a fixed error message.
  */
-function httpUrl(): z.ZodURL {
+function httpUrl(): z.ZodType<string> {
   return z.url({ protocol: /^https?$/,
-    message: 'must be an http(s) URL' });
+    message: 'must be an http(s) URL' }).superRefine(rejectBlockedPort);
 }
 
 /**
@@ -246,7 +261,8 @@ export const ENV_SHAPE = {
   HISTORY_RETENTION_DAYS: pub(intRange(DEFAULT_RETENTION_DAYS, 1, MAX_RETENTION_DAYS)),
   // The URL carries the chat token, so the variable is not registered as public.
   ALERT_NOTIFY_URL: z.url({ protocol: /^https$/,
-    message: 'must be an https URL' }).optional(),
+    message: 'must be an https URL' }).superRefine(rejectBlockedPort)
+    .optional(),
   ALERT_AFTER_FAILURES: pub(intRange(DEFAULT_ALERT_AFTER_FAILURES, 1, MAX_ALERT_AFTER_FAILURES)),
   ALERT_RETRY_MS: pub(boundedDurationMs(DEFAULT_ALERT_RETRY_MS, MIN_ALERT_RETRY_MS, MAX_ALERT_RETRY_MS)),
   SWEEP_INTERVAL_MS: pub(durationMs(DEFAULT_SWEEP_INTERVAL_MS, { allowZero: true })),

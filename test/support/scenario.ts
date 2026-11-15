@@ -224,7 +224,7 @@ export interface NotificationTestDeps {
 export async function createNotificationTestDeps(hawk: FakeHawk, options: NotificationTestOptions = {}): Promise<NotificationTestDeps> {
   const { deps, logger } = createTestDeps(hawk, { ...options,
     env: { RECEIVER_SECRET: TEST_RECEIVER_SECRET,
-      TUNNEL_METRICS_URL: 'http://127.0.0.1:9',
+      TUNNEL_METRICS_URL: 'http://127.0.0.1:9100',
       NOTIFICATION_TIMEOUT_MS: '800',
       NOTIFICATION_PAIR_WAIT_MS: '200',
       ...options.env } });

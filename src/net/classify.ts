@@ -27,7 +27,7 @@ export function unavailableClass(target: NetTarget): ErrorClass {
 export interface NetworkFailure {
   /** Taxonomy class. */
   errorClass: ErrorClass;
-  /** Network code, `TIMEOUT` or `UNKNOWN`. */
+  /** Network code, `TIMEOUT`, `BAD_PORT` or `UNKNOWN`. */
   code: string;
   /** True when the request certainly did not reach the server. */
   beforeSend: boolean;
@@ -85,6 +85,13 @@ export function classifyNetworkError(error: unknown, target: NetTarget): Network
   const unavailable = unavailableClass(target);
   const chain = chainOf(error);
   const code = firstCode(chain);
+
+  // Undici reports a port blocked by the fetch standard as a bare `bad port` error without a code.
+  if (code === undefined && chain.some(item => item instanceof Error && item.message === 'bad port')) {
+    return { errorClass: unavailable,
+      code: 'BAD_PORT',
+      beforeSend: true };
+  }
 
   if (code === 'ENOTFOUND') {
     return { errorClass: 'dns_error',
