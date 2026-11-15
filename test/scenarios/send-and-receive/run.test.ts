@@ -303,9 +303,33 @@ describe('failures', () => {
     expect(stageOf(result, 'collector_accept')).toMatchObject({ status: 'uncertain',
       errorClass: 'collector_unavailable' });
     expect(result.sendMayHaveReached).toBe(true);
+    expect(result.warnings).toEqual([expect.stringContaining('did not confirm the event')]);
+    expect(result.warnings[0]).toContain('SDKs of users may see an error');
     expect(hawk.collector.posts).toBe(1);
     expect(result.cleanup.status).toBe('ok');
     expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
+  });
+
+  it('a repeat answered too late: the run is ok and the repeat is marked uncertain with a warning', async () => {
+    const { deps } = createTestDeps(hawk, { env: TIMEOUT_LIMITS });
+    let sends = 0;
+    const slowSecond: ScenarioDeps['collector'] = { ...deps.collector,
+      send: async (...args) => {
+        sends += 1;
+        hawk.collector.knobs.replyDelayMs = sends === 2 ? 300 : 0;
+
+        return deps.collector.send(...args);
+      } };
+    const result = await runSendAndReceive({ ...deps,
+      collector: slowSecond }, { sequence: 1,
+      repeat: true });
+
+    expect(result.status).toBe('ok');
+    expect(stageOf(result, 'collector_accept').status).toBe('ok');
+    expect(stageOf(result, 'event_repeated')).toMatchObject({ status: 'ok',
+      details: { repeatUncertain: true } });
+    expect(result.warnings).toEqual([expect.stringContaining('did not confirm the repeated event')]);
+    expect(result.warnings[0]).toContain('SDKs of users may see an error');
   });
 
   it('failure after send (a): a mangled title is a mismatch and cleanup removes the event', async () => {
@@ -354,7 +378,7 @@ describe('failures', () => {
     expect(result.cleanup.status).toBe('ok');
     expect(stageOf(result, 'cleanup').details).toMatchObject({ foundBySearch: true,
       originalEventId: expect.any(String) as string });
-    expect(result.warnings).toEqual([LATE_EVENT_WARNING]);
+    expect(result.warnings).toEqual([expect.stringContaining('did not confirm the event'), LATE_EVENT_WARNING]);
     expect(hawk.api.removeCalls).toBe(1);
     expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
   });

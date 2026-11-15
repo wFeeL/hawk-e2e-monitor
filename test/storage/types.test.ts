@@ -4,7 +4,7 @@ import { DEGRADED_CODES, RUN_TRIGGERS } from '../../src/storage/types.js';
 
 describe('runtime lists', () => {
   it('names the degradation codes and triggers', () => {
-    expect(DEGRADED_CODES).toEqual(['quota_usage', 'single_channel']);
+    expect(DEGRADED_CODES).toEqual(['quota_usage', 'single_channel', 'accept_uncertain']);
     expect(RUN_TRIGGERS).toEqual(['manual', 'schedule']);
   });
 

@@ -151,6 +151,22 @@ function messages(bot: FakeNotify): string[] {
 const NO_RESULT: RunResult | undefined = undefined;
 const SIGNAL = new AbortController().signal;
 
+describe('alerter: degraded', () => {
+  it('an ok run with an unconfirmed accept after an ok run sends DEGRADED naming the code', async () => {
+    const { alerter, clock, bot } = await setup();
+
+    expect(alerter.onRunFinished(okRow(clock), NO_RESULT)).toBeUndefined();
+    expect(alerter.onRunFinished({ ...okRow(clock),
+      runId: 'rcccccccccccccccc',
+      degraded: ['accept_uncertain'] }, NO_RESULT)).toBe('degraded');
+    await alerter.flush(SIGNAL);
+
+    expect(messages(bot)).toHaveLength(1);
+    expect(messages(bot)[0]).toContain('DEGRADED');
+    expect(messages(bot)[0]).toContain('accept_uncertain');
+  });
+});
+
 describe('alerter: threshold per scenario', () => {
   it('raises the alert of the probe after its own number of failures in a row, and of another scenario after theirs', async () => {
     const { alerter, clock, bot } = await setup({ threshold: 1,

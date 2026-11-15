@@ -38,6 +38,14 @@ function degradationOf(result: RunResult, context: OutcomeContext): DegradedCode
     codes.push('quota_usage');
   }
 
+  // Users' SDKs may have seen an error for an event that did arrive; one code covers the first send and the repeat.
+  const unconfirmed = result.stages.some(stage => (stage.name === 'collector_accept' && stage.status === 'uncertain')
+    || (stage.name === 'event_repeated' && stage.status === 'ok' && stage.details?.repeatUncertain === true));
+
+  if (unconfirmed) {
+    codes.push('accept_uncertain');
+  }
+
   return codes;
 }
 
