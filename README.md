@@ -93,7 +93,7 @@ docker compose up -d --build
 docker compose ps      # monitor becomes healthy within about 15 s
 ```
 
-Compose needs Docker Engine 25 or newer. When Hawk runs on the same host, point
+Compose needs Docker Engine 25 or newer with Compose 2.24 or newer. When Hawk runs on the same host, point
 `HAWK_API_URL` and `HAWK_COLLECTOR_URL` at `host.docker.internal` and make Hawk
 listen on an address the containers can reach, not only `127.0.0.1`. Values in
 `.env` that contain `$` go in single quotes.
@@ -170,8 +170,9 @@ notification latency histograms, the last status and run time of every
 scenario, the alert queue age and heartbeat failures.
 
 The `observability` profile adds Prometheus and Grafana with a provisioned
-dashboard and five alert rules (monitor down, scenario stale, scenario
-failing, success ratio below 90% in 6 hours, alerts not delivered):
+dashboard and six alert rules (monitor down, scenario stale, scenario
+failing, success ratio below 90% in 6 hours, only skipped runs for 6 hours,
+alerts not delivered):
 
 ```sh
 cp grafana.env.example .env.grafana   # set GF_SECURITY_ADMIN_PASSWORD
@@ -181,7 +182,10 @@ docker compose --profile observability up -d
 Prometheus listens on `127.0.0.1:9090` and Grafana on `127.0.0.1:3000`
 (`PROMETHEUS_PORT` and `GRAFANA_PORT` change the host side). Grafana refuses to
 start without a password; the password applies on the first start of the
-`grafana-data` volume, later use `grafana cli admin reset-admin-password`. The
+`grafana-data` volume, later use `grafana cli admin reset-admin-password`. Prometheus
+reads `deploy/prometheus/` at start: after a change run `docker compose kill -s HUP
+prometheus`. When Grafana is upgraded, check the `schemaVersion` of the
+dashboard together with it. The
 files under `deploy/` must stay readable by the containers (755 for
 directories, 644 for files).
 

@@ -21,6 +21,8 @@ groups:
         annotations:
           summary: "The last run of {{ $labels.scenario }} failed."
 
+      # Needs at least 6 runs in 6 hours, so it covers scenarios that run more
+      # often than every hour; ScenarioFailing covers the rest.
       - alert: SuccessRateLow
         expr: >
           (
@@ -30,6 +32,14 @@ groups:
           and sum by (scenario) (increase(hawk_e2e_runs_total{scenario!="endpoints-probe", status=~"ok|failed|aborted"}[6h])) >= 6
         annotations:
           summary: "Less than 90% of {{ $labels.scenario }} runs passed in 6 hours."
+
+      - alert: ScenarioOnlySkipped
+        expr: >
+          sum by (scenario) (increase(hawk_e2e_runs_total{scenario!="endpoints-probe", status="skipped"}[6h])) >= 3
+          and sum by (scenario) (increase(hawk_e2e_runs_total{scenario!="endpoints-probe", status=~"ok|failed"}[6h])) == 0
+        for: 10m
+        annotations:
+          summary: "{{ $labels.scenario }} only skipped its checks for 6 hours."
 
       - alert: AlertsNotDelivered
         expr: hawk_e2e_alert_backlog_seconds > 1800
