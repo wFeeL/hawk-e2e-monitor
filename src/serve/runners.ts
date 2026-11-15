@@ -1,6 +1,7 @@
 import type { ScenarioRunner } from '../scheduler/scheduler.js';
-import { CHECK_NOTIFICATION, SEND_AND_RECEIVE_EVENT } from '../scenarios/names.js';
+import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, SEND_AND_RECEIVE_EVENT } from '../scenarios/names.js';
 import type { ScenarioName } from '../scenarios/names.js';
+import { runEndpointsProbe } from '../scenarios/endpoints-probe/run.js';
 import { runSendAndReceive } from '../scenarios/send-and-receive/run.js';
 import type { Check } from '../http/internal-server.js';
 import { setupCheckNotification } from './notification-setup.js';
@@ -39,10 +40,31 @@ const setupSendAndReceive: SetupScenario = async (context): Promise<ScenarioSetu
   });
 };
 
+/**
+ * Sets up `endpoints-probe`, which needs nothing besides the clients.
+ * @param context Everything a scenario needs to be set up.
+ * @returns Its runner.
+ */
+const setupProbe: SetupScenario = async (context): Promise<ScenarioSetup> => {
+  const { config, clock, logger, masking, api, collector } = context;
+
+  return Promise.resolve({
+    runner: async ({ runId, sequence, signal }) => runEndpointsProbe({ config,
+      collector,
+      api,
+      clock,
+      logger,
+      redact: masking.redact,
+      signal }, { sequence,
+      runId }),
+  });
+};
+
 /** One entry per scenario; a new scenario is added here. */
 const SETUPS: Readonly<Record<ScenarioName, SetupScenario>> = {
   [SEND_AND_RECEIVE_EVENT]: setupSendAndReceive,
   [CHECK_NOTIFICATION]: setupCheckNotification,
+  [ENDPOINTS_PROBE]: setupProbe,
 };
 
 /**
@@ -59,7 +81,7 @@ export async function buildRunners(context: RunnerContext): Promise<BuiltRunners
   for (const scenario of context.config.monitoring.scenarios) {
     const setup = await SETUPS[scenario](context);
 
-    built.runners[scenario] = setup.runner;
+    built.runners[scenario] = context.overrides.runners?.[scenario] ?? setup.runner;
 
     if (setup.beforeFirstRun !== undefined) {
       built.beforeFirstRun[scenario] = setup.beforeFirstRun;

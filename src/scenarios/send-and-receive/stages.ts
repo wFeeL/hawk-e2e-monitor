@@ -53,6 +53,9 @@ export interface ScenarioContext {
   pollScheduleMs?: readonly number[];
 }
 
+/** What the two availability stages need, so a scenario without an event can run them too. */
+export type AvailabilityContext = Pick<ScenarioContext, 'api' | 'collector' | 'config'>;
+
 /**
  * Builds the message of the test event.
  * @param context Scenario context.
@@ -74,7 +77,7 @@ export function eventMessage(context: ScenarioContext): CollectorMessage {
  * @param timeoutMs Time limit of the stage.
  * @returns Stage spec.
  */
-export function collectorAvailabilityStage(timeoutMs: number): StageSpec<ScenarioContext> {
+export function collectorAvailabilityStage(timeoutMs: number): StageSpec<AvailabilityContext> {
   return {
     name: 'collector_availability',
     timeoutMs,
@@ -92,7 +95,7 @@ export function collectorAvailabilityStage(timeoutMs: number): StageSpec<Scenari
  * @param timeoutMs Time limit of the stage.
  * @returns Stage spec.
  */
-export function apiAvailabilityStage(timeoutMs: number): StageSpec<ScenarioContext> {
+export function apiAvailabilityStage(timeoutMs: number): StageSpec<AvailabilityContext> {
   return {
     name: 'api_availability',
     timeoutMs,

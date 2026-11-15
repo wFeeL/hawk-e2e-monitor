@@ -52,6 +52,8 @@ interface SetupOptions {
   wrap?: (history: History) => History;
   /** Failed runs in a row that raise the alert. */
   threshold?: number;
+  /** Failed probes in a row that raise the alert. */
+  probeThreshold?: number;
 }
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -78,7 +80,9 @@ async function setup(options: SetupOptions = {}): Promise<Setup> {
     monitoring: { ...base.monitoring,
       ...options.noUrl === true ? {} : { alertNotifyUrl: bot.url },
       alertRetryMs: RETRY_MS,
-      alertAfterFailures: options.threshold ?? 1 } };
+      alertAfterFailures: options.threshold ?? 1,
+      probe: { ...base.monitoring.probe,
+        alertAfterFailures: options.probeThreshold ?? base.monitoring.probe.alertAfterFailures } } };
   const alerter = createAlerter({ history: options.wrap?.(history) ?? history,
     logger,
     clock,
@@ -145,6 +149,43 @@ function messages(bot: FakeNotify): string[] {
 
 const NO_RESULT: RunResult | undefined = undefined;
 const SIGNAL = new AbortController().signal;
+
+describe('alerter: threshold per scenario', () => {
+  it('raises the alert of the probe after its own number of failures in a row, and of another scenario after theirs', async () => {
+    const { alerter, clock, bot } = await setup({ threshold: 1,
+      probeThreshold: 3 });
+    const probeFailure = (sequence: number): RunRow => failedRow(clock, { scenario: 'endpoints-probe',
+      sequence,
+      runId: `r${String.fromCodePoint(96 + sequence).repeat(16)}`,
+      failedStage: 'garage_availability',
+      errorClass: 'garage_unavailable' });
+
+    expect(alerter.onRunFinished(probeFailure(1), NO_RESULT)).toBeUndefined();
+    expect(alerter.onRunFinished(probeFailure(2), NO_RESULT)).toBeUndefined();
+    // A failure of another scenario is not held back by the threshold of the probe.
+    expect(alerter.onRunFinished(failedRow(clock), NO_RESULT)).toBe('failed');
+    expect(alerter.onRunFinished(probeFailure(3), NO_RESULT)).toBe('failed');
+    await alerter.flush(SIGNAL);
+
+    expect(messages(bot)).toHaveLength(2);
+    expect(messages(bot).filter(text => text.includes('endpoints-probe'))).toHaveLength(1);
+  });
+
+  it('one failed probe alerts nothing and a good one in between starts the count again', async () => {
+    const { alerter, clock, bot } = await setup({ probeThreshold: 3 });
+    const probe = (status: RunRow['status'], sequence: number): RunRow => failedRow(clock, { scenario: 'endpoints-probe',
+      status,
+      sequence,
+      runId: `r${String.fromCodePoint(96 + sequence).repeat(16)}` });
+
+    for (const [index, status] of (['failed', 'failed', 'ok', 'failed', 'failed'] as const).entries()) {
+      expect(alerter.onRunFinished(probe(status, index + 1), NO_RESULT)).toBeUndefined();
+    }
+
+    await alerter.flush(SIGNAL);
+    expect(bot.requests).toHaveLength(0);
+  });
+});
 
 describe('alerter: delivery', () => {
   it('queues the transition, delivers it and marks it sent', async () => {

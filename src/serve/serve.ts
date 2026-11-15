@@ -1,6 +1,6 @@
 import { hostname as osHostname } from 'node:os';
 import process from 'node:process';
-import { createAlerter } from '../alerting/alerter.js';
+import { ALERT_BACKLOG_LIMIT_MS, createAlerter } from '../alerting/alerter.js';
 import { createSweeper } from '../cleanup/sweep.js';
 import type { sendNotify } from '../alerting/notify.js';
 import { startApp, StartupError } from '../app.js';
@@ -10,13 +10,12 @@ import { createGraphqlTransport } from '../clients/graphql.js';
 import { createHawkApi } from '../clients/hawk-api.js';
 import type { HawkApi } from '../clients/hawk-api.js';
 import type { Config } from '../config/load.js';
-import { createMutableRedactor, redactDeep } from '../errors/redact.js';
+import { redactDeep } from '../errors/redact.js';
 import type { MutableRedactor } from '../errors/redact.js';
 import { collectorEndpoints, decodeIntegrationToken } from '../hawk/token.js';
 import type { Check } from '../http/internal-server.js';
 import { serializeError } from '../log/logger.js';
 import type { LogFields, Logger } from '../log/logger.js';
-import { scenarioSecrets } from '../scenarios/send-and-receive/run.js';
 import { createScheduler } from '../scheduler/scheduler.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import { openDatabase } from '../storage/database.js';
@@ -25,14 +24,19 @@ import type { History } from '../storage/history.js';
 import { LEASE_REFRESH_MS, liveLease, releaseLease, writeLease } from '../storage/lease.js';
 import { systemClock } from '../time/clock.js';
 import type { Clock } from '../time/clock.js';
+import { scenarioSettings } from '../config/scenario.js';
+import { SCENARIO_NAMES } from '../scenarios/names.js';
+import { createMetrics } from '../metrics/metrics.js';
+import { SERVICE_VERSION } from '../version.js';
+import { createServeHeartbeat } from './heartbeat-setup.js';
+import { createMasking } from './masking.js';
 import { createRoutes } from './routes.js';
 import { buildRunners } from './runners.js';
 import type { Closer, RunnerOverrides } from './scenario-setup.js';
 import { every } from '../time/every.js';
-import { MS_PER_DAY } from '../time/units.js';
+import { MS_PER_DAY, MS_PER_SECOND } from '../time/units.js';
 
-const ALERT_BACKLOG_LIMIT_MS = 1_800_000;
-const NOTIFY_TOKEN_MARKER = '/u/';
+const ALERT_BACKLOG_METRIC_MS = 15_000;
 
 /** Test hooks and replacements for the parts of `serve` that talk to the outside. */
 export interface ServeOverrides extends RunnerOverrides {
@@ -124,28 +128,6 @@ function maskedLogger(logger: Logger, masking: MutableRedactor): Logger {
   };
 }
 
-/**
- * Collects what must never reach a log or a message: the secrets of the scenarios and the notify address with its token.
- * @param config Validated configuration.
- * @returns Redactor that learns more secrets while the process runs.
- */
-function createMasking(config: Config): MutableRedactor {
-  const secrets = scenarioSecrets(config);
-  const url = config.monitoring.alertNotifyUrl;
-
-  if (url !== undefined) {
-    secrets.push(url);
-
-    const token = url.includes(NOTIFY_TOKEN_MARKER) ? url.slice(url.indexOf(NOTIFY_TOKEN_MARKER) + NOTIFY_TOKEN_MARKER.length) : '';
-
-    if (token !== '') {
-      secrets.push(token);
-    }
-  }
-
-  return createMutableRedactor(secrets);
-}
-
 /** The clients of Hawk that all runs of a process share. */
 interface HawkClients {
   /** Hawk API client. */
@@ -181,6 +163,21 @@ function createClients(config: Config, clock: Clock): HawkClients {
     clock,
     retry: config.retry }),
   };
+}
+
+/**
+ * Deletes the runs and delivered alerts that are older than the retention of their scenario.
+ * @param history Store whose old rows go.
+ * @param config Validated configuration with the retention of each scenario.
+ * @param now Current time; the cutoff of a scenario is its retention before it.
+ */
+function pruneHistory(history: History, config: Config, now: Date): void {
+  for (const scenario of SCENARIO_NAMES) {
+    history.prune(new Date(now.getTime() - scenarioSettings(config, scenario).retentionDays * MS_PER_DAY).toISOString(), { scenario });
+  }
+
+  // Rows of a scenario that was removed or renamed belong to no list above, so they expire with the global retention.
+  history.prune(new Date(now.getTime() - config.monitoring.retentionDays * MS_PER_DAY).toISOString(), { exceptScenarios: SCENARIO_NAMES });
 }
 
 /**
@@ -253,11 +250,11 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
 
     const aborted = history.abortRunning('monitor_restarted', now.toISOString());
 
-    if (aborted > 0) {
-      logger.warn('runs of an earlier process were still marked running', { aborted });
+    if (aborted.length > 0) {
+      logger.warn('runs of an earlier process were still marked running', { aborted: aborted.length });
     }
 
-    history.prune(new Date(now.getTime() - monitoring.retentionDays * MS_PER_DAY).toISOString());
+    pruneHistory(history, config, now);
 
     const renew = (): void => {
       writeLease(history, { pid: identity.pid,
@@ -272,7 +269,7 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
         logger.error('could not renew the lease', { error });
       }),
       every(clock, MS_PER_DAY, background.signal, () => {
-        history.prune(new Date(clock.wallTime().getTime() - monitoring.retentionDays * MS_PER_DAY).toISOString());
+        pruneHistory(history, config, clock.wallTime());
       }, (error) => {
         logger.error('could not prune the history', { error });
       }),
@@ -297,6 +294,25 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
     alerter.start();
     closers.push(async () => alerter.stop());
 
+    const metrics = createMetrics({ version: SERVICE_VERSION,
+      logger });
+
+    closers.push(() => {
+      metrics.stop();
+    });
+
+    for (const row of aborted) {
+      // The alerter ignores a restart of the monitor, so only the metrics hear of these rows.
+      metrics.onRunFinished(row, undefined);
+    }
+
+    metrics.initialize(history, monitoring.scenarios, scenario => scenarioSettings(config, scenario).intervalMs);
+    workers.push(every(clock, ALERT_BACKLOG_METRIC_MS, background.signal, () => {
+      metrics.setAlertBacklog((alerter.health().backlogAgeMs ?? 0) / MS_PER_SECOND);
+    }, (error) => {
+      logger.error('could not update the alert backlog metric', { error });
+    }));
+
     const built = await buildRunners({ config,
       history,
       clock,
@@ -316,6 +332,8 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
       beforeFirstRun: built.beforeFirstRun,
       onRunFinished: [(row, result) => {
         alerter.onRunFinished(row, result);
+      }, (row, result) => {
+        metrics.onRunFinished(row, result);
       }],
       exit });
     const sweeper = createSweeper({ api,
@@ -356,13 +374,30 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
         clock,
         scheduler,
         alerter,
-        sweepFailures: () => sweeper.failures() }) });
+        sweepFailures: () => sweeper.failures(),
+        metrics }) });
 
     closers.push(async () => app.stop());
     closers.push(async () => scheduler.stop());
     closers.push(async () => sweeper.stop());
+
+    const heartbeat = createServeHeartbeat({ config,
+      clock,
+      logger,
+      redact: masking.redact,
+      scheduler,
+      alerter,
+      metrics });
+
+    if (heartbeat !== undefined) {
+      closers.push(() => {
+        heartbeat.stop();
+      });
+    }
+
     scheduler.start();
     sweeper.start();
+    heartbeat?.start();
     logger.info('serve started', { scenarios: monitoring.scenarios,
       intervalMs: monitoring.intervalMs,
       databasePath: monitoring.databasePath });

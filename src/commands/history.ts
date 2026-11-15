@@ -1,5 +1,6 @@
 import type { HistoryCommand } from '../cli.js';
 import type { Config } from '../config/load.js';
+import { HIDDEN_SCENARIOS } from '../scenarios/names.js';
 import { EmptyDatabaseError, openDatabase } from '../storage/database.js';
 import { createHistory } from '../storage/history.js';
 import { systemClock } from '../time/clock.js';
@@ -40,7 +41,7 @@ export function runHistoryCommand(command: HistoryCommand, config: Config, io: C
 
       io.stdout(`${JSON.stringify(history.stats((deps.clock ?? systemClock).wallTime(), scenarios))}\n`);
     } else {
-      for (const row of history.list({ ...command.scenario === undefined ? {} : { scenario: command.scenario },
+      for (const row of history.list({ ...command.scenario === undefined ? { exceptScenarios: HIDDEN_SCENARIOS } : { scenario: command.scenario },
         limit: command.limit })) {
         io.stdout(`${JSON.stringify(row)}\n`);
       }
