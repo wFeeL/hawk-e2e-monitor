@@ -556,6 +556,8 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
         run: async () => Promise.resolve(scheduler.health().scheduler) },
       { name: 'storage',
         run: async () => Promise.resolve(scheduler.health().storage && !alerter.health().storageFailing) },
+      ...monitoring.scenarios.map(scenario => ({ name: `scenario ${scenario} stuck busy`,
+        run: async () => Promise.resolve(!scheduler.health().stuck.includes(scenario)) })),
     ];
     const readiness: Check[] = [
       { name: 'history',

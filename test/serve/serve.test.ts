@@ -6,7 +6,9 @@ import type { AddressInfo } from 'node:net';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { StartupError } from '../../src/app.js';
+import type { HawkApi } from '../../src/clients/hawk-api.js';
 import type { Config } from '../../src/config/load.js';
+import { CheckError } from '../../src/errors/taxonomy.js';
 import { createProvisioner } from '../../src/notifications/provisioning.js';
 import { openDatabase } from '../../src/storage/database.js';
 import { createHistory } from '../../src/storage/history.js';
@@ -125,6 +127,8 @@ interface LaunchOptions {
   addressPollMs?: number;
   /** Wait before the first sweep of leftover events. */
   sweepFirstDelayMs?: number;
+  /** Replaces the Hawk API client of the scenarios with a changed copy. */
+  wrapApi?: (api: HawkApi) => HawkApi;
 }
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -227,7 +231,7 @@ async function launch(options: LaunchOptions = {}, hawk?: FakeHawk): Promise<Har
     logger,
     exit,
     ...options.identity === undefined ? {} : { identity: options.identity },
-    overrides: { api: deps.api,
+    overrides: { api: options.wrapApi?.(deps.api) ?? deps.api,
       collector: deps.collector,
       pollScheduleMs: [20, 40],
       ...options.addressPollMs === undefined ? {} : { addressPollMs: options.addressPollMs },
@@ -329,6 +333,30 @@ describe('serve: scheduled runs and the history routes', () => {
       alertBacklogAgeMs: null });
     expect(typeof stats.generatedAt).toBe('string');
     expect(harness.bot.requests).toHaveLength(0);
+  });
+
+  it('masks the password, the token and the receiver secret in the stored result of a failed run', async () => {
+    const hawk = await hawkFor();
+    const leak = `${hawk.password} ${hawk.token} ${TEST_RECEIVER_SECRET}`;
+    const harness = await launch({ wrapApi: api => ({ ...api,
+      findEvents: async () => Promise.reject(new CheckError('api_error', { detail: `rejected: ${leak}` })) }) }, hawk);
+
+    await vi.waitFor(() => {
+      expect(finishedRows(harness).some(row => row.status === 'failed')).toBe(true);
+    }, WAIT);
+
+    const failed = finishedRows(harness).find(row => row.status === 'failed');
+    const response = await get(harness, `/runs/${failed?.runId ?? ''}`);
+    const text = await response.text();
+    const body = JSON.parse(text) as RunWithResult;
+
+    expect(response.status).toBe(200);
+    expect(body.result?.stages.find(stage => stage.name === 'event_visible')).toMatchObject({ status: 'failed',
+      details: { pollOutcome: 'api_error' } });
+    expect(text).toContain('rejected: ***');
+    expect(text).not.toContain(hawk.password);
+    expect(text).not.toContain(hawk.token);
+    expect(text).not.toContain(TEST_RECEIVER_SECRET);
   });
 
   it('warns once with DEGRADED when the projected spend exceeds the quota of the plan', async () => {
