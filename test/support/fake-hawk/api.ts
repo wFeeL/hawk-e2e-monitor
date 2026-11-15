@@ -255,6 +255,13 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
   };
 
   const findEvents = (search: string): Outcome => {
+    // Hawk compiles the raw search as a regex and rejects what does not parse.
+    try {
+      new RegExp(search);
+    } catch {
+      return failure('Invalid regular expression pattern', 'INTERNAL_SERVER_ERROR');
+    }
+
     const rows: unknown[] = store.search(projectId, search).slice(0, PAGE_LIMIT)
       .map(event => ({
         id: event.id,

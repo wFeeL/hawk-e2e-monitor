@@ -150,6 +150,19 @@ describe('sweepOnce', () => {
     expect(hawk.store.get(hawk.projectId, id)).toBeUndefined();
   });
 
+  it('leaves the events of an instance whose id contains ours', async () => {
+    const id = leftover('rbbbbbbbbbbbbbbb', { title: buildTitle('stand-compose', 'rbbbbbbbbbbbbbbb', 'send-and-receive-event') });
+
+    finished('rbbbbbbbbbbbbbbb', 'ok', 2 * HOUR_MS);
+
+    const report = await sweeper({ config: { ...config,
+      instanceId: 'stand' } }).sweepOnce(SIGNAL);
+
+    expect(report.error).toBeUndefined();
+    expect(report.removed).toBe(0);
+    expect(hawk.store.get(hawk.projectId, id)).toBeDefined();
+  });
+
   it('removes the event of a check-notification run as well', async () => {
     const id = leftover('rbbbbbbbbbbbbbbb', { scenario: 'check-notification' });
 
