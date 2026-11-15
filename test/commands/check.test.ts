@@ -379,11 +379,13 @@ describe('runCheckCommand with check-notification', () => {
       storeChange(60_000);
 
       const startedAt = Date.now();
-      const { code, stderr } = await runNotification({ env: { RULE_CACHE_WARMUP_MS: '300' } });
+      const { code, stdout, stderr } = await runNotification({ env: { RULE_CACHE_WARMUP_MS: '300' } });
+      const result = JSON.parse(stdout.trimEnd()) as RunResult;
 
       expect(code, stderr).toBe(0);
       expect(stderr).toContain('waiting 1 s for Hawk to reload notification rules\n');
       expect(Date.now() - startedAt).toBeLessThan(5000);
+      expect(result.stages.find(stage => stage.name === 'notification_formed')?.status).toBe('ok');
     });
 
     it('refuses when a serve started during the wait', async () => {

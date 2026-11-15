@@ -145,7 +145,8 @@ async function runNotificationCommand(command: CheckCommand, config: Config, io:
     const result = await runCheckNotification({ ...base,
       ...deps,
       ...deps.provisioner === undefined
-        ? { ...lastChange === undefined ? {} : { lastMatchChangeAtWallMs: lastChange },
+        // A stored time in the future is clamped, so the provisioner sees the waited warmup as over.
+        ? { ...lastChange === undefined ? {} : { lastMatchChangeAtWallMs: Math.min(lastChange, clock.wallTime().getTime() - settings.ruleCacheWarmupMs) },
             onMatchChange: (wallMs: number) => {
               recordMatchChange(config, new Date(wallMs), io);
             } }
