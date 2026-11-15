@@ -174,7 +174,8 @@ export async function buildRunners(context: RunnerContext): Promise<BuiltRunners
       built.beforeFirstRun[scenario] = setup.beforeFirstRun;
     }
 
-    built.readiness.push(...setup.readiness ?? []);
+    // Scenarios that share a receiver each hand over its check; it is listed once.
+    built.readiness.push(...(setup.readiness ?? []).filter(check => !built.readiness.some(known => known.name === check.name)));
 
     if (setup.receiverPort !== undefined) {
       built.receiverPort = setup.receiverPort;

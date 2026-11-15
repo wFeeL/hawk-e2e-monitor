@@ -11,6 +11,7 @@ import { resolvePublicAddress } from '../notifications/address.js';
 import type { PublicAddress } from '../notifications/address.js';
 import { createProvisioner } from '../notifications/provisioning.js';
 import { scenarioSecrets } from '../scenarios/send-and-receive/run.js';
+import { MATCH_CHANGED_KEY } from '../storage/keys.js';
 import { systemClock } from '../time/clock.js';
 import type { Clock } from '../time/clock.js';
 import type { CheckIo } from './check.js';
@@ -85,7 +86,7 @@ export async function runProvisionCommand(command: ProvisionCommand, config: Con
     io.stdout(`${redact(JSON.stringify(result))}\n`);
 
     if (result.matchChanged) {
-      recordMatchChange(config, clock.wallTime(), io);
+      recordMatchChange(config, clock.wallTime(), io, MATCH_CHANGED_KEY);
     }
 
     if (result.matchChanged && command.wait) {

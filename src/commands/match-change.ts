@@ -2,7 +2,6 @@ import type { Config } from '../config/load.js';
 import { existsSync } from 'node:fs';
 import { EmptyDatabaseError, openDatabase } from '../storage/database.js';
 import { createHistory } from '../storage/history.js';
-import { MATCH_CHANGED_KEY } from '../storage/keys.js';
 import type { CheckIo } from './check.js';
 
 /**
@@ -19,9 +18,10 @@ function messageOf(error: unknown): string {
  * A missing database is not created for the read.
  * @param config Validated configuration.
  * @param io Output streams; a failed read is reported to stderr only.
+ * @param key Key of the rule whose change time is read.
  * @returns Wall-clock time in milliseconds, or undefined.
  */
-export function readMatchChange(config: Config, io: CheckIo): number | undefined {
+export function readMatchChange(config: Config, io: CheckIo, key: string): number | undefined {
   const { databasePath } = config.monitoring;
 
   if (!existsSync(databasePath)) {
@@ -32,7 +32,7 @@ export function readMatchChange(config: Config, io: CheckIo): number | undefined
     const history = createHistory(openDatabase(databasePath, { readOnly: true }));
 
     try {
-      const stored = Date.parse(history.getKv(MATCH_CHANGED_KEY) ?? '');
+      const stored = Date.parse(history.getKv(key) ?? '');
 
       return Number.isNaN(stored) ? undefined : stored;
     } finally {
@@ -56,13 +56,14 @@ export function readMatchChange(config: Config, io: CheckIo): number | undefined
  * @param config Validated configuration.
  * @param at Time of the change.
  * @param io Output streams.
+ * @param key Key of the rule that changed.
  */
-export function recordMatchChange(config: Config, at: Date, io: CheckIo): void {
+export function recordMatchChange(config: Config, at: Date, io: CheckIo, key: string): void {
   try {
     const history = createHistory(openDatabase(config.monitoring.databasePath));
 
     try {
-      history.setKv(MATCH_CHANGED_KEY, at.toISOString());
+      history.setKv(key, at.toISOString());
     } finally {
       history.close();
     }

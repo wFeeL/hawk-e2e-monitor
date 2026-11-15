@@ -10,6 +10,7 @@ import type { ScenarioName } from '../scenarios/names.js';
 import type { ScenarioRunner } from '../scheduler/scheduler.js';
 import type { History } from '../storage/history.js';
 import type { Clock } from '../time/clock.js';
+import type { ReceiverRuntime } from './receiver-setup.js';
 
 /** Something to stop when the service stops. */
 export type Closer = () => Promise<void> | void;
@@ -48,6 +49,8 @@ export interface RunnerContext {
   overrides: RunnerOverrides;
   /** Stops what a setup started; a setup adds its closers here as soon as it has started something. */
   closers: Closer[];
+  /** The receiver the notification scenarios share; the first of them to be set up starts it and remembers it here. */
+  receiverRuntime?: Promise<ReceiverRuntime>;
 }
 
 /** What one scenario brings to the service. */

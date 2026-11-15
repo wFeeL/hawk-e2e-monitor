@@ -22,6 +22,7 @@ import { runCheckNotification } from '../scenarios/check-notification/run.js';
 import type { NotificationDeps } from '../scenarios/check-notification/run.js';
 import { runSendAndReceive, scenarioSecrets } from '../scenarios/send-and-receive/run.js';
 import type { ScenarioDeps } from '../scenarios/send-and-receive/run.js';
+import { MATCH_CHANGED_KEY } from '../storage/keys.js';
 import { systemClock } from '../time/clock.js';
 import { MS_PER_SECOND } from '../time/units.js';
 import { readMatchChange, recordMatchChange } from './match-change.js';
@@ -128,7 +129,7 @@ async function runNotificationCommand(command: CheckCommand, config: Config, io:
     }
 
     const clock = deps.clock ?? base.clock;
-    const lastChange = deps.provisioner === undefined ? readMatchChange(config, io) : undefined;
+    const lastChange = deps.provisioner === undefined ? readMatchChange(config, io, MATCH_CHANGED_KEY) : undefined;
     // A stored time in the future must not stretch the wait beyond the warmup.
     const remainingMs = lastChange === undefined
       ? 0
@@ -155,7 +156,7 @@ async function runNotificationCommand(command: CheckCommand, config: Config, io:
         // A stored time in the future is clamped, so the provisioner sees the waited warmup as over.
         ? { ...lastChange === undefined ? {} : { lastMatchChangeAtWallMs: Math.min(lastChange, clock.wallTime().getTime() - settings.ruleCacheWarmupMs) },
             onMatchChange: (wallMs: number) => {
-              recordMatchChange(config, new Date(wallMs), io);
+              recordMatchChange(config, new Date(wallMs), io, MATCH_CHANGED_KEY);
             } }
         : {},
       receiver,
