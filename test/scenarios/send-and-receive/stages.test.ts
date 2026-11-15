@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { FoundEvent } from '../../../src/clients/hawk-api.js';
+import type { EventCard, FoundEvent } from '../../../src/clients/hawk-api.js';
 import { runStage } from '../../../src/engine/stages.js';
 import type { StageResult } from '../../../src/engine/result.js';
 import type { StageSpec } from '../../../src/engine/stages.js';
@@ -10,8 +10,9 @@ import { testConfig } from '../../support/config.js';
 import { TIMEOUT_LIMITS, createTestScenario } from '../../support/scenario.js';
 import type { TestScenarioOptions } from '../../support/scenario.js';
 import { CheckError } from '../../../src/errors/taxonomy.js';
+import { groom } from '../../support/fake-hawk/grouper.js';
 import { planRun } from '../../../src/scenarios/send-and-receive/plan.js';
-import { apiAvailabilityStage, BROWSER_USER_AGENT, EVENT_LIMITS, checkEventFields, cleanupStage, collectorAcceptStage, collectorAvailabilityStage, eventMessage, eventVisibleStage, isOurEvent, sendEventShape, withinEventLimits } from '../../../src/scenarios/send-and-receive/stages.js';
+import { apiAvailabilityStage, BROWSER_USER_AGENT, EVENT_LIMITS, checkCard, checkEventFields, cleanupStage, collectorAcceptStage, collectorAvailabilityStage, eventMessage, eventVisibleStage, isOurEvent, sendEventShape, withinEventLimits } from '../../../src/scenarios/send-and-receive/stages.js';
 import type { ScenarioContext } from '../../../src/scenarios/send-and-receive/stages.js';
 
 const TIMEOUT_MS = 2000;
@@ -202,8 +203,9 @@ describe('collectorAcceptStage', () => {
     const [stored] = hawk.store.all(hawk.projectId);
 
     expect(stored?.catcherType).toBe(plan.catcherType);
-    expect(stored?.payload).toEqual(eventMessage(context).payload);
+    expect(stored?.payload).toEqual(groom(plan.catcherType, eventMessage(context).payload));
     expect(stored?.payload.title).toBe(plan.title);
+    expect((stored?.payload.context as Record<string, unknown>).password).toBe('[filtered]');
   });
 
   it('calls beforeSend before the event reaches the collector', async () => {
@@ -569,5 +571,126 @@ describe('withinEventLimits', () => {
     expect(withinEventLimits({ ...ok,
       backtrace: [{ sourceCode: [{ line: 1,
         content: 'z'.repeat(141) }] }] })).toContain('sourceCode');
+  });
+});
+
+/** Paths of the fields the card is compared on, one per value the event sends. */
+const CARD_PATHS = [
+  'type', 'release', 'user.id', 'user.name', 'get.e2e', 'addons.userAgent', 'addons.token', 'context.password', 'context.sequence',
+  ...[0, 1].flatMap(index => ['timestamp', 'type', 'category', 'message', 'level'].map(key => `breadcrumbs[${String(index)}].${key}`)),
+  ...[0, 1, 2].flatMap(index => ['file', 'line', 'column', 'function', 'arguments', 'sourceCode'].map(key => `backtrace[${String(index)}].${key}`)),
+];
+
+/**
+ * Removes the value at a path such as `backtrace[1].line`.
+ * @param payload Payload to change.
+ * @param path Dotted path with indexes in brackets.
+ * @returns The same payload without the value.
+ */
+function deleteAt(payload: Record<string, unknown>, path: string): Record<string, unknown> {
+  const steps = path.split(/[.[\]]+/u).filter(step => step !== '');
+  const last = steps.pop() ?? '';
+  let target: unknown = payload;
+
+  for (const step of steps) {
+    target = (target as Record<string, unknown>)[step];
+  }
+
+  Reflect.deleteProperty(target as Record<string, unknown>, last);
+
+  return payload;
+}
+
+describe('the fields of the card', () => {
+  it.each(CARD_PATHS)('a lost %s fails the event as event_mismatch naming the field', async (path) => {
+    const { context } = scenario();
+
+    hawk.collector.knobs.mutatePayload = payload => deleteAt(payload, path);
+
+    await run(collectorAcceptStage(TIMEOUT_MS), context);
+
+    const result = await run(eventVisibleStage(TIMEOUT_MS), context);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'event_mismatch',
+      culprit: 'hawk' });
+    expect(result.message).toContain(path);
+  });
+
+  it('passes when every field arrives', async () => {
+    const { context } = scenario();
+
+    await run(collectorAcceptStage(TIMEOUT_MS), context);
+
+    expect((await run(eventVisibleStage(TIMEOUT_MS), context)).status).toBe('ok');
+  });
+
+  it('fails with field_not_masked when the password and the token arrive as sent', async () => {
+    const { context } = scenario();
+
+    hawk.store.knobs.unmasked = true;
+    await run(collectorAcceptStage(TIMEOUT_MS), context);
+
+    const result = await run(eventVisibleStage(TIMEOUT_MS), context);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'field_not_masked',
+      culprit: 'hawk' });
+    expect(result.message).toContain('context.password');
+  });
+
+  it('fails an errors/nodejs event that carries beautifiedUserAgent', async () => {
+    const { context } = scenario({ transport: 'http' });
+
+    hawk.collector.knobs.mutatePayload = (payload) => {
+      (payload.addons as Record<string, unknown>).beautifiedUserAgent = { os: 'Linux' };
+
+      return payload;
+    };
+    await run(collectorAcceptStage(TIMEOUT_MS), context);
+
+    const result = await run(eventVisibleStage(TIMEOUT_MS), context);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'event_mismatch' });
+    expect(result.message).toContain('unexpected field beautifiedUserAgent');
+  });
+
+  it('accepts the beautifiedUserAgent that the JavaScript worker adds, and its absence', async () => {
+    const withWorker = scenario({ transport: 'ws' });
+
+    await run(collectorAcceptStage(TIMEOUT_MS), withWorker.context);
+    expect((await run(eventVisibleStage(TIMEOUT_MS), withWorker.context)).status).toBe('ok');
+    expect(hawk.store.all(hawk.projectId)[0]?.payload.addons).toHaveProperty('beautifiedUserAgent');
+
+    // The second run has the same run id, so the first event must go.
+    hawk.store.remove(hawk.projectId, hawk.store.all(hawk.projectId)[0]?.id ?? '');
+
+    hawk.store.knobs.noJsWorker = true;
+
+    const without = scenario({ transport: 'ws',
+      sequence: 2 });
+
+    await run(collectorAcceptStage(TIMEOUT_MS), without.context);
+    expect((await run(eventVisibleStage(TIMEOUT_MS), without.context)).status).toBe('ok');
+  });
+
+  it('checks that one user was affected', () => {
+    const { context, plan } = scenario();
+    const sent = eventMessage(context).payload;
+    const card = (usersAffected: number | undefined): EventCard => ({ originalEventId: 'e',
+      groupHash: 'g',
+      totalCount: 1,
+      catcherType: plan.catcherType,
+      title: plan.title,
+      ...groom(plan.catcherType, sent),
+      ...usersAffected === undefined ? {} : { usersAffected } } as EventCard);
+
+    expect(checkCard(card(1), sent, plan, 1)).toBeUndefined();
+    expect(checkCard(card(2), sent, plan, 1)).toMatchObject({ errorClass: 'event_mismatch',
+      facts: { field: 'usersAffected',
+        expected: '1',
+        actual: '2' } });
+    expect(checkCard(card(undefined), sent, plan, 1)).toMatchObject({ errorClass: 'event_mismatch' });
   });
 });

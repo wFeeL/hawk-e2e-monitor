@@ -191,4 +191,40 @@ describe('fake store subscribe', () => {
     store.setTimestamp(PROJECT, first.id, 1000);
     expect(store.ingest(PROJECT, 'errors/nodejs', { title: 'boom' }).timestamp).toBe(1000);
   });
+
+  it('stores the payload the way the grouper keeps it', () => {
+    const store = createFakeStore();
+    const event = store.ingest(PROJECT, 'errors/nodejs', { title: 'boom',
+      context: { password: 'x' } });
+
+    expect(event.payload.context).toEqual({ password: '[filtered]' });
+    expect(store.get(PROJECT, event.id)?.payload.context).toEqual({ password: '[filtered]' });
+  });
+
+  it('lets a test switch a transformation off', () => {
+    const store = createFakeStore();
+
+    store.knobs.unmasked = true;
+
+    expect(store.ingest(PROJECT, 'errors/nodejs', { title: 'boom',
+      context: { password: 'x' } }).payload.context).toEqual({ password: 'x' });
+  });
+
+  it('counts each user of a group once', () => {
+    const store = createFakeStore();
+    const first = store.ingest(PROJECT, 'errors/nodejs', { title: 'boom',
+      user: { id: 'u1' } });
+
+    expect(first.usersAffected).toBe(1);
+    store.ingest(PROJECT, 'errors/nodejs', { title: 'boom',
+      user: { id: 'u1' } });
+    expect(first.usersAffected).toBe(1);
+    store.ingest(PROJECT, 'errors/nodejs', { title: 'boom',
+      user: { id: 'u2' } });
+    expect(first.usersAffected).toBe(2);
+  });
+
+  it('counts no users for an event without one', () => {
+    expect(createFakeStore().ingest(PROJECT, 'errors/nodejs', { title: 'boom' }).usersAffected).toBe(0);
+  });
 });

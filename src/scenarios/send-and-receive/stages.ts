@@ -1,6 +1,6 @@
 import { formatDuration } from '../../time/format.js';
 import type { CollectorClient, CollectorMessage, SendOutcome } from '../../clients/collector.js';
-import type { FoundEvent, HawkApi } from '../../clients/hawk-api.js';
+import type { EventCard, FoundEvent, HawkApi } from '../../clients/hawk-api.js';
 import type { Config } from '../../config/load.js';
 import { pollUntil } from '../../engine/poll.js';
 import type { PollResult } from '../../engine/poll.js';
@@ -152,7 +152,7 @@ export interface EventShape {
    * @param expectedCount How many times the event must have been counted.
    * @returns The first difference, or undefined.
    */
-  check(card: FoundEvent, expectedCount: number): CheckError | undefined;
+  check(card: EventCard, expectedCount: number): CheckError | undefined;
   /**
    * Tells whether an event may be removed by this run.
    * @param event Event from the API.
@@ -392,6 +392,93 @@ export function checkEventFields(event: FoundEvent, plan: RunPlan, expectedCount
   return undefined;
 }
 
+const FILTERED = '[filtered]';
+const MASKED_FIELDS: ReadonlySet<string> = new Set(['context.password', 'addons.token']);
+
+/**
+ * Lists the values the event was sent with, as the names the card shows them under.
+ * @param payload Payload that was sent.
+ * @returns Name and value pairs in a fixed order.
+ */
+function sentFields(payload: Readonly<Record<string, unknown>>): Array<[string, unknown]> {
+  const fields: Array<[string, unknown]> = [['type', payload.type], ['release', payload.release]];
+
+  for (const group of ['user', 'get', 'context', 'addons'] as const) {
+    for (const [key, value] of Object.entries(payload[group] as Record<string, unknown>)) {
+      fields.push([`${group}.${key}`, value]);
+    }
+  }
+
+  for (const [group, items] of [['breadcrumbs', payload.breadcrumbs], ['backtrace', payload.backtrace]] as const) {
+    for (const [index, item] of (items as Array<Record<string, unknown>>).entries()) {
+      for (const [key, value] of Object.entries(item)) {
+        fields.push([`${group}[${String(index)}].${key}`, value]);
+      }
+    }
+  }
+
+  return fields;
+}
+
+/**
+ * Reads the value a name points to on the card.
+ * @param card Event card.
+ * @param name Name from `sentFields`, such as `backtrace[1].line` or `user.id`.
+ * @returns The value, undefined when the card has none.
+ */
+function valueAt(card: EventCard, name: string): unknown {
+  let value: unknown = card;
+
+  for (const step of name.split(/[.[\]]+/u).filter(part => part !== '')) {
+    value = typeof value === 'object' && value !== null ? (value as Record<string, unknown>)[step] : undefined;
+  }
+
+  return value;
+}
+
+/**
+ * Compares the card Garage shows with the event that was sent, field by field.
+ * Values the grouper must mask are expected as `[filtered]`.
+ * @param card Event card from the API.
+ * @param sent Payload that was sent.
+ * @param plan Plan of the run.
+ * @param expectedCount How many times the event must have been counted.
+ * @returns The first difference as an error, naming the field; undefined when the card matches.
+ */
+export function checkCard(card: EventCard, sent: Readonly<Record<string, unknown>>, plan: RunPlan, expectedCount: number): CheckError | undefined {
+  const basic = checkEventFields(card, plan, expectedCount);
+
+  if (basic) {
+    return basic;
+  }
+
+  for (const [field, value] of sentFields(sent)) {
+    const actual = valueAt(card, field);
+    const expected = MASKED_FIELDS.has(field) ? FILTERED : value;
+
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      return MASKED_FIELDS.has(field) && JSON.stringify(actual) === JSON.stringify(value)
+        ? new CheckError('field_not_masked', { field,
+          actual: show(actual) })
+        : new CheckError('event_mismatch', { field,
+          expected: show(expected),
+          actual: show(actual) });
+    }
+  }
+
+  if (plan.catcherType !== 'errors/javascript' && valueAt(card, 'addons.beautifiedUserAgent') !== undefined) {
+    return new CheckError('event_mismatch', { field: 'addons.beautifiedUserAgent' }, { message: 'Event has an unexpected field beautifiedUserAgent: only a JavaScript event is described by the JavaScript worker' });
+  }
+
+  if (card.usersAffected !== 1) {
+    return new CheckError('event_mismatch', { field: 'usersAffected',
+      expected: '1',
+      actual: show(card.usersAffected) });
+  }
+
+  return undefined;
+}
+
 /**
  * Tells whether an event is the one this run sent, so it may be removed.
  * Either the title carries our prefix, or the context names this run and this instance.
@@ -417,7 +504,7 @@ export function sendEventShape(context: ScenarioContext): EventShape {
     projectId: config.hawk.projectId,
     message: eventMessage,
     matches: event => event.title === plan.title || contextValue(event.context, 'runId') === plan.runId,
-    check: (card, expectedCount) => checkEventFields(card, plan, expectedCount),
+    check: (card, expectedCount) => checkCard(card, eventMessage(context).payload, plan, expectedCount),
     isOurs: event => isOurEvent(event, plan, config.instanceId),
   };
 }
@@ -588,7 +675,7 @@ export function eventRepeatedStage(timeoutMs: number): StageSpec<ScenarioContext
       }
 
       let lastCount = 1;
-      const poll = await pollUntil<FoundEvent>(async (probeSignal) => {
+      const poll = await pollUntil<EventCard>(async (probeSignal) => {
         const card = await api.eventCard(projectId, first.originalEventId, probeSignal);
 
         if (card === null) {

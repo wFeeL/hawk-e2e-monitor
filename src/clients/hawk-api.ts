@@ -43,8 +43,25 @@ export interface FoundEvent {
   timestamp?: number;
 }
 
-/** Event card; the same shape as a search row. */
-export type EventCard = FoundEvent;
+/** Event card as the page of an event in Garage reads it: a search row and the fields of the payload. */
+export interface EventCard extends FoundEvent {
+  /** Event type, such as the error class. */
+  type?: string | null;
+  /** Release the event was sent with. */
+  release?: string | null;
+  /** User the event happened to. */
+  user?: unknown;
+  /** Query parameters of the request. */
+  get?: unknown;
+  /** Stack frames. */
+  backtrace?: unknown;
+  /** Extra data of the catcher. */
+  addons?: unknown;
+  /** Trail of events before the error. */
+  breadcrumbs?: unknown;
+  /** Number of users the event happened to. */
+  usersAffected?: number | null;
+}
 
 /** Accounts and waits the client needs. */
 export interface HawkApiOptions {
@@ -227,7 +244,9 @@ interface RawEvent {
   catcherType: string;
   /** Arrival time, in Unix seconds. */
   timestamp?: number | null;
-  /** Title and context. */
+  /** Number of users the event happened to. */
+  usersAffected?: number | null;
+  /** Title, context and the other fields of the payload. */
   payload: RawPayload;
 }
 
@@ -237,6 +256,20 @@ interface RawPayload {
   title: string;
   /** Context, any JSON. */
   context?: unknown;
+  /** Event type. */
+  type?: string | null;
+  /** Release name. */
+  release?: string | null;
+  /** User of the event. */
+  user?: unknown;
+  /** Query parameters. */
+  get?: unknown;
+  /** Stack frames. */
+  backtrace?: unknown;
+  /** Extra data of the catcher. */
+  addons?: unknown;
+  /** Breadcrumbs. */
+  breadcrumbs?: unknown;
 }
 
 /** Answer of the FindEvents query. */
@@ -323,6 +356,25 @@ function toFoundEvent(event: RawEvent): FoundEvent {
     title: event.payload.title,
     context: event.payload.context ?? null,
     ...typeof event.timestamp === 'number' ? { timestamp: toMilliseconds(event.timestamp) } : {} };
+}
+
+/**
+ * Converts a raw event into a card.
+ * @param event Event of an answer.
+ * @returns Card with the fields of the payload.
+ */
+function toCard(event: RawEvent): EventCard {
+  const { payload } = event;
+
+  return { ...toFoundEvent(event),
+    type: payload.type,
+    release: payload.release,
+    user: payload.user,
+    get: payload.get,
+    backtrace: payload.backtrace,
+    addons: payload.addons,
+    breadcrumbs: payload.breadcrumbs,
+    usersAffected: event.usersAffected };
 }
 
 /**
@@ -452,7 +504,7 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
       throw new CheckError('api_error', { detail: 'project not found' });
     }
 
-    return data.project.event ? toFoundEvent(data.project.event) : null;
+    return data.project.event ? toCard(data.project.event) : null;
   };
 
   const projectToken: HawkApi['projectToken'] = async (projectId, signal) => {

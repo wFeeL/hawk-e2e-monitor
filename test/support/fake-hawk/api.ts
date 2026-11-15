@@ -156,6 +156,7 @@ function variable(variables: Record<string, unknown>, key: string): string {
  */
 function eventView(event: StoredEvent, eventId: string): Record<string, unknown> {
   const { title, context } = event.payload;
+  const { payload } = event;
 
   return {
     id: eventId,
@@ -164,8 +165,18 @@ function eventView(event: StoredEvent, eventId: string): Record<string, unknown>
     totalCount: event.totalCount,
     catcherType: event.catcherType,
     timestamp: event.timestamp,
+    originalTimestamp: event.timestamp,
+    isNew: event.totalCount === 1,
+    usersAffected: event.usersAffected,
     payload: {
       title: typeof title === 'string' && title !== '' ? title : 'Unknown',
+      type: payload.type,
+      release: payload.release,
+      user: payload.user,
+      get: payload.get,
+      backtrace: payload.backtrace,
+      addons: payload.addons,
+      breadcrumbs: payload.breadcrumbs,
       context: typeof context === 'object' && context !== null && !Array.isArray(context) ? context : {},
     },
   };
