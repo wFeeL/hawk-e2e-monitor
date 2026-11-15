@@ -3,7 +3,7 @@ import { CheckError, isCheckError } from '../errors/taxonomy.js';
 import type { Clock } from '../time/clock.js';
 import type { PublicAddress } from './address.js';
 import type { ChannelSettings, NotificationChannels, NotificationRule, NotificationRuleInput } from './types.js';
-import { CHECK_NOTIFICATION, EVENT_SCENARIOS } from '../scenarios/names.js';
+import { CHECK_NOTIFICATION, EVENT_SCENARIOS, TELEGRAM_DELIVERY } from '../scenarios/names.js';
 
 const CHANNEL_NAMES = ['email', 'slack', 'loop', 'telegram', 'webhook'] as const;
 const OFF: ChannelSettings = { isEnabled: false,
@@ -25,10 +25,12 @@ export interface ProvisionResult {
   deleted: number;
   /** True when the notifier may still match events by the old rule for a while. */
   matchChanged: boolean;
-  /** Id of the rule of the instance that tells about new events. */
-  ruleId: string;
-  /** Id of the rule of the instance that tells when an event repeats. */
-  thresholdRuleId: string;
+  /** Id of the rule of the instance that tells about new events; absent when the provisioner does not keep it. */
+  ruleId?: string;
+  /** Id of the rule of the instance that tells when an event repeats; absent when the provisioner does not keep it. */
+  thresholdRuleId?: string;
+  /** Id of the rule of the instance that sends to Telegram; absent when the provisioner does not keep it. */
+  telegramRuleId?: string;
 }
 
 /** Keeps the rule of the instance in the wanted state. */
@@ -62,6 +64,10 @@ export interface ProvisionerDeps {
   secret: string;
   /** Whether the loop channel is on. */
   loop: boolean;
+  /** Which rules this provisioner keeps; the new-events and threshold rules of check-notification when absent. */
+  kinds?: readonly RuleKind[];
+  /** Address of the Telegram channel of the Telegram rule; required when `kinds` has `telegram`. */
+  notifyUrl?: string;
   /** How long the notifier may cache rules. */
   warmupMs: number;
   /** Wall-clock time of the last change that affected matching, as an earlier process stored it. */
@@ -70,8 +76,10 @@ export interface ProvisionerDeps {
   onMatchChange?: (wallMs: number) => void;
 }
 
-/** Which of the two rules of the instance is meant. */
-type RuleKind = 'newEvents' | 'threshold';
+/** Which of the rules of the instance is meant. */
+export type RuleKind = 'newEvents' | 'threshold' | 'telegram';
+
+const NOTIFICATION_KINDS: readonly RuleKind[] = ['newEvents', 'threshold'];
 
 /** Decision about the rule found in Hawk. */
 interface Outcome {
@@ -210,6 +218,32 @@ export function desiredRules(deps: Pick<ProvisionerDeps, 'instanceId' | 'loop' |
 }
 
 /**
+ * Builds the rule that sends the event to Telegram and tells the receiver about it.
+ * @param deps Project, instance, secret and the notify address.
+ * @param address Public address of the receiver.
+ * @returns Input for create or update: Telegram and the webhook of `/hooks/telegram/` on, the rest off.
+ * @throws CheckError `monitor_internal` when the notify address is missing.
+ */
+export function desiredTelegramRule(deps: Pick<ProvisionerDeps, 'instanceId' | 'notifyUrl' | 'projectId' | 'secret'>, address: PublicAddress): NotificationRuleInput {
+  if (deps.notifyUrl === undefined) {
+    throw new CheckError('monitor_internal', { detail: 'the Telegram rule needs TELEGRAM_NOTIFY_URL' });
+  }
+
+  return { projectId: deps.projectId,
+    isEnabled: true,
+    whatToReceive: 'ONLY_NEW',
+    including: [`[e2e:${deps.instanceId}]`],
+    excluding: EVENT_SCENARIOS.filter(name => name !== TELEGRAM_DELIVERY),
+    channels: { email: OFF,
+      slack: OFF,
+      loop: OFF,
+      telegram: { isEnabled: true,
+        endpoint: deps.notifyUrl },
+      webhook: { isEnabled: true,
+        endpoint: `${address.baseUrl}/hooks/telegram/${deps.secret}` } } };
+}
+
+/**
  * Tells whether a failed create may have reached Hawk.
  * @param error Thrown value.
  * @returns True when the request was possibly sent.
@@ -295,9 +329,11 @@ export function createProvisioner(deps: ProvisionerDeps): Provisioner {
 
   const isOurs = (rule: NotificationRule): boolean => rule.including.length === 1 && rule.including[0] === `[e2e:${deps.instanceId}]`;
   const ownRules = async (kind: RuleKind, signal: AbortSignal): Promise<NotificationRule[]> => {
-    const kindOf = kind === 'newEvents' ? 'ONLY_NEW' : 'SEEN_MORE';
+    const kindOf = kind === 'threshold' ? 'SEEN_MORE' : 'ONLY_NEW';
+    const telegram = kind === 'telegram';
 
-    return (await api.notificationRules(projectId, signal)).filter(rule => isOurs(rule) && rule.whatToReceive === kindOf);
+    // The Telegram flag tells rule T from the new-events rule, which has the same `whatToReceive`.
+    return (await api.notificationRules(projectId, signal)).filter(rule => isOurs(rule) && rule.whatToReceive === kindOf && rule.channels.telegram.isEnabled === telegram);
   };
 
   /**
@@ -393,24 +429,36 @@ export function createProvisioner(deps: ProvisionerDeps): Provisioner {
     }
   };
 
+  const kinds = deps.kinds ?? NOTIFICATION_KINDS;
+
   /**
-   * Brings both rules to the wanted state and merges what was done.
+   * Brings the rules of the kinds to the wanted state and merges what was done.
    * @param address Public address of the receiver.
    * @param signal Deadline of the caller.
    * @returns Result with the first differing field for the stability check.
    */
   const decide = async (address: PublicAddress, signal: AbortSignal): Promise<Decided> => {
-    const wanted = desiredRules(deps, address);
-    const newEvents = await decideKind('newEvents', wanted.newEvents, address, signal);
-    const threshold = await decideKind('threshold', wanted.threshold, address, signal);
-    const difference = newEvents.difference ?? threshold.difference;
-    const actions = [newEvents.action, threshold.action];
+    const decisions = new Map<RuleKind, Decision>();
+
+    for (const kind of kinds) {
+      const wanted = kind === 'telegram'
+        ? desiredTelegramRule(deps, address)
+        : desiredRules(deps, address)[kind];
+
+      decisions.set(kind, await decideKind(kind, wanted, address, signal));
+    }
+
+    const all = [...decisions.values()];
+    const actions = all.map(decision => decision.action);
+    const difference = all.find(decision => decision.difference !== undefined)?.difference;
+    const idOf = (kind: RuleKind): string | undefined => decisions.get(kind)?.ruleId;
 
     return { action: actions.includes('created') ? 'created' : actions.includes('updated') ? 'updated' : 'none',
-      deleted: newEvents.deleted + threshold.deleted,
-      matchChanged: newEvents.matchChanged || threshold.matchChanged,
-      ruleId: newEvents.ruleId,
-      thresholdRuleId: threshold.ruleId,
+      deleted: all.reduce((sum, decision) => sum + decision.deleted, 0),
+      matchChanged: all.some(decision => decision.matchChanged),
+      ...idOf('newEvents') === undefined ? {} : { ruleId: idOf('newEvents') },
+      ...idOf('threshold') === undefined ? {} : { thresholdRuleId: idOf('threshold') },
+      ...idOf('telegram') === undefined ? {} : { telegramRuleId: idOf('telegram') },
       ...difference === undefined ? {} : { difference } };
   };
 

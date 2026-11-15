@@ -898,3 +898,111 @@ describe('fake hawk with the notifier', () => {
     expect(hawk.notifier.sent).toEqual([]);
   });
 });
+
+describe('fake notifier telegram sender', () => {
+  const NOTIFY = 'https://notify.bot.codex.so/u/abc123';
+
+  /**
+   * Builds a world whose rule sends to Telegram only, with the Telegram worker pointed at the test receiver.
+   * @returns The parts of the test.
+   */
+  async function telegramWorld(): Promise<Harness> {
+    const world = await setup(null);
+    const off = { isEnabled: false,
+      endpoint: '' };
+
+    created(world.rules.create(PROJECT, { projectId: PROJECT,
+      including: ['[e2e:t]'],
+      excluding: [],
+      channels: { email: off,
+        slack: off,
+        loop: off,
+        telegram: { endpoint: NOTIFY },
+        webhook: off } }));
+    world.notifier.knobs.codexNotifyBase = world.receiver.url;
+
+    return world;
+  }
+
+  /**
+   * Reads the form the worker posted.
+   * @param request Received request.
+   * @returns Decoded form fields.
+   */
+  function form(request: Received | undefined): Record<string, string> {
+    return Object.fromEntries(new URLSearchParams(request?.body ?? ''));
+  }
+
+  it('posts the template of the Telegram worker with the Markdown parse mode', async () => {
+    const { store, receiver, notifier } = await telegramWorld();
+    const event = ingest(store, '[e2e:t] rabc telegram_delivery');
+
+    await notifier.idle();
+
+    const [request] = receiver.requests;
+    const fields = form(request);
+
+    expect(request?.path).toBe('/u/abc123');
+    expect(request?.headers['content-type']).toBe('application/x-www-form-urlencoded');
+    expect(fields.parse_mode).toBe('Markdown');
+    expect(fields.message).toBe([
+      String.raw`\[e2e:t] rabc telegram\_delivery`,
+      '',
+      '```',
+      'hawk-e2e-monitor/check.js',
+      '```',
+      `[View details](${GARAGE}/project/${PROJECT}/event/${event.id}/) | Fake project | 1 new (1 total)`,
+    ].join('\n'));
+    expect(notifier.sent).toContainEqual({ channel: 'telegram',
+      url: `${receiver.url}/u/abc123`,
+      status: 200 });
+  });
+
+  it('an ONLY_NEW Telegram rule does not send a repetition', async () => {
+    const { store, receiver, notifier } = await telegramWorld();
+
+    ingest(store, '[e2e:t] rabc check');
+    ingest(store, '[e2e:t] rabc check');
+    await notifier.idle();
+
+    // The rule is ONLY_NEW, so a repetition sends nothing.
+    expect(receiver.requests).toHaveLength(1);
+  });
+
+  it('leaves the code block out of an event without a backtrace', async () => {
+    const { store, receiver, notifier } = await telegramWorld();
+
+    ingest(store, '[e2e:t] rabc nobacktrace', PROJECT, { backtrace: [] });
+    await notifier.idle();
+
+    expect(form(receiver.requests[0]).message?.split('\n')).toEqual([
+      '\\[e2e:t] rabc nobacktrace',
+      '',
+      expect.stringContaining('[View details]('),
+    ]);
+  });
+
+  it('telegramWorkerDown drops the task', async () => {
+    const { store, receiver, notifier } = await telegramWorld();
+
+    notifier.knobs.telegramWorkerDown = true;
+    ingest(store, '[e2e:t] rabc down');
+    await notifier.idle();
+
+    expect(receiver.requests).toEqual([]);
+    expect(notifier.sent).toEqual([]);
+  });
+
+  it('sends nothing out of the machine without a stand-in, and logs an error', async () => {
+    const { store, receiver, notifier } = await telegramWorld();
+
+    notifier.knobs.codexNotifyBase = undefined;
+    ingest(store, '[e2e:t] rabc nostandin');
+    await notifier.idle();
+
+    expect(receiver.requests).toEqual([]);
+    expect(notifier.sent).toEqual([{ channel: 'telegram',
+      url: NOTIFY,
+      status: 'error' }]);
+  });
+});
