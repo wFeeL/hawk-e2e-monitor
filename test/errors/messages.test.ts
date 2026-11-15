@@ -30,6 +30,41 @@ describe('blocked port', () => {
   });
 });
 
+describe('readable network, tls and token texts', () => {
+  it('explains a closed socket and keeps the code', () => {
+    expect(describeError('collector_unavailable', { url: 'http://c/',
+      code: 'UND_ERR_SOCKET' })).toBe('Collector http://c/ did not respond: connection closed by the other side (UND_ERR_SOCKET)');
+  });
+
+  it('explains a known tls code and leaves an unknown one as it is', () => {
+    expect(describeError('tls_error', { host: 'c.example',
+      code: 'CERT_HAS_EXPIRED' })).toBe('TLS failure for c.example: the certificate has expired (CERT_HAS_EXPIRED)');
+    expect(describeError('tls_error', { host: 'c.example',
+      code: 'SOMETHING_ELSE' })).toBe('TLS failure for c.example: SOMETHING_ELSE');
+  });
+
+  it('explains the other known codes', () => {
+    const words: readonly (readonly [string, string])[] = [
+      ['ECONNRESET', 'connection reset'],
+      ['ECONNREFUSED', 'connection refused'],
+      ['DEPTH_ZERO_SELF_SIGNED_CERT', 'self-signed certificate'],
+      ['SELF_SIGNED_CERT_IN_CHAIN', 'self-signed certificate in the chain'],
+      ['UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'the certificate chain cannot be verified'],
+      ['UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'the certificate chain cannot be verified'],
+      ['ERR_TLS_CERT_ALTNAME_INVALID', 'the certificate does not match the host name'],
+    ];
+
+    for (const [code, text] of words) {
+      expect(describeError('network_error', { code })).toBe(`Monitor network failure: ${text} (${code})`);
+    }
+  });
+
+  it('says that a regenerated token needs a minute to reach the collector', () => {
+    expect(describeError('auth_invalid_token', { detail: 'Integration token invalid' }))
+      .toBe('Collector rejected the integration token: Integration token invalid; a token regenerated less than a minute ago may not be known to the collector yet');
+  });
+});
+
 describe('collector panic and websocket timeout texts', () => {
   it('a plain-text 400 says the handler failed and leaves out the URL hint', () => {
     expect(describeError('collector_unexpected_response', { url: 'http://c:6000/',
@@ -87,7 +122,7 @@ describe('describeError', () => {
   it('garage_unavailable names the address, what was not served and why', () => {
     expect(describeError('garage_unavailable', { url: 'http://g:8080',
       detail: 'the index page',
-      code: 'ECONNREFUSED' })).toBe('Garage at http://g:8080 did not serve the index page: ECONNREFUSED');
+      code: 'ECONNREFUSED' })).toBe('Garage at http://g:8080 did not serve the index page: connection refused (ECONNREFUSED)');
     expect(describeError('garage_unavailable', { url: 'http://g:8080',
       detail: 'the index page',
       status: 502 })).toBe('Garage at http://g:8080 did not serve the index page: HTTP 502');
@@ -100,7 +135,7 @@ describe('describeError', () => {
   it('collector_unavailable text', () => {
     expect(describeError('collector_unavailable', { url: 'http://c/',
       code: 'ECONNREFUSED',
-      waitedMs: 12 })).toBe('Collector http://c/ did not respond: ECONNREFUSED, waited 12 ms');
+      waitedMs: 12 })).toBe('Collector http://c/ did not respond: connection refused (ECONNREFUSED), waited 12 ms');
     expect(describeError('collector_unavailable', { url: 'http://c/',
       status: 503,
       waitedMs: 12,

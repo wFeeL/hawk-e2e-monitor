@@ -168,6 +168,20 @@ describe('classifyCollectorReply', () => {
     expect(verdict.kind === 'accepted' ? 'accepted' : verdict.errorClass).toBe(expected);
   });
 
+  it('flattens an HTML body into one line without tags', () => {
+    const verdict = classifyCollectorReply(404, '<html>\n<body>\n  <h1>404 Not   Found</h1>\n</body>\n</html>\n');
+
+    expect(verdict).toEqual({ kind: 'rejected',
+      errorClass: 'collector_unexpected_response',
+      message: 'HTTP 404 404 Not Found' });
+  });
+
+  it('cuts a long body to 200 characters', () => {
+    const verdict = classifyCollectorReply(404, 'a'.repeat(500));
+
+    expect(verdict.kind === 'rejected' ? verdict.message : '').toBe(`HTTP 404 ${'a'.repeat(200)}`);
+  });
+
   it('names a plain-text 400 as a handler failure', () => {
     expect(classifyCollectorReply(400, 'Bad request')).toEqual({ kind: 'rejected',
       errorClass: 'collector_unexpected_response',

@@ -165,13 +165,26 @@ function parseObject(text: string): ReplyBody | undefined {
 }
 
 /**
+ * Turns a body into one short line: tags dropped, whitespace collapsed.
+ * @param text Body text, possibly HTML with line breaks.
+ * @returns At most `SNIPPET_LENGTH` characters on one line.
+ */
+function flatSnippet(text: string): string {
+  return text
+    .replace(/<[^>]*>/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .slice(0, SNIPPET_LENGTH);
+}
+
+/**
  * Describes a body that carries no message.
  * @param status HTTP status.
  * @param body Body text.
  * @returns Status and the start of the body.
  */
 function snippet(status: number, body: string): string {
-  return `HTTP ${String(status)} ${body.slice(0, SNIPPET_LENGTH)}`.trimEnd();
+  return `HTTP ${String(status)} ${flatSnippet(body)}`.trimEnd();
 }
 
 /**
@@ -224,7 +237,7 @@ export function classifyCollectorReply(status: number, body: string): ReplyVerdi
   switch (status) {
     case HttpStatus.badRequest:
       // A panic inside the collector answers plain-text 400; handler answers are always JSON.
-      return reject('collector_unexpected_response', `${body.trim().slice(0, SNIPPET_LENGTH)} (plain text instead of JSON)`);
+      return reject('collector_unexpected_response', `${flatSnippet(body)} (plain text instead of JSON)`);
     case HttpStatus.payloadTooLarge:
       return reject('payload_too_large', snippet(status, body));
     case HttpStatus.tooManyRequests:
@@ -360,7 +373,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
 
     throw new CheckError('collector_unexpected_response', { ...facts(),
       status,
-      detail: text.slice(0, SNIPPET_LENGTH) });
+      detail: flatSnippet(text) });
   };
 
   const probeInvalidToken = async (signal: AbortSignal): Promise<void> => {
@@ -377,7 +390,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
       }
 
       throw new CheckError('collector_unexpected_response', { url: endpoints.wsUrl,
-        detail: stripTokenSecret(json && typeof json.message === 'string' ? json.message : outcome.text.slice(0, SNIPPET_LENGTH)) });
+        detail: stripTokenSecret(json && typeof json.message === 'string' ? json.message : flatSnippet(outcome.text)) });
     }
 
     if (outcome.kind === 'handshake_failed') {
@@ -466,7 +479,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
     if (typeof json?.code !== 'number') {
       return { kind: 'rejected',
         error: new CheckError('collector_unexpected_response', { url: endpoints.wsUrl,
-          detail: outcome.text.slice(0, SNIPPET_LENGTH) }),
+          detail: flatSnippet(outcome.text) }),
         attempts };
     }
 

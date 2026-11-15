@@ -166,7 +166,7 @@ describe('checkGarage', () => {
     } catch (error) {
       expect(error).toBeInstanceOf(CheckError);
       expect((error as CheckError).errorClass).toBe('garage_unavailable');
-      expect((error as CheckError).message).toContain(`Garage at ${origin} did not serve the index page: ECONNREFUSED`);
+      expect((error as CheckError).message).toContain(`Garage at ${origin} did not serve the index page: connection refused (ECONNREFUSED)`);
     }
 
     garage = await startFakeGarage();
