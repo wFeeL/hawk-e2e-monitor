@@ -129,7 +129,8 @@
             "lastNotNull"
           ]
         }
-      }
+      },
+      "description": "Includes endpoints-probe; the alert rules exclude it."
     },
     {
       "id": 3,
@@ -152,7 +153,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.5, sum by (le, scenario) (rate(hawk_e2e_run_duration_seconds_bucket[1h])))",
+          "expr": "histogram_quantile(0.5, sum by (le, scenario) (rate(hawk_e2e_run_duration_seconds_bucket[6h])))",
           "legendFormat": "p50 {{scenario}}"
         },
         {
@@ -161,13 +162,14 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, scenario) (rate(hawk_e2e_run_duration_seconds_bucket[1h])))",
+          "expr": "histogram_quantile(0.95, sum by (le, scenario) (rate(hawk_e2e_run_duration_seconds_bucket[6h])))",
           "legendFormat": "p95 {{scenario}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s"
+          "unit": "s",
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -194,13 +196,14 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(hawk_e2e_stage_duration_seconds_bucket{status=\"ok\"}[1h])))",
-          "legendFormat": "{{stage}}"
+          "expr": "histogram_quantile(0.95, sum by (le, scenario, stage) (rate(hawk_e2e_stage_duration_seconds_bucket{status=\"ok\"}[6h])))",
+          "legendFormat": "{{scenario}} {{stage}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s"
+          "unit": "s",
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -227,7 +230,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.5, sum by (le, transport) (rate(hawk_e2e_event_latency_seconds_bucket[1h])))",
+          "expr": "histogram_quantile(0.5, sum by (le, transport) (rate(hawk_e2e_event_latency_seconds_bucket[6h])))",
           "legendFormat": "p50 {{transport}}"
         },
         {
@@ -236,13 +239,14 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, transport) (rate(hawk_e2e_event_latency_seconds_bucket[1h])))",
+          "expr": "histogram_quantile(0.95, sum by (le, transport) (rate(hawk_e2e_event_latency_seconds_bucket[6h])))",
           "legendFormat": "p95 {{transport}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s"
+          "unit": "s",
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -269,13 +273,14 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, channel) (rate(hawk_e2e_notification_latency_seconds_bucket[1h])))",
+          "expr": "histogram_quantile(0.95, sum by (le, channel) (rate(hawk_e2e_notification_latency_seconds_bucket[6h])))",
           "legendFormat": "{{channel}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s"
+          "unit": "s",
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -302,12 +307,14 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (scenario, stage, error_class) (increase(hawk_e2e_failures_total[1h])) or vector(0)",
+          "expr": "sum by (scenario, stage, error_class) (increase(hawk_e2e_failures_total[1h]))",
           "legendFormat": "{{scenario}} {{stage}} {{error_class}}"
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "0"
+        },
         "overrides": []
       },
       "options": {}
@@ -333,12 +340,14 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (scenario, code) (increase(hawk_e2e_degraded_total[1h])) or vector(0)",
+          "expr": "sum by (scenario, code) (increase(hawk_e2e_degraded_total[1h]))",
           "legendFormat": "{{scenario}} {{code}}"
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "0"
+        },
         "overrides": []
       },
       "options": {}
@@ -364,7 +373,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(hawk_e2e_stage_duration_seconds_bucket{scenario=\"endpoints-probe\"}[1h])))",
+          "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(hawk_e2e_stage_duration_seconds_bucket{scenario=\"endpoints-probe\"}[6h])))",
           "legendFormat": "p95 {{stage}}"
         },
         {
@@ -373,13 +382,33 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (stage) (increase(hawk_e2e_failures_total{scenario=\"endpoints-probe\"}[1h])) or vector(0)",
+          "expr": "sum by (stage) (increase(hawk_e2e_failures_total{scenario=\"endpoints-probe\"}[1h]))",
           "legendFormat": "failures {{stage}}"
         }
       ],
       "fieldConfig": {
-        "defaults": {},
-        "overrides": []
+        "defaults": {
+          "noValue": "0",
+          "unit": "s"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
       },
       "options": {}
     },
@@ -413,13 +442,33 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "increase(hawk_e2e_heartbeat_failures_total[1h]) or vector(0)",
+          "expr": "increase(hawk_e2e_heartbeat_failures_total[1h])",
           "legendFormat": "heartbeat failures per hour"
         }
       ],
       "fieldConfig": {
-        "defaults": {},
-        "overrides": []
+        "defaults": {
+          "noValue": "0",
+          "unit": "s"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
       },
       "options": {}
     }

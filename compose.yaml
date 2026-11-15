@@ -1,6 +1,6 @@
 # hawk-e2e-monitor with a cloudflared quick tunnel for the notification receiver.
 # Start: cp .env.example .env, fill it in, then `docker compose up -d --build`.
-# Needs Docker Engine 25 or newer with Compose v2.
+# Needs Docker Engine 25 or newer with Compose 2.24 or newer.
 
 # A fixed project name keeps the volume name when the checkout moves.
 name: hawk-e2e-monitor
