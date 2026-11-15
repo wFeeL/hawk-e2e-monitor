@@ -147,9 +147,9 @@ describe('operations', () => {
     expect(errors[0]?.message).toContain('toke');
   });
 
-  it('only RefreshTokens, CreateNotificationRule and RemoveEvent are not idempotent', () => {
+  it('only CreateNotificationRule and RemoveEvent are not idempotent', () => {
     expect(ALL_OPERATIONS.filter(operation => !operation.idempotent).map(operation => operation.name))
-      .toEqual(['RefreshTokens', 'RemoveEvent', 'CreateNotificationRule']);
+      .toEqual(['RemoveEvent', 'CreateNotificationRule']);
   });
 
   it('CreateNotificationRule is not idempotent', () => {

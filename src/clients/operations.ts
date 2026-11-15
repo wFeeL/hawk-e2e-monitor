@@ -7,11 +7,11 @@ export const LOGIN: GraphqlOperation = {
   idempotent: true,
 };
 
-/** Swap a refresh token for a new pair; the old refresh token dies, so no blind retries. */
+/** Swap a refresh token for a new pair; Hawk signs refresh tokens without storing them, so a retry is safe. */
 export const REFRESH_TOKENS: GraphqlOperation = {
   name: 'RefreshTokens',
   document: 'mutation RefreshTokens($refreshToken: String!) { refreshTokens(refreshToken: $refreshToken) { accessToken refreshToken } }',
-  idempotent: false,
+  idempotent: true,
 };
 
 /** Integration token of a project. */
