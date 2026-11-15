@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { decodeIntegrationToken } from '../hawk/token.js';
-import { durationMs } from './duration.js';
+import { SCENARIO_NAMES } from '../scenarios/send-and-receive/plan.js';
+import { boundedDurationMs, durationMs } from './duration.js';
 
 const DEFAULT_INTERNAL_PORT = 8090;
 const MAX_PORT = 65_535;
@@ -18,6 +19,24 @@ const DEFAULT_NOTIFICATION_TIMEOUT_MS = 120_000;
 const DEFAULT_NOTIFICATION_PAIR_WAIT_MS = 15_000;
 const DEFAULT_NOTIFICATION_SETUP_TIMEOUT_MS = 30_000;
 const DEFAULT_RULE_CACHE_WARMUP_MS = 65_000;
+const DEFAULT_CHECK_INTERVAL_MS = 600_000;
+const DEFAULT_WATCHDOG_GRACE_MS = 30_000;
+const MIN_WATCHDOG_GRACE_MS = 1000;
+const MAX_WATCHDOG_GRACE_MS = 600_000;
+const DEFAULT_STAGGER_MS = 30_000;
+const DEFAULT_TUNNEL_READY_TIMEOUT_MS = 120_000;
+const MAX_TUNNEL_READY_TIMEOUT_MS = 600_000;
+const DEFAULT_DATABASE_PATH = 'data/monitor.db';
+const DEFAULT_RETENTION_DAYS = 30;
+const MAX_RETENTION_DAYS = 3650;
+const DEFAULT_ALERT_AFTER_FAILURES = 1;
+const MAX_ALERT_AFTER_FAILURES = 10;
+const DEFAULT_ALERT_RETRY_MS = 60_000;
+const MIN_ALERT_RETRY_MS = 1000;
+const MAX_ALERT_RETRY_MS = 3_600_000;
+const DEFAULT_SWEEP_INTERVAL_MS = 3_600_000;
+const DEFAULT_SWEEP_MIN_AGE_MS = 900_000;
+const DEFAULT_SCENARIOS = 'send-and-receive-event';
 const OWN_SCENARIO_NAME = 'send-and-receive-event';
 const RECEIVER_SECRET_PATTERN = /^[\w-]{32,}$/;
 const DEFAULT_REPEAT_EVERY_N_RUNS = 6;
@@ -110,6 +129,39 @@ function isPublicBaseUrl(value: string): boolean {
     && url.username === '' && url.password === '' && url.search === '' && url.hash === '';
 }
 
+/**
+ * Builds the schema for a whole number in a range.
+ * @param defaultValue Value used when the variable is not set.
+ * @param min Lowest accepted value.
+ * @param max Highest accepted value.
+ * @returns Integer schema with a fixed error message.
+ */
+function intRange(defaultValue: number, min: number, max: number): z.ZodType<number> {
+  const message = `must be a whole number from ${String(min)} to ${String(max)}`;
+
+  return z.string()
+    .regex(/^\d+$/, message)
+    .transform(Number)
+    .pipe(z.number().int()
+      .min(min, message)
+      .max(max, message))
+    .default(defaultValue);
+}
+
+/**
+ * Builds the schema of the scenario list: names separated by commas, each at most once.
+ * @returns Schema that outputs the names in the order given.
+ */
+function scenarioList(): z.ZodType<Array<(typeof SCENARIO_NAMES)[number]>> {
+  const names = SCENARIO_NAMES.join(', ');
+
+  return z.string()
+    .default(DEFAULT_SCENARIOS)
+    .transform(value => value.split(',').map(name => name.trim()))
+    .pipe(z.array(z.enum(SCENARIO_NAMES, { message: `must be a comma-separated list of: ${names}` }))
+      .refine(list => new Set(list).size === list.length, 'must not repeat a scenario'));
+}
+
 /** Schemas of all environment variables, in the order errors are reported. */
 export const ENV_SHAPE = {
   INSTANCE_ID: pub(z.string().regex(/^[a-z0-9-]{1,32}$/, 'must be 1-32 characters: a-z, 0-9, -')
@@ -165,6 +217,21 @@ export const ENV_SHAPE = {
   NOTIFICATION_PAIR_WAIT_MS: pub(durationMs(DEFAULT_NOTIFICATION_PAIR_WAIT_MS)),
   NOTIFICATION_SETUP_TIMEOUT_MS: pub(durationMs(DEFAULT_NOTIFICATION_SETUP_TIMEOUT_MS)),
   RULE_CACHE_WARMUP_MS: pub(durationMs(DEFAULT_RULE_CACHE_WARMUP_MS)),
+  SCENARIOS: pub(scenarioList()),
+  CHECK_INTERVAL_MS: pub(durationMs(DEFAULT_CHECK_INTERVAL_MS)),
+  WATCHDOG_GRACE_MS: pub(boundedDurationMs(DEFAULT_WATCHDOG_GRACE_MS, MIN_WATCHDOG_GRACE_MS, MAX_WATCHDOG_GRACE_MS)),
+  SCENARIO_STAGGER_MS: pub(durationMs(DEFAULT_STAGGER_MS, { allowZero: true })),
+  TUNNEL_READY_TIMEOUT_MS: pub(boundedDurationMs(DEFAULT_TUNNEL_READY_TIMEOUT_MS, 0, MAX_TUNNEL_READY_TIMEOUT_MS)),
+  DATABASE_PATH: pub(z.string().min(1)
+    .default(DEFAULT_DATABASE_PATH)),
+  HISTORY_RETENTION_DAYS: pub(intRange(DEFAULT_RETENTION_DAYS, 1, MAX_RETENTION_DAYS)),
+  // The URL carries the chat token, so the variable is not registered as public.
+  ALERT_NOTIFY_URL: z.url({ protocol: /^https$/,
+    message: 'must be an https URL' }).optional(),
+  ALERT_AFTER_FAILURES: pub(intRange(DEFAULT_ALERT_AFTER_FAILURES, 1, MAX_ALERT_AFTER_FAILURES)),
+  ALERT_RETRY_MS: pub(boundedDurationMs(DEFAULT_ALERT_RETRY_MS, MIN_ALERT_RETRY_MS, MAX_ALERT_RETRY_MS)),
+  SWEEP_INTERVAL_MS: pub(durationMs(DEFAULT_SWEEP_INTERVAL_MS, { allowZero: true })),
+  SWEEP_MIN_AGE_MS: pub(durationMs(DEFAULT_SWEEP_MIN_AGE_MS)),
 };
 
 /**
@@ -198,6 +265,50 @@ function checkNotificationBudget(env: z.output<typeof baseSchema>, ctx: z.Refine
 }
 
 /**
+ * Checks the scheduling variables of the continuous monitoring against each other.
+ * @param env Parsed variables with usable numbers.
+ * @param ctx Collects the issues.
+ */
+function checkMonitoring(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx): void {
+  const runAndCleanup = env.RUN_TIMEOUT_MS + env.CLEANUP_TIMEOUT_MS;
+  const watchdog = runAndCleanup + env.WATCHDOG_GRACE_MS;
+
+  if (env.CHECK_INTERVAL_MS <= watchdog) {
+    ctx.addIssue({ code: 'custom',
+      path: ['CHECK_INTERVAL_MS'],
+      message: `must be greater than RUN_TIMEOUT_MS + CLEANUP_TIMEOUT_MS + WATCHDOG_GRACE_MS (${String(watchdog)} ms)` });
+  }
+
+  if (env.SCENARIO_STAGGER_MS > env.CHECK_INTERVAL_MS) {
+    ctx.addIssue({ code: 'custom',
+      path: ['SCENARIO_STAGGER_MS'],
+      message: 'must not exceed CHECK_INTERVAL_MS' });
+  }
+
+  if (env.SWEEP_MIN_AGE_MS < runAndCleanup) {
+    ctx.addIssue({ code: 'custom',
+      path: ['SWEEP_MIN_AGE_MS'],
+      message: `must be at least RUN_TIMEOUT_MS + CLEANUP_TIMEOUT_MS (${String(runAndCleanup)} ms)` });
+  }
+
+  if (!Array.isArray(env.SCENARIOS) || !env.SCENARIOS.includes('check-notification')) {
+    return;
+  }
+
+  if (env.RECEIVER_SECRET === undefined) {
+    ctx.addIssue({ code: 'custom',
+      path: ['SCENARIOS'],
+      message: 'check-notification needs RECEIVER_SECRET' });
+  }
+
+  if (env.PUBLIC_BASE_URL === undefined && env.TUNNEL_METRICS_URL === undefined) {
+    ctx.addIssue({ code: 'custom',
+      path: ['SCENARIOS'],
+      message: 'check-notification needs PUBLIC_BASE_URL or TUNNEL_METRICS_URL' });
+  }
+}
+
+/**
  * Checks that depend on several variables.
  * Zod also runs it when a field failed a format rule, so it skips itself when the values it needs are unusable.
  * @param env Parsed variables.
@@ -206,7 +317,8 @@ function checkNotificationBudget(env: z.output<typeof baseSchema>, ctx: z.Refine
 function checkCombinations(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx): void {
   // Zod runs this check even when a field failed a format rule, so skip values that are not usable.
   const numbers = ['HTTP_TIMEOUT_MS', 'RUN_TIMEOUT_MS', 'LATE_DUPLICATE_WAIT_MS', ...STAGE_TIMEOUT_VARS.map(([name]) => name),
-    'NOTIFICATION_TIMEOUT_MS', 'NOTIFICATION_PAIR_WAIT_MS', 'NOTIFICATION_SETUP_TIMEOUT_MS'] as const;
+    'NOTIFICATION_TIMEOUT_MS', 'NOTIFICATION_PAIR_WAIT_MS', 'NOTIFICATION_SETUP_TIMEOUT_MS',
+    'CHECK_INTERVAL_MS', 'WATCHDOG_GRACE_MS', 'SCENARIO_STAGGER_MS', 'SWEEP_MIN_AGE_MS'] as const;
 
   if (!URL.canParse(env.HAWK_API_URL) || numbers.some(name => typeof env[name] !== 'number')) {
     return;
@@ -242,6 +354,7 @@ function checkCombinations(env: z.output<typeof baseSchema>, ctx: z.RefinementCt
   }
 
   checkNotificationBudget(env, ctx);
+  checkMonitoring(env, ctx);
 
   const hostname = new URL(env.HAWK_API_URL).hostname;
   const production = hostname === 'hawk.so' || hostname.endsWith('.hawk.so');

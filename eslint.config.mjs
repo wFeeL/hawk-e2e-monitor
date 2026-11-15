@@ -56,4 +56,11 @@ export default [
       '@typescript-eslint/no-magic-numbers': 'off',
     },
   },
+  {
+    // node:sqlite is marked experimental in Node 24 but is the chosen store, see docs/architecture.md.
+    files: ['**/*.ts'],
+    rules: {
+      'n/no-unsupported-features/node-builtins': ['error', { ignores: ['sqlite'] }],
+    },
+  },
 ];

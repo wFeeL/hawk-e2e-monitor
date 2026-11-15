@@ -19,11 +19,15 @@ const EXPECTED_CULPRITS: readonly (readonly [ErrorClass, Culprit])[] = [
   ['notification_timeout', 'hawk'],
   ['notification_mismatch', 'hawk'],
   ['duplicate_notification', 'hawk'],
+  ['run_hung', 'monitor'],
+  ['monitor_restarted', 'monitor'],
+  ['monitor_stopped', 'monitor'],
+  ['alert_rejected', 'config'],
 ];
 
 describe('taxonomy', () => {
   it('culprit table covers every class and matches the spec', () => {
-    expect(ERROR_CLASSES).toHaveLength(38);
+    expect(ERROR_CLASSES).toHaveLength(42);
 
     for (const errorClass of ERROR_CLASSES) {
       expect(CULPRIT_OF[errorClass]).toBeDefined();

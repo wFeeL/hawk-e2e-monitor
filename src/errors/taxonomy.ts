@@ -12,6 +12,7 @@ export const ERROR_CLASSES = [
   'monitor_internal', 'run_timeout', 'tunnel_unavailable', 'receiver_unreachable',
   'notification_endpoint_rejected', 'provisioning_conflict', 'provisioning_unstable',
   'notification_timeout', 'notification_mismatch', 'duplicate_notification',
+  'run_hung', 'monitor_restarted', 'monitor_stopped', 'alert_rejected',
 ] as const;
 
 /** One of `ERROR_CLASSES`. */
@@ -60,6 +61,10 @@ export const CULPRIT_OF: Readonly<Record<ErrorClass, Culprit>> = Object.fromEntr
   ['notification_timeout', 'hawk'],
   ['notification_mismatch', 'hawk'],
   ['duplicate_notification', 'hawk'],
+  ['run_hung', 'monitor'],
+  ['monitor_restarted', 'monitor'],
+  ['monitor_stopped', 'monitor'],
+  ['alert_rejected', 'config'],
 ] satisfies readonly (readonly [ErrorClass, Culprit])[]) as Record<ErrorClass, Culprit>;
 
 /** Facts a message may mention; absent facts are skipped. */
