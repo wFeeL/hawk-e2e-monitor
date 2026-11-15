@@ -444,18 +444,50 @@ describe('alerter: unreadable state and failing text', () => {
     expect(alerter.health().storageFailing).toBe(true);
   });
 
-  it('decides the next run from memory while the state stays unreadable', async () => {
-    const { alerter, clock, history } = await setup({ wrap: wrapped => ({ ...wrapped,
+  it('does not trust a state it could not read: every run starts from the database again', async () => {
+    const { alerter, bot, clock, history } = await setup({ wrap: wrapped => ({ ...wrapped,
       alertState: () => {
         throw new Error('locked');
       } }) });
 
-    alerter.onRunFinished(failedRow(clock), NO_RESULT);
-    expect(alerter.onRunFinished(failedRow(clock, { errorClass: 'collector_unavailable',
-      failedStage: 'collector_availability',
-      runId: 'rcccccccccccccccc' }), NO_RESULT)).toBe('still_failing');
-    // The write works, so this one goes through the queue.
-    expect(history.oldestUnsentAlert()).toBeDefined();
+    expect(alerter.onRunFinished(failedRow(clock), NO_RESULT)).toBe('failed');
+    expect(alerter.onRunFinished(failedRow(clock, { runId: 'rcccccccccccccccc' }), NO_RESULT)).toBe('failed');
+    await vi.waitFor(() => {
+      expect(bot.requests).toHaveLength(3);
+    });
+    expect(history.oldestUnsentAlert()).toBeUndefined();
+  });
+
+  it('sends RECOVERED after one failed read in the middle of a stored failing episode', async () => {
+    const control = { broken: true };
+    const { alerter, bot, clock, history } = await setup({ wrap: wrapped => ({ ...wrapped,
+      alertState: (scenario) => {
+        if (control.broken) {
+          control.broken = false;
+          throw new Error('locked');
+        }
+
+        return wrapped.alertState(scenario);
+      } }) });
+
+    alerter.start();
+    history.saveAlert({ scenario: SCENARIO,
+      state: 'failing',
+      failureStreak: 3,
+      lastClass: 'event_not_found',
+      lastStage: 'event_visible',
+      lastRunId: 'raaaaaaaaaaaaaaaa',
+      episodeStartedAt: clock.wallTime().toISOString(),
+      episodeFailures: 3,
+      degraded: [],
+      updatedAt: clock.wallTime().toISOString() });
+
+    // The first read fails: ok after ok says nothing, and the derived state must not be kept.
+    expect(alerter.onRunFinished(okRow(clock), NO_RESULT)).toBeUndefined();
+    expect(alerter.onRunFinished(okRow(clock), NO_RESULT)).toBe('recovered');
+    await vi.waitFor(() => {
+      expect(messages(bot).some(message => message.includes('RECOVERED'))).toBe(true);
+    });
   });
 
   it('a text that cannot be built still queues the transition with a plain message', async () => {
