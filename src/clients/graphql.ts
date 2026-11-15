@@ -9,6 +9,9 @@ import { HttpStatus } from '../net/http-status.js';
 export const ACCESS_EXPIRED = 'ACCESS_TOKEN_EXPIRED_ERROR';
 /** Hawk code for a missing or invalid login. */
 export const UNAUTHENTICATED = 'UNAUTHENTICATED';
+/** Largest API answer the client reads (4 MiB); the rest of a longer body is dropped. */
+export const MAX_API_BODY_BYTES = 4_194_304;
+
 const AUTH_CODES = new Set([UNAUTHENTICATED, ACCESS_EXPIRED, 'SSO_REQUIRED']);
 const REJECTED_CODES = new Set(['GRAPHQL_VALIDATION_FAILED', 'BAD_USER_INPUT']);
 
@@ -138,6 +141,7 @@ export function createGraphqlTransport(options: GraphqlTransportOptions): Graphq
           query: operation.document,
           variables }),
         timeoutMs: httpTimeoutMs,
+        maxBytes: MAX_API_BODY_BYTES,
         signal }, 'api', { attempts: operation.idempotent ? attempts : 1,
         delaysMs,
         clock,
@@ -167,8 +171,14 @@ export function createGraphqlTransport(options: GraphqlTransportOptions): Graphq
       const waitedMs = Math.round(clock.monotonicMs() - startedAt);
       const body = parseObject(response.text);
 
-      if (response.status >= HttpStatus.internalServerError || !body) {
+      if (response.status >= HttpStatus.internalServerError) {
         throw new CheckError('api_unavailable', { url,
+          status: response.status,
+          waitedMs });
+      }
+
+      if (!body) {
+        throw new CheckError('api_unexpected_response', { url,
           status: response.status,
           waitedMs });
       }

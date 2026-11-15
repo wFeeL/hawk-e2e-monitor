@@ -44,14 +44,20 @@ export interface MutableRedactor {
  * @returns The redactor and the function that adds a secret.
  */
 export function createMutableRedactor(secrets: readonly string[]): MutableRedactor {
-  const known = [...secrets];
+  const known = new Set(secrets);
+  let current = createRedactor([...known]);
 
   const add: MutableRedactor['add'] = (secret) => {
-    known.push(secret);
+    if (secret.length < MIN_SECRET_LENGTH || known.has(secret)) {
+      return;
+    }
+
+    known.add(secret);
+    current = createRedactor([...known]);
   };
 
   return {
-    redact: text => createRedactor(known)(text),
+    redact: text => current(text),
     add,
   };
 }

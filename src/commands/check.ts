@@ -16,6 +16,8 @@ import type { NotificationDeps } from '../scenarios/check-notification/run.js';
 import { runSendAndReceive, scenarioSecrets } from '../scenarios/send-and-receive/run.js';
 import type { ScenarioDeps } from '../scenarios/send-and-receive/run.js';
 import { systemClock } from '../time/clock.js';
+import { MS_PER_SECOND } from '../time/units.js';
+import { readMatchChange, recordMatchChange } from './match-change.js';
 import { refusalWhileServing } from './serving.js';
 import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, SEND_AND_RECEIVE_EVENT } from '../scenarios/names.js';
 import type { ScenarioName } from '../scenarios/names.js';
@@ -80,7 +82,10 @@ function summarize(result: RunResult, io: CheckIo, masking: MutableRedactor): nu
   if (result.status === 'ok') {
     const count = result.warnings.length;
 
-    io.stderr(count === 0 ? 'ok\n' : `ok (${String(count)} ${count === 1 ? 'warning' : 'warnings'})\n`);
+    const selfSkipped = result.stages.some(stage => stage.status === 'skipped' && stage.details?.reason === 'rule_cache_warmup');
+    const head = count === 0 ? 'ok' : `ok (${String(count)} ${count === 1 ? 'warning' : 'warnings'})`;
+
+    io.stderr(`${head}${selfSkipped ? '; notification not checked: rule cache warmup' : ''}\n`);
 
     return 0;
   }
@@ -115,8 +120,36 @@ async function runNotificationCommand(command: CheckCommand, config: Config, io:
         logger: base.logger });
     }
 
+    const clock = deps.clock ?? base.clock;
+    const lastChange = deps.provisioner === undefined ? readMatchChange(config, io) : undefined;
+    // A stored time in the future must not stretch the wait beyond the warmup.
+    const remainingMs = lastChange === undefined
+      ? 0
+      : Math.min(Math.max(settings.ruleCacheWarmupMs - (clock.wallTime().getTime() - lastChange), 0), settings.ruleCacheWarmupMs);
+
+    // A rule changed by an earlier check may still be cached by Hawk, so wait instead of skipping the notification.
+    if (remainingMs > 0) {
+      io.stderr(`waiting ${String(Math.ceil(remainingMs / MS_PER_SECOND))} s for Hawk to reload notification rules\n`);
+      await clock.sleep(remainingMs);
+
+      // A serve may have started while the command waited.
+      const refusal = refusalWhileServing(config, clock.wallTime());
+
+      if (refusal !== undefined) {
+        io.stderr(refusal);
+
+        return 1;
+      }
+    }
+
     const result = await runCheckNotification({ ...base,
       ...deps,
+      ...deps.provisioner === undefined
+        ? { ...lastChange === undefined ? {} : { lastMatchChangeAtWallMs: lastChange },
+            onMatchChange: (wallMs: number) => {
+              recordMatchChange(config, new Date(wallMs), io);
+            } }
+        : {},
       receiver,
       addSecret: deps.addSecret ?? masking.add }, { sequence: command.sequence,
       transport: command.transport,

@@ -263,17 +263,39 @@ export function eventVisibleStage(timeoutMs: number): StageSpec<ScenarioContext>
     run: async (context, signal): Promise<StageOutcome> => {
       const { api, clock, config, plan, state } = context;
       const { projectId } = config.hawk;
-      const poll = await pollUntil<FoundEvent>(async (probeSignal) => {
-        const events = await api.findEvents(projectId, plan.runId, probeSignal);
-        const hit = events.find(event => event.title === plan.title || contextValue(event.context, 'runId') === plan.runId);
+      // The search leaves one HTTP timeout of the stage for the card read, which keeps the stage signal.
+      const search = new AbortController();
+      const timer = new AbortController();
+      const onStageAbort = (): void => {
+        search.abort();
+      };
 
-        return hit
-          ? { kind: 'found',
-              value: hit }
-          : { kind: 'absent' };
-      }, { clock,
-        signal,
-        scheduleMs: context.pollScheduleMs });
+      if (signal.aborted) {
+        onStageAbort();
+      } else {
+        signal.addEventListener('abort', onStageAbort, { once: true });
+      }
+
+      clock.sleep(Math.max(timeoutMs - config.httpTimeoutMs, 0), timer.signal).then(onStageAbort, () => undefined);
+
+      let poll;
+
+      try {
+        poll = await pollUntil<FoundEvent>(async (probeSignal) => {
+          const events = await api.findEvents(projectId, plan.runId, probeSignal);
+          const hit = events.find(event => event.title === plan.title || contextValue(event.context, 'runId') === plan.runId);
+
+          return hit
+            ? { kind: 'found',
+                value: hit }
+            : { kind: 'absent' };
+        }, { clock,
+          signal: search.signal,
+          scheduleMs: context.pollScheduleMs });
+      } finally {
+        timer.abort();
+        signal.removeEventListener('abort', onStageAbort);
+      }
 
       state.pollSummary = poll;
 

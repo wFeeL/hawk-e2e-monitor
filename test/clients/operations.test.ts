@@ -1,9 +1,13 @@
 import { readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { Server, ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { buildSchema, parse, validate } from 'graphql';
 import type { OperationDefinitionNode } from 'graphql';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { isCheckError } from '../../src/errors/taxonomy.js';
 import type { CheckError, ErrorClass } from '../../src/errors/taxonomy.js';
+import { startEndlessServer } from '../support/endless-server.js';
 import { startFakeHawk } from '../support/fake-hawk/index.js';
 import type { FakeApiError, FakeHawk } from '../support/fake-hawk/index.js';
 import { systemClock } from '../../src/time/clock.js';
@@ -147,9 +151,9 @@ describe('operations', () => {
     expect(errors[0]?.message).toContain('toke');
   });
 
-  it('only RefreshTokens, CreateNotificationRule and RemoveEvent are not idempotent', () => {
+  it('only CreateNotificationRule and RemoveEvent are not idempotent', () => {
     expect(ALL_OPERATIONS.filter(operation => !operation.idempotent).map(operation => operation.name))
-      .toEqual(['RefreshTokens', 'RemoveEvent', 'CreateNotificationRule']);
+      .toEqual(['RemoveEvent', 'CreateNotificationRule']);
   });
 
   it('CreateNotificationRule is not idempotent', () => {
@@ -193,11 +197,103 @@ describe('graphql transport', () => {
     hawk = await startFakeHawk();
   });
 
-  it('non-JSON answer is api_unavailable', async () => {
+  it('a 404 page is api_unexpected_response and is not retried', async () => {
     const url = hawk.api.url.replace('/graphql', '/other');
 
-    checkError(await failureOf(transportFor(url).request(LOGIN, { email: 'a',
-      password: 'b' }, undefined, signal)), 'api_unavailable');
+    const error = checkError(await failureOf(transportFor(url).request(PROJECT_TOKEN, { projectId: hawk.projectId }, 'x', signal)), 'api_unexpected_response');
+
+    expect(error.facts.status).toBe(404);
+    expect(error.culprit).toBe('hawk');
+  });
+
+  it('stops reading an endless body at the limit and calls it an unexpected response', async () => {
+    const endless = await startEndlessServer();
+
+    try {
+      checkError(await failureOf(transportFor(`${endless.url}/graphql`).request(PROJECT_TOKEN, { projectId: hawk.projectId }, 'x', signal)), 'api_unexpected_response');
+    } finally {
+      await endless.close();
+    }
+  });
+
+  describe('against a server that is not a GraphQL API', () => {
+    let server: Server;
+    let seen: number;
+    let reply: (response: ServerResponse) => void;
+
+    beforeEach(async () => {
+      seen = 0;
+      server = createServer((_request, response) => {
+        seen += 1;
+        reply(response);
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, '127.0.0.1', resolve);
+      });
+    });
+
+    afterEach(async () => {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => {
+          resolve();
+        });
+      });
+    });
+
+    /**
+     * Sends one idempotent request to the bare server.
+     * @returns The error it throws.
+     */
+    async function failure(): Promise<unknown> {
+      const { port } = server.address() as AddressInfo;
+
+      return failureOf(transportFor(`http://127.0.0.1:${String(port)}/graphql`).request(PROJECT_TOKEN, { projectId: hawk.projectId }, 'x', signal));
+    }
+
+    it('404 with HTML is api_unexpected_response after one request', async () => {
+      reply = (response) => {
+        response.statusCode = 404;
+        response.setHeader('content-type', 'text/html');
+        response.end('<html>Not found</html>');
+      };
+
+      checkError(await failure(), 'api_unexpected_response');
+      expect(seen).toBe(1);
+    });
+
+    it('301 with Location is api_unexpected_response after one request', async () => {
+      reply = (response) => {
+        response.statusCode = 301;
+        response.setHeader('location', 'https://example.test/graphql');
+        response.end();
+      };
+
+      checkError(await failure(), 'api_unexpected_response');
+      expect(seen).toBe(1);
+    });
+
+    it('200 with HTML is api_unexpected_response after one request', async () => {
+      reply = (response) => {
+        response.statusCode = 200;
+        response.setHeader('content-type', 'text/html');
+        response.end('<html>Welcome</html>');
+      };
+
+      checkError(await failure(), 'api_unexpected_response');
+      expect(seen).toBe(1);
+    });
+
+    it('503 with HTML stays api_unavailable and is retried', async () => {
+      reply = (response) => {
+        response.statusCode = 503;
+        response.setHeader('content-type', 'text/html');
+        response.end('<html>Service Unavailable</html>');
+      };
+
+      checkError(await failure(), 'api_unavailable');
+      expect(seen).toBe(3);
+    });
   });
 
   it('unknown operation is api_query_rejected', async () => {

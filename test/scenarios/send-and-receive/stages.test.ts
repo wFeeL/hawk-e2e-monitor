@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { FoundEvent } from '../../../src/clients/hawk-api.js';
+import type { FoundEvent, HawkApi } from '../../../src/clients/hawk-api.js';
 import { runStage } from '../../../src/engine/stages.js';
 import type { StageResult } from '../../../src/engine/result.js';
 import type { StageSpec } from '../../../src/engine/stages.js';
@@ -7,6 +7,7 @@ import { systemClock } from '../../../src/time/clock.js';
 import { encodeToken, startFakeHawk } from '../../support/fake-hawk/index.js';
 import type { FakeHawk } from '../../support/fake-hawk/index.js';
 import { testConfig } from '../../support/config.js';
+import { createFakeClock } from '../../support/fake-clock.js';
 import { TIMEOUT_LIMITS, createTestScenario } from '../../support/scenario.js';
 import type { TestScenarioOptions } from '../../support/scenario.js';
 import { planRun } from '../../../src/scenarios/send-and-receive/plan.js';
@@ -378,5 +379,83 @@ describe('cleanupStage pause', () => {
     expect(result.details).toMatchObject({ recheck: 'skipped' });
     expect(result).toMatchObject({ status: 'failed',
       errorClass: 'cleanup_failed' });
+  });
+});
+
+describe('eventVisibleStage on a fake clock', () => {
+  const STAGE_MS = 10_000;
+  const HTTP_MS = 2000;
+
+  /** What a run on the fake clock leaves. */
+  interface FakeRun {
+    /** Recorded stage result. */
+    result: StageResult;
+    /** Context the stage ran in. */
+    context: ScenarioContext;
+  }
+
+  /**
+   * Runs the stage with an API whose answers take fake time.
+   * @param appearsAtMs When the search starts to find the event.
+   * @param cardMs How long the card read takes.
+   * @returns The result and the context.
+   */
+  async function runOnFakeClock(appearsAtMs: number, cardMs: number): Promise<FakeRun> {
+    const clock = createFakeClock();
+    const { context, plan } = createTestScenario(hawk);
+    const found: FoundEvent = { originalEventId: 'e'.repeat(24),
+      groupHash: 'g',
+      totalCount: 1,
+      catcherType: plan.catcherType,
+      title: plan.title,
+      context: { runId: plan.runId,
+        instanceId: plan.context.instanceId } };
+    const api: HawkApi = { ...context.api,
+      findEvents: () => Promise.resolve(clock.monotonicMs() >= appearsAtMs ? [found] : []),
+      eventCard: async (_projectId, _eventId, signal) => {
+        await clock.sleep(cardMs, signal);
+
+        return found;
+      } };
+    const fake: ScenarioContext = { ...context,
+      api,
+      clock,
+      pollScheduleMs: [500],
+      config: { ...context.config,
+        httpTimeoutMs: HTTP_MS } };
+    const running = runStage(eventVisibleStage(STAGE_MS), fake, { clock,
+      runSignal: new AbortController().signal });
+
+    // Small steps, so a sleep that a loaded machine registers late is still reached.
+    for (let elapsed = 0; elapsed < STAGE_MS + 2000; elapsed += 100) {
+      await clock.advance(100);
+    }
+
+    return { result: await running,
+      context: fake };
+  }
+
+  it('a card read at the end of the stage still has an HTTP timeout', async () => {
+    const { result } = await runOnFakeClock(7500, HTTP_MS - 1);
+
+    expect(result.status).toBe('ok');
+  });
+
+  it('the search stops HTTP_TIMEOUT_MS before the deadline', async () => {
+    const { result } = await runOnFakeClock(Number.POSITIVE_INFINITY, 0);
+    const waitedMs = Number(result.details?.waitedMs);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'event_not_found' });
+    expect(waitedMs).toBeGreaterThanOrEqual(7000);
+    expect(waitedMs).toBeLessThan(9000);
+  });
+
+  it('an event that appears inside the last HTTP timeout is not found, and no card is read', async () => {
+    const { result, context } = await runOnFakeClock(STAGE_MS - 1000, 0);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'event_not_found' });
+    expect(context.state.event).toBeUndefined();
   });
 });

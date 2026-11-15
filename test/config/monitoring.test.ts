@@ -101,6 +101,23 @@ describe('monitoring configuration', () => {
     expectOk(loadConfig(validEnv({ CHECK_INTERVAL_MS: '540001' })));
   });
 
+  it('RULE_CACHE_WARMUP_MS plus the margin must stay below CHECK_INTERVAL_MS with check-notification', () => {
+    const env = { ...NOTIFICATION_ENV,
+      SCENARIOS: 'check-notification',
+      CHECK_INTERVAL_MS: '600000' };
+
+    expect(messagesOf({ ...env,
+      RULE_CACHE_WARMUP_MS: '599000' }, 'RULE_CACHE_WARMUP_MS'))
+      .toEqual(['must be less than CHECK_INTERVAL_MS - 1000 ms (599000 ms)']);
+    expectOk(loadConfig(validEnv({ ...env,
+      RULE_CACHE_WARMUP_MS: '598999' })));
+  });
+
+  it('does not judge RULE_CACHE_WARMUP_MS without check-notification', () => {
+    expectOk(loadConfig(validEnv({ CHECK_INTERVAL_MS: '600000',
+      RULE_CACHE_WARMUP_MS: '599000' })));
+  });
+
   it('SCENARIO_STAGGER_MS must not exceed CHECK_INTERVAL_MS', () => {
     expect(messagesOf({ SCENARIO_STAGGER_MS: '600001' }, 'SCENARIO_STAGGER_MS')[0]).toContain('CHECK_INTERVAL_MS');
     expectOk(loadConfig(validEnv({ SCENARIO_STAGGER_MS: '600000' })));

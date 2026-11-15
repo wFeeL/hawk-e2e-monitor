@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import { createServer as createNetServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CheckError } from '../../src/errors/taxonomy.js';
 import type { ErrorClass } from '../../src/errors/taxonomy.js';
 import { collectorEndpoints, decodeIntegrationToken } from '../../src/hawk/token.js';
+import { startEndlessServer } from '../support/endless-server.js';
 import { startFakeCollector } from '../support/fake-hawk/collector.js';
 import type { FakeCollector } from '../support/fake-hawk/collector.js';
 import { createFakeStore } from '../support/fake-hawk/store.js';
@@ -144,7 +147,7 @@ const REPLY_TABLE: readonly (readonly [string, number, string, ErrorClass | 'acc
   ['400 too large JSON', 400, '{"code":400,"error":true,"message":"Request is too large"}', 'payload_too_large'],
   ['400 other JSON', 400, '{"code":400,"error":true,"message":"Payload is empty"}', 'bad_request'],
   ['400 JSON without message', 400, '{"code":400}', 'bad_request'],
-  ['400 plain', 400, 'Bad request', 'bad_request'],
+  ['400 plain', 400, 'Bad request', 'collector_unexpected_response'],
   ['402 quota', 402, '{"code":402,"error":true,"message":"Project has exceeded the events limit"}', 'quota_exhausted'],
   ['402 rate limit', 402, '{"code":402,"error":true,"message":"Rate limit exceeded"}', 'rate_limited'],
   ['402 limiter failure', 402, '{"code":402,"error":true,"message":"Failed to update rate limit"}', 'collector_dependency_error'],
@@ -164,6 +167,26 @@ describe('classifyCollectorReply', () => {
     const verdict = classifyCollectorReply(status, body);
 
     expect(verdict.kind === 'accepted' ? 'accepted' : verdict.errorClass).toBe(expected);
+  });
+
+  it('flattens an HTML body into one line without tags', () => {
+    const verdict = classifyCollectorReply(404, '<html>\n<body>\n  <h1>404 Not   Found</h1>\n</body>\n</html>\n');
+
+    expect(verdict).toEqual({ kind: 'rejected',
+      errorClass: 'collector_unexpected_response',
+      message: 'HTTP 404 404 Not Found' });
+  });
+
+  it('cuts a long body to 200 characters', () => {
+    const verdict = classifyCollectorReply(404, 'a'.repeat(500));
+
+    expect(verdict.kind === 'rejected' ? verdict.message : '').toBe(`HTTP 404 ${'a'.repeat(200)}`);
+  });
+
+  it('names a plain-text 400 as a handler failure', () => {
+    expect(classifyCollectorReply(400, 'Bad request')).toEqual({ kind: 'rejected',
+      errorClass: 'collector_unexpected_response',
+      message: 'Bad request (plain text instead of JSON)' });
   });
 
   it('strips the secret tail from the rejected message', () => {
@@ -296,6 +319,37 @@ describe('send over WebSocket', () => {
     expect(uncertain(await clientFor(100).send(message(), 'ws', signal)).cause.facts.code).toBe('TIMEOUT');
   });
 
+  it('a plain-text 400 over HTTP reads as a failed handler', async () => {
+    collector.knobs.reply = () => ({ status: 400,
+      body: 'Bad request',
+      contentType: 'text/plain; charset=utf-8' });
+
+    const { error } = rejected(await clientFor().send(message(), 'http', signal));
+
+    expect(error.errorClass).toBe('collector_unexpected_response');
+    expect(error.message).toBe('Collector handler failed: HTTP 400 Bad request (plain text instead of JSON)');
+  });
+
+  it('ws timeout before the socket opens names TIMEOUT and the wait', async () => {
+    const silent = createNetServer();
+
+    await new Promise<void>((resolve) => {
+      silent.listen(0, '127.0.0.1', resolve);
+    });
+
+    try {
+      const { port } = silent.address() as AddressInfo;
+      const { error } = rejected(await clientFor(150, `http://127.0.0.1:${String(port)}`, { attempts: 1,
+        delaysMs: [] }).send(message(), 'ws', signal));
+
+      expect(error.errorClass).toBe('ws_handshake_failed');
+      expect(error.message).toMatch(/did not open: TIMEOUT, waited \d+ ms$/u);
+    } finally {
+      silent.closeAllConnections();
+      silent.close();
+    }
+  });
+
   it('ws reject_upgrade is rejected after 3 handshakes', async () => {
     collector.knobs.ws = 'reject_upgrade';
 
@@ -308,6 +362,16 @@ describe('send over WebSocket', () => {
 });
 
 describe('health', () => {
+  it('stops reading an endless body at the limit and calls it an unexpected response', async () => {
+    const endless = await startEndlessServer();
+
+    try {
+      expect((await checkError(clientFor(1000, endless.url).health(signal))).errorClass).toBe('collector_unexpected_response');
+    } finally {
+      await endless.close();
+    }
+  });
+
   it('health ok', async () => {
     await expect(clientFor().health(signal)).resolves.toBeUndefined();
   });
