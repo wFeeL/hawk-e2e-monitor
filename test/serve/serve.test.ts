@@ -1102,6 +1102,91 @@ describe('serve: start and stop', () => {
     expect(inspect(harness, history => history.getKv(LEASE_KEY))).toContain('"nonce":"this-start"');
   });
 
+  it('stops cleanly when a stop signal comes during the wait for a twin lease, and leaves the lease alone', async () => {
+    const hawk = await hawkFor();
+    const database = await tempDatabase();
+    const { deps } = createTestDeps(hawk);
+    const stop = new AbortController();
+    let waiting: () => void = () => undefined;
+    const reachedWait = new Promise<void>((resolve) => {
+      waiting = resolve;
+    });
+    const clock: Clock = { ...systemClock,
+      sleep: async (ms, signal) => {
+        if (ms !== LEASE_REFRESH_MS + LEASE_TWIN_MARGIN_MS) {
+          return systemClock.sleep(ms, signal);
+        }
+
+        waiting();
+
+        return systemClock.sleep(ms, signal);
+      } };
+    const seededAt = new Date().toISOString();
+
+    cleanups.push(async () => database.remove());
+    seedLease(database.path, { pid: 1,
+      hostname: 'box-a',
+      nonce: 'twin',
+      at: seededAt });
+
+    const started = startServe({ config: { ...deps.config,
+      monitoring: { ...deps.config.monitoring,
+        databasePath: database.path } },
+    logger: memoryLogger(),
+    clock,
+    signal: stop.signal,
+    identity: { hostname: 'box-a',
+      pid: 1,
+      nonce: 'this-start' } });
+
+    await reachedWait;
+    stop.abort();
+
+    await expect(started).rejects.toBeInstanceOf(StartupError);
+    await expect(started).rejects.toThrow('stopped while waiting for the lease of an earlier process');
+
+    const history = createHistory(openDatabase(database.path));
+
+    expect(history.getKv(LEASE_KEY)).toContain('"nonce":"twin"');
+    history.close();
+  });
+
+  it('reads the time again after the twin wait, for aborting earlier runs', async () => {
+    const before = new Date('2026-03-10T12:00:00.000Z');
+    const after = new Date(before.getTime() + LEASE_REFRESH_MS + LEASE_TWIN_MARGIN_MS);
+    let waited = false;
+    const clock: Clock = { ...systemClock,
+      wallTime: () => waited ? after : before,
+      sleep: async (ms, signal) => {
+        if (ms !== LEASE_REFRESH_MS + LEASE_TWIN_MARGIN_MS) {
+          return systemClock.sleep(ms, signal);
+        }
+
+        waited = true;
+
+        return Promise.resolve();
+      } };
+    const harness = await launch({ identity: { hostname: 'box-a',
+      pid: 1,
+      nonce: 'this-start' },
+    clock,
+    intervalMs: 600_000,
+    seed: (history) => {
+      writeLease(history, { pid: 1,
+        hostname: 'box-a',
+        nonce: 'previous-start',
+        at: before.toISOString() });
+      history.startRun({ runId: 'rsssssssssssssss',
+        scenario: SEND,
+        sequence: 7,
+        trigger: 'schedule',
+        startedAt: new Date(before.getTime() - 3_600_000).toISOString() });
+    } });
+
+    expect(inspect(harness, history => history.get('rsssssssssssssss'))).toMatchObject({ status: 'aborted',
+      finishedAt: after.toISOString() });
+  });
+
   it('refuses to start when the lease of the same host and process id renewed during the wait', async () => {
     const hawk = await hawkFor();
     const database = await tempDatabase();

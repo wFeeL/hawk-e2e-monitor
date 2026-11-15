@@ -638,6 +638,34 @@ describe('alerts', () => {
     expect(history.getKv('k')).toBe('two');
   });
 
+  it('probeAlertStorage writes to the alert outbox and leaves no row behind', () => {
+    const history = memoryHistory();
+
+    history.probeAlertStorage('2026-03-10T12:00:00.000Z');
+    expect(history.oldestUnsentAlert()).toBeUndefined();
+    expect(history.pendingAlerts('2030-01-01T00:00:00.000Z', 10)).toEqual([]);
+  });
+
+  it('probeAlertStorage fails where the alert tables cannot be written', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'history-probe-'));
+
+    try {
+      const filled = join(directory, 'filled.db');
+
+      openDatabase(filled).close();
+
+      const readOnly = createHistory(openDatabase(filled, { readOnly: true }));
+
+      expect(() => {
+        readOnly.probeAlertStorage('2026-03-10T12:00:00.000Z');
+      }).toThrow();
+      readOnly.close();
+    } finally {
+      await rm(directory, { recursive: true,
+        force: true });
+    }
+  });
+
   it('updateKv hands the current value to decide and writes what it returns', () => {
     const history = memoryHistory();
 

@@ -5,7 +5,6 @@ import { isCheckError } from '../errors/taxonomy.js';
 import type { Logger } from '../log/logger.js';
 import type { ScenarioName } from '../scenarios/names.js';
 import type { AlertStateRow, History } from '../storage/history.js';
-import { ALERT_STORAGE_PROBE_KEY } from '../storage/keys.js';
 import type { RunRow } from '../storage/types.js';
 import type { Clock } from '../time/clock.js';
 import { sendNotify } from './notify.js';
@@ -395,9 +394,10 @@ export function createAlerter(deps: AlerterDeps): Alerter {
       backlogAgeMs = oldest === undefined ? null : Date.parse(nowIso()) - Date.parse(oldest);
 
       // Runs with an unchanged state write nothing, so after a passing fault only a probe write can clear the flag.
+      // The notice flag stays: only a real save ends the episode, so a second notice never goes out within it.
       if (storageFailing) {
-        history.setKv(ALERT_STORAGE_PROBE_KEY, nowIso());
-        storageWorked();
+        history.probeAlertStorage(nowIso());
+        storageFailing = false;
       }
     } catch (error) {
       storageFailed(error, 'health', false);

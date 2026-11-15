@@ -262,6 +262,11 @@ export interface History {
    */
   saveAlert(state: AlertStateRow, message?: AlertMessage): void;
   /**
+   * Writes to the alert tables as `saveAlert` does and takes the write back, to find out whether they accept writes.
+   * @param at Time stamped on the probe row, ISO.
+   */
+  probeAlertStorage(at: string): void;
+  /**
    * Lists alerts due for delivery.
    * @param now Current time, ISO.
    * @param limit Most rows to return.
@@ -680,6 +685,13 @@ export function createHistory(db: DatabaseSync): History {
     });
   };
 
+  const probeAlertStorage: History['probeAlertStorage'] = (at) => {
+    transaction(() => {
+      run('INSERT INTO alert_outbox (scenario, run_id, text, created_at, next_attempt_at) VALUES (\'probe\', NULL, \'probe\', ?, ?)', at, at);
+      run('DELETE FROM alert_outbox WHERE id = last_insert_rowid()');
+    });
+  };
+
   const pendingAlerts: History['pendingAlerts'] = (now, limit) => {
     return all('SELECT * FROM alert_outbox WHERE sent_at IS NULL AND dropped_at IS NULL AND next_attempt_at <= ? ORDER BY created_at, id LIMIT ?', now, limit)
       .map(row => compact<OutboxRow>({ id: num(row, 'id') ?? 0,
@@ -773,6 +785,7 @@ export function createHistory(db: DatabaseSync): History {
     markLateNotification,
     alertState,
     saveAlert,
+    probeAlertStorage,
     pendingAlerts,
     alertAttempt,
     oldestUnsentAlert,
