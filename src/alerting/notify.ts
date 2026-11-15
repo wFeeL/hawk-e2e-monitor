@@ -4,6 +4,7 @@ import type { Clock } from '../time/clock.js';
 
 const FORM_HEADERS = Object.fromEntries([['content-type', 'application/x-www-form-urlencoded']]);
 const HTTP_OK = 200;
+const HTTP_SERVER_ERROR = 500;
 const OK_MARK = 'OK!';
 const MAX_BODY_CHARS = 200;
 
@@ -23,7 +24,7 @@ export interface NotifyDeps {
  * @param deps Time limit and clock.
  * @param signal Cancels the request.
  * @returns Resolves when the bot accepted the text.
- * @throws CheckError `alert_rejected` for any other answer, or a network class when there was no answer.
+ * @throws CheckError `alert_rejected` for an answer that is not acceptance, `network_error` for a 5xx or when there was no answer.
  */
 export async function sendNotify(url: string, text: string, deps: NotifyDeps, signal: AbortSignal): Promise<void> {
   const form = new URLSearchParams([['message', text], ['parse_mode', 'HTML'], ['disable_web_page_preview', 'true']]);
@@ -46,6 +47,13 @@ export async function sendNotify(url: string, text: string, deps: NotifyDeps, si
     // The cause is dropped on purpose: it may carry the address with the token.
     throw new CheckError(error.failure.errorClass, { code: error.failure.code,
       host }, { message: `codex.bot is not reachable at ${host}: ${error.failure.code}` });
+  }
+
+  if (response.status >= HTTP_SERVER_ERROR) {
+    const host = URL.canParse(url) ? new URL(url).hostname : 'the notify URL';
+
+    throw new CheckError('network_error', { status: response.status,
+      host }, { message: `codex.bot answered ${String(response.status)} at ${host}` });
   }
 
   if (response.status !== HTTP_OK || !response.text.includes(OK_MARK)) {

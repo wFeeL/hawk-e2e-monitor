@@ -120,10 +120,15 @@ export function apiAvailabilityStage(budgetMs: number): StageSpec<ScenarioContex
 
       const left = (quota.eventsLimit - quota.eventsCount) / quota.eventsLimit;
 
+      const recorded = { eventsCount: quota.eventsCount,
+        eventsLimit: quota.eventsLimit };
+
       return left < LOW_QUOTA_SHARE
         ? { status: 'ok',
-            details: { warning: `Event quota is almost used: ${usage}` } }
-        : { status: 'ok' };
+            details: { warning: `Event quota is almost used: ${usage}`,
+              quota: recorded } }
+        : { status: 'ok',
+            details: { quota: recorded } };
     },
   };
 }

@@ -1,6 +1,5 @@
 import process from 'node:process';
-import { startApp, StartupError } from './app.js';
-import type { AppHandle } from './app.js';
+import { StartupError } from './app.js';
 import { parseCommand } from './cli.js';
 import { runCheckCommand } from './commands/check.js';
 import { runHistoryCommand } from './commands/history.js';
@@ -10,6 +9,9 @@ import { formatConfigErrors, loadConfig } from './config/load.js';
 import { describeConfig } from './config/describe.js';
 import type { ParsedEnv } from './config/schema.js';
 import { createLogger } from './log/logger.js';
+import { startServe } from './serve/serve.js';
+import type { ServeHandle } from './serve/serve.js';
+import { projectedEventsPer30Days } from './storage/outcome.js';
 import { SERVICE_VERSION } from './version.js';
 
 const STOP_SIGNALS = ['SIGTERM', 'SIGINT'] as const;
@@ -42,7 +44,13 @@ async function serve(config: Config, env: ParsedEnv): Promise<void> {
     logger.warn(warning);
   }
 
-  let app: AppHandle | undefined;
+  logger.info('projected events', { projectedEventsPer30Days: Math.round(projectedEventsPer30Days(config)) });
+
+  if (config.monitoring.alertNotifyUrl === undefined) {
+    logger.warn('ALERT_NOTIFY_URL is not set: alerts are written to the log and not delivered');
+  }
+
+  let app: ServeHandle | undefined;
   let stopRequested = false;
   let pendingSignal = '';
 
@@ -74,7 +82,8 @@ async function serve(config: Config, env: ParsedEnv): Promise<void> {
   }
 
   try {
-    app = await startApp(config, { logger });
+    app = await startServe({ config,
+      logger });
   } catch (error: unknown) {
     if (!(error instanceof StartupError)) {
       throw error;

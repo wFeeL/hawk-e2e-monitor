@@ -58,6 +58,8 @@ export interface PlanOptions {
   transport?: Transport;
   /** Forces the repeat. */
   repeat?: boolean;
+  /** Id of the run when the caller made it, such as the scheduler, which records the run before it starts. */
+  runId?: string;
 }
 
 /** Source of `count` random lowercase letters. */
@@ -136,7 +138,7 @@ export function buildTitle(instanceId: string, runId: string, scenario: Scenario
 export function planRun(config: Config, options: PlanOptions, scenario: ScenarioName, randomLetters?: RandomLetters): RunPlan {
   const { sequence } = options;
   const transport = options.transport ?? chooseTransport(sequence, config.transportMode);
-  const runId = createRunId(randomLetters);
+  const runId = options.runId ?? createRunId(randomLetters);
 
   return {
     runId,

@@ -11,6 +11,7 @@ import type { ScenarioContext } from '../send-and-receive/stages.js';
 
 const MS_PER_SECOND = 1000;
 const PROBE_ATTEMPTS = 3;
+const DEFAULT_ADDRESS_POLL_MS = 2000;
 const WEBHOOK_AGENT = 'Hawk-Webhook/1.0';
 const WEBHOOK_KIND = 'event';
 
@@ -26,6 +27,12 @@ export interface NotificationState {
   ruleChangedAgoMs?: number;
   /** What the provisioner did in `notification_setup`. */
   provisioning?: ProvisionResult;
+}
+
+/** Host of the address a process used for the last run. */
+export interface LastHostname {
+  /** Host with the port when it has one; absent before the first run. */
+  value?: string;
 }
 
 /** Everything a notification stage needs. */
@@ -44,6 +51,10 @@ export interface NotificationContext extends ScenarioContext {
   retryDelaysMs?: readonly number[];
   /** Adds a value to the secrets that output must not show. */
   addSecret: (value: string) => void;
+  /** Host of the address of the previous run, shared by the runs of a process; a new host is waited for before the rule is changed. */
+  lastHostname?: LastHostname;
+  /** Pause between self-checks while waiting for a new address, 2000 ms by default. */
+  addressPollMs?: number;
   /** Shared state of the notification part. */
   notification: NotificationState;
 }
@@ -225,6 +236,43 @@ export function notificationBeforeSend(context: NotificationContext): () => void
 }
 
 /**
+ * Waits until the receiver answers through a new address, trying once per pause.
+ * @param context Context of the stage.
+ * @param address The new address.
+ * @param signal Budget of the stage.
+ * @returns Resolves when a self-check passes.
+ * @throws CheckError of the last self-check when the budget ends first.
+ */
+async function waitForAddress(context: NotificationContext, address: PublicAddress, signal: AbortSignal): Promise<void> {
+  const { config, clock, receiver, settings } = context;
+  const pauseMs = context.addressPollMs ?? DEFAULT_ADDRESS_POLL_MS;
+  let last: CheckError | undefined;
+
+  for (;;) {
+    try {
+      await probeReceiver(address, settings.receiverSecret, receiver.nonce, { httpTimeoutMs: config.httpTimeoutMs,
+        clock,
+        attempts: 1,
+        ...context.retryDelaysMs === undefined ? {} : { retryDelaysMs: context.retryDelaysMs } }, signal);
+
+      return;
+    } catch (error) {
+      if (!isCheckError(error)) {
+        throw error;
+      }
+
+      last = error;
+    }
+
+    try {
+      await clock.sleep(pauseMs, signal);
+    } catch {
+      throw last;
+    }
+  }
+}
+
+/**
  * Stage `notification_setup`: finds the public address, checks the receiver through it and brings the rule to the wanted state.
  * @param budgetMs Time limit of the stage.
  * @returns Stage spec.
@@ -243,10 +291,20 @@ export function notificationSetupStage(budgetMs: number): StageSpec<Notification
       context.addSecret(address.hostname);
       context.addSecret(new URL(address.baseUrl).hostname);
 
-      await probeReceiver(address, settings.receiverSecret, receiver.nonce, { httpTimeoutMs: config.httpTimeoutMs,
-        clock,
-        attempts: PROBE_ATTEMPTS,
-        ...context.retryDelaysMs === undefined ? {} : { retryDelaysMs: context.retryDelaysMs } }, signal);
+      const previous = context.lastHostname?.value;
+
+      if (previous !== undefined && previous !== address.hostname) {
+        await waitForAddress(context, address, signal);
+      } else {
+        await probeReceiver(address, settings.receiverSecret, receiver.nonce, { httpTimeoutMs: config.httpTimeoutMs,
+          clock,
+          attempts: PROBE_ATTEMPTS,
+          ...context.retryDelaysMs === undefined ? {} : { retryDelaysMs: context.retryDelaysMs } }, signal);
+      }
+
+      if (context.lastHostname !== undefined) {
+        context.lastHostname.value = address.hostname;
+      }
 
       const result = await provisioner.provision(address, signal);
 
@@ -287,6 +345,7 @@ export function notificationFormedStage(budgetMs: number): StageSpec<Notificatio
 
         return { status: 'skipped',
           details: { reason: 'rule_cache_warmup',
+            warmupRemainingMs: Math.max(0, settings.ruleCacheWarmupMs - (notification.ruleChangedAgoMs ?? 0)),
             warning: `Notification check skipped: the notification rule changed ${String(ago)} s ago, Hawk caches rules for 60 s` } };
       }
 

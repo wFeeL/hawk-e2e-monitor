@@ -6,7 +6,7 @@ import { memoryLogger } from '../test-support/logger.js';
 import { systemClock } from '../time/clock.js';
 import type { Clock } from '../time/clock.js';
 import { startReceiver } from './server.js';
-import type { Receiver, WaitOptions } from './server.js';
+import type { Receiver, ReceiverOptions, WaitOptions } from './server.js';
 
 const SECRET = 'receiver-secret-0123456789-abcdef';
 const BODY_MARKER = 'body-marker-7f3a';
@@ -21,6 +21,8 @@ interface StartOverrides {
   logger?: Logger;
   /** Body limit. */
   maxBodyBytes?: number;
+  /** Hears about POSTs that belong to no run. */
+  onUnmatched?: ReceiverOptions['onUnmatched'];
 }
 
 /** A started receiver with its memory logger. */
@@ -59,7 +61,8 @@ async function start(overrides: StartOverrides = {}): Promise<Started> {
     secret: SECRET,
     clock: overrides.clock ?? systemClock,
     logger: overrides.logger ?? logger,
-    ...overrides.maxBodyBytes === undefined ? {} : { maxBodyBytes: overrides.maxBodyBytes } });
+    ...overrides.maxBodyBytes === undefined ? {} : { maxBodyBytes: overrides.maxBodyBytes },
+    ...overrides.onUnmatched === undefined ? {} : { onUnmatched: overrides.onUnmatched } });
 
   open.push(receiver);
 
@@ -177,6 +180,61 @@ describe('receiver', () => {
     expect(logger.lines).toContainEqual({ level: 'warn',
       msg: 'unmatched notification',
       channel: 'webhook' });
+  });
+
+  describe('onUnmatched', () => {
+    it('hears about a POST when no run is registered, with the channel, the body and the time', async () => {
+      const calls: Array<[string, string, number]> = [];
+      const clock = createFakeClock({ monotonicMs: 4200 });
+      const { receiver } = await start({ clock,
+        onUnmatched: (channel, rawBody, atMs) => {
+          calls.push([channel, rawBody, atMs]);
+        } });
+
+      expect((await post(receiver, 'loop', 'a late message')).status).toBe(200);
+      await vi.waitFor(() => {
+        expect(calls).toEqual([['loop', 'a late message', 4200]]);
+      });
+    });
+
+    it('hears about a POST that matches none of the registered runs', async () => {
+      const calls: string[] = [];
+      const { receiver } = await start({ onUnmatched: (_channel, rawBody) => {
+        calls.push(rawBody);
+      } });
+
+      receiver.expect('run-1');
+      await post(receiver, 'webhook', 'nothing here');
+      await vi.waitFor(() => {
+        expect(calls).toEqual(['nothing here']);
+      });
+    });
+
+    it('is not called for a POST that matches a run', async () => {
+      const calls: string[] = [];
+      const { receiver } = await start({ onUnmatched: (_channel, rawBody) => {
+        calls.push(rawBody);
+      } });
+
+      receiver.expect('run-1');
+      await post(receiver, 'webhook', 'about run-1');
+      await vi.waitFor(() => {
+        expect(receiver.counts('run-1').webhook).toHaveLength(1);
+      });
+      expect(calls).toEqual([]);
+    });
+
+    it('logs a failing callback without the body and still answers 200', async () => {
+      const { receiver, logger } = await start({ onUnmatched: () => {
+        throw new Error('database is locked');
+      } });
+
+      expect((await post(receiver, 'webhook', BODY_MARKER)).status).toBe(200);
+      await vi.waitFor(() => {
+        expect(logger.lines.some(line => line.level === 'error' && line.msg === 'unmatched callback failed')).toBe(true);
+      });
+      expect(JSON.stringify(logger.lines)).not.toContain(BODY_MARKER);
+    });
   });
 
   it.each([

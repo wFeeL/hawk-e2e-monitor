@@ -291,6 +291,14 @@ describe('alerter: delivery', () => {
     expect(rejected()).toBe(true);
   });
 
+  it('a 5xx does not count as a rejection', async () => {
+    const { alerter, clock } = await setup({ answer: { status: 500 } });
+
+    alerter.onRunFinished(failedRow(clock), NO_RESULT);
+    await alerter.flush(SIGNAL);
+    expect(alerter.health().rejectedInRow).toBe(0);
+  });
+
   it('a success resets the rejections in a row, a network failure too', async () => {
     const { alerter, bot, clock } = await setup({ answer: { status: 404 } });
 

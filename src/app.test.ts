@@ -109,4 +109,14 @@ describe('startApp', () => {
 
     expect(res.status).toBe(503);
   });
+
+  it('extra routes are wired', async () => {
+    const app = await startApp(testConfig(), { logger: memoryLogger(),
+      routes: new Map([['GET /extra', (_req, res) => {
+        res.writeHead(200).end('extra');
+      }]]) });
+
+    running.push(app);
+    expect(await (await fetch(`http://127.0.0.1:${String(app.port)}/extra`)).text()).toBe('extra');
+  });
 });

@@ -60,6 +60,10 @@ export interface ProvisionerDeps {
   loop: boolean;
   /** How long the notifier may cache rules. */
   warmupMs: number;
+  /** Wall-clock time of the last change that affected matching, as an earlier process stored it. */
+  lastMatchChangeAtWallMs?: number;
+  /** Called with the wall-clock time of every such change, so it can be stored; a failure is ignored. */
+  onMatchChange?: (wallMs: number) => void;
 }
 
 /** Decision about the rule found in Hawk. */
@@ -201,18 +205,41 @@ function classifyMutation(error: unknown, address: PublicAddress, projectId: str
 }
 
 /**
+ * Turns the stored wall-clock time of the last change into a point on the monotonic clock.
+ * The age is capped to the warmup, so a clock that jumped back never extends the wait.
+ * @param deps Dependencies with the stored time and the warmup.
+ * @param clock Clock of the provisioner.
+ * @returns Monotonic time of the change, or undefined when none is stored.
+ */
+function restoredChange(deps: ProvisionerDeps, clock: Clock): number | undefined {
+  if (deps.lastMatchChangeAtWallMs === undefined) {
+    return undefined;
+  }
+
+  const ageMs = Math.min(Math.max(0, clock.wallTime().getTime() - deps.lastMatchChangeAtWallMs), deps.warmupMs);
+
+  return clock.monotonicMs() - ageMs;
+}
+
+/**
  * Creates a provisioner that remembers when matching last changed.
  * @param deps Client, clock and the identity of the rule.
  * @returns Provisioner with its own warmup state.
  */
 export function createProvisioner(deps: ProvisionerDeps): Provisioner {
   const { api, clock, projectId } = deps;
-  let lastMatchChangeAtMs: number | undefined;
+  let lastMatchChangeAtMs = restoredChange(deps, clock);
   let previousMatchChanged = false;
 
   // Set before the request goes out: an update that fails halfway may still have changed the rule.
   const markMatchChange = (): void => {
     lastMatchChangeAtMs = clock.monotonicMs();
+
+    try {
+      deps.onMatchChange?.(clock.wallTime().getTime());
+    } catch {
+      // The caller logs its own storage failures; provisioning must not depend on them.
+    }
   };
 
   const isOurs = (rule: NotificationRule): boolean => rule.including.length === 1 && rule.including[0] === `[e2e:${deps.instanceId}]`;

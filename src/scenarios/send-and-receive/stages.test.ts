@@ -88,6 +88,29 @@ describe('apiAvailabilityStage', () => {
     expect(result.details?.warning).toBeUndefined();
   });
 
+  it('always records the quota in its details', async () => {
+    hawk.api.knobs.workspace = { isBlocked: false,
+      eventsLimit: 1000,
+      billingPeriodEventsCount: 12 };
+
+    const result = await run(apiAvailabilityStage(BUDGET_MS), scenario().context);
+
+    expect(result.details?.quota).toEqual({ eventsCount: 12,
+      eventsLimit: 1000 });
+  });
+
+  it('keeps the quota next to the warning', async () => {
+    hawk.api.knobs.workspace = { isBlocked: false,
+      eventsLimit: 100,
+      billingPeriodEventsCount: 95 };
+
+    const result = await run(apiAvailabilityStage(BUDGET_MS), scenario().context);
+
+    expect(result.details).toEqual({ warning: 'Event quota is almost used: 95/100',
+      quota: { eventsCount: 95,
+        eventsLimit: 100 } });
+  });
+
   it('token_mismatch when the project has another token', async () => {
     hawk.api.knobs.projectToken = encodeToken('11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222');
 

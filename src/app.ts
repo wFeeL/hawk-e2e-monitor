@@ -1,7 +1,7 @@
 import type { AddressInfo } from 'node:net';
 import type { Config } from './config/load.js';
 import { createInternalServer } from './http/internal-server.js';
-import type { Check } from './http/internal-server.js';
+import type { Check, RouteHandler } from './http/internal-server.js';
 import type { Logger } from './log/logger.js';
 
 /** Dependencies injected into `startApp`. */
@@ -12,6 +12,8 @@ export interface AppDeps {
   liveness?: readonly Check[];
   /** Checks behind `/readyz`; none by default. */
   readiness?: readonly Check[];
+  /** Extra routes keyed by `${method} ${pathname}`; see `createInternalServer`. */
+  routes?: ReadonlyMap<string, RouteHandler>;
 }
 
 /** A running service. */
@@ -63,6 +65,7 @@ export async function startApp(config: Config, deps: AppDeps): Promise<AppHandle
     logger: deps.logger,
     liveness: deps.liveness ?? [],
     readiness: deps.readiness ?? [],
+    ...deps.routes === undefined ? {} : { routes: deps.routes },
     checkTimeoutMs: config.healthCheckTimeoutMs,
   });
 

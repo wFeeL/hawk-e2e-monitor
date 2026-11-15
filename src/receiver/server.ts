@@ -99,6 +99,8 @@ export interface ReceiverOptions {
   logger: Logger;
   /** Largest accepted body, 1 MiB by default. */
   maxBodyBytes?: number;
+  /** Called for every POST with a valid secret that belongs to no registered run; a failure is logged and ignored. */
+  onUnmatched?: (channel: NotificationChannel, rawBody: string, atMs: number) => void;
 }
 
 /** State of a registered run. */
@@ -213,6 +215,12 @@ export async function startReceiver(options: ReceiverOptions): Promise<Receiver>
       run.arrivals.unmatched += 1;
     }
     logger.warn('unmatched notification', { channel });
+
+    try {
+      options.onUnmatched?.(channel, rawBody, clock.monotonicMs());
+    } catch (error) {
+      logger.error('unmatched callback failed', { error: error instanceof Error ? error.name : 'unknown' });
+    }
   };
 
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {

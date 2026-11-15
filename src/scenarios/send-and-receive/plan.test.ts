@@ -72,6 +72,15 @@ describe('planRun', () => {
     });
   });
 
+  it('takes the run id from the caller when it is given', () => {
+    const plan = planRun(testConfig({ instanceId: 'mon' }), { sequence: 1,
+      runId: 'rzzzzzzzzzzzzzzzz' }, 'send-and-receive-event', letters);
+
+    expect(plan.runId).toBe('rzzzzzzzzzzzzzzzz');
+    expect(plan.title).toBe('[e2e:mon] rzzzzzzzzzzzzzzzz send-and-receive-event');
+    expect(plan.context.runId).toBe('rzzzzzzzzzzzzzzzz');
+  });
+
   it('check-notification puts its name in the title and the context', () => {
     const plan = planRun(testConfig({ instanceId: 'mon' }), { sequence: 1 }, 'check-notification', letters);
 
