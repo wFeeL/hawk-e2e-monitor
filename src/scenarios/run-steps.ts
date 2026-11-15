@@ -114,6 +114,22 @@ export function toCleanupResult(stage: StageResult): CleanupResult {
 }
 
 /**
+ * Collects the warnings the stages wrote.
+ * @param stages Recorded stages.
+ * @returns Texts in stage order, a single `warning` before a `warnings` list.
+ */
+export function stageWarnings(stages: readonly StageResult[]): string[] {
+  return stages.flatMap((stage) => {
+    const { warning, warnings } = stage.details ?? {};
+
+    return [
+      ...typeof warning === 'string' ? [warning] : [],
+      ...Array.isArray(warnings) ? warnings.filter((item): item is string => typeof item === 'string') : [],
+    ];
+  });
+}
+
+/**
  * Runs the steps of a scenario under one deadline, then its cleanup.
  * After a failed stage the later steps are recorded as skipped, unless `keepGoing` says otherwise.
  * @param options Context, clock, deadline, steps and cleanup.

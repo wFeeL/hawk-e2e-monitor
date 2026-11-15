@@ -5,6 +5,7 @@ import type { ErrorClass, MessageFacts } from '../errors/taxonomy.js';
 import { scenarioSettings } from '../config/scenario.js';
 import { CHECK_NOTIFICATION, EVENT_SCENARIOS } from '../scenarios/names.js';
 import type { RunStart } from './history.js';
+import { DEGRADED_CODES } from './types.js';
 import type { DegradedCode, RunOutcome, RunRow } from './types.js';
 import { MS_PER_DAY } from '../time/units.js';
 
@@ -35,6 +36,15 @@ function degradationOf(result: RunResult, context: OutcomeContext): DegradedCode
   // The quota stage marks a nearly used event limit; the monitor's own events do not count, because cleanup removes them.
   if (result.stages.find(stage => stage.name === 'api_availability')?.details?.quotaLow === true) {
     codes.push('quota_usage');
+  }
+
+  // Stages name the other degradations themselves, in `details.degraded`.
+  const reported = new Set(result.stages.flatMap(stage => Array.isArray(stage.details?.degraded) ? stage.details.degraded as unknown[] : []));
+
+  for (const code of DEGRADED_CODES) {
+    if (reported.has(code) && !codes.includes(code)) {
+      codes.push(code);
+    }
   }
 
   return codes;

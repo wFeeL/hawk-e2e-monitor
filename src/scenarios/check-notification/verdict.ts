@@ -6,6 +6,7 @@ import type { NotificationChannel } from '../../notifications/types.js';
 import type { ScenarioState } from '../send-and-receive/stages.js';
 import { decideVerdict } from '../send-and-receive/verdict.js';
 import type { Verdict } from '../send-and-receive/verdict.js';
+import { stageWarnings } from '../run-steps.js';
 import { checkLoop, checkNotificationAgainstEvent, checkWebhook } from './stages.js';
 import type { NotificationState } from './stages.js';
 
@@ -54,22 +55,6 @@ export interface NotificationVerdict {
  */
 function anyArrived(arrivals: Arrivals | undefined): boolean {
   return arrivals !== undefined && CHANNELS.some(channel => arrivals[channel].length > 0);
-}
-
-/**
- * Collects the warnings the stages wrote.
- * @param stages Recorded stages.
- * @returns Texts in stage order, a single `warning` before a `warnings` list.
- */
-function stageWarnings(stages: readonly StageResult[]): string[] {
-  return stages.flatMap((stage) => {
-    const { warning, warnings } = stage.details ?? {};
-
-    return [
-      ...typeof warning === 'string' ? [warning] : [],
-      ...Array.isArray(warnings) ? warnings.filter((item): item is string => typeof item === 'string') : [],
-    ];
-  });
 }
 
 /**

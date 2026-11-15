@@ -57,6 +57,8 @@ export interface FakeApiKnobs {
   rejectRemove?: 'false' | 'error' | 'remove_then_timeout';
   /** Replaces `project.token`. */
   projectToken?: string;
+  /** Event grouping patterns of the project. */
+  groupingPatterns?: string[];
   /** Replaces the workspace data. */
   workspace?: FakeWorkspace;
   /** Search also returns an event of someone else with the same runId in its title. */
@@ -379,7 +381,8 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
         return issueTokens('refreshTokens');
       }
       case 'ProjectToken':
-        return success({ project: { token: knobs.projectToken ?? options.token } });
+        return success({ project: { token: knobs.projectToken ?? options.token,
+          eventGroupingPatterns: (knobs.groupingPatterns ?? []).map(pattern => ({ pattern })) } });
       case 'WorkspaceQuota':
         return workspaceQuota(variable(variables, 'projectId'));
       case 'ProjectDailyEvents':

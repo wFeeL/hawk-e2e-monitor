@@ -14,10 +14,10 @@ export const REFRESH_TOKENS: GraphqlOperation = {
   idempotent: false,
 };
 
-/** Integration token of a project. */
+/** Integration token of a project and the patterns that group its events. */
 export const PROJECT_TOKEN: GraphqlOperation = {
   name: 'ProjectToken',
-  document: 'query ProjectToken($projectId: ID!) { project(projectId: $projectId) { token } }',
+  document: 'query ProjectToken($projectId: ID!) { project(projectId: $projectId) { token eventGroupingPatterns { pattern } } }',
   idempotent: true,
 };
 

@@ -305,7 +305,12 @@ describe('fake api project operations', () => {
     const { api } = await start();
     const { accessToken } = await login(api);
 
-    expect((await gql(api, 'ProjectToken', { projectId: PROJECT }, accessToken)).body).toEqual({ data: { project: { token: TOKEN } } });
+    expect((await gql(api, 'ProjectToken', { projectId: PROJECT }, accessToken)).body).toEqual({ data: { project: { token: TOKEN,
+      eventGroupingPatterns: [] } } });
+
+    api.knobs.groupingPatterns = ['a.*'];
+
+    expect(dataOf(await gql(api, 'ProjectToken', { projectId: PROJECT }, accessToken)).project).toMatchObject({ eventGroupingPatterns: [{ pattern: 'a.*' }] });
 
     api.knobs.projectToken = 'someone-elses';
 

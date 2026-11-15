@@ -81,6 +81,62 @@ describe('collectorAvailabilityStage', () => {
   });
 });
 
+describe('apiAvailabilityStage grouping patterns', () => {
+  it('says nothing when no pattern catches the title', async () => {
+    hawk.api.knobs.groupingPatterns = ['^unrelated'];
+
+    const { context, plan } = scenario();
+    const result = await run(apiAvailabilityStage(TIMEOUT_MS, { title: plan.title }), context);
+
+    expect(result.status).toBe('ok');
+    expect(result.details?.warnings).toBeUndefined();
+    expect(result.details?.degraded).toBeUndefined();
+  });
+
+  it('warns and marks the run when a pattern catches the title', async () => {
+    const { context, plan } = scenario();
+
+    hawk.api.knobs.groupingPatterns = ['^unrelated', '\\[e2e:.*\\] .* send-and-receive-event'];
+
+    const result = await run(apiAvailabilityStage(TIMEOUT_MS, { title: plan.title }), context);
+
+    expect(result.status).toBe('ok');
+    expect(result.details?.degraded).toEqual(['grouping_pattern']);
+    expect((result.details?.warnings as string[]).join(' ')).toContain('\\[e2e:.*\\] .* send-and-receive-event');
+  });
+
+  it('only warns about a pattern that is not a regular expression', async () => {
+    hawk.api.knobs.groupingPatterns = ['(unclosed'];
+
+    const { context, plan } = scenario();
+    const result = await run(apiAvailabilityStage(TIMEOUT_MS, { title: plan.title }), context);
+
+    expect(result.status).toBe('ok');
+    expect(result.details?.degraded).toBeUndefined();
+    expect(JSON.stringify(result.details?.warnings)).toContain('(unclosed');
+  });
+
+  it('does not look at the patterns without a title', async () => {
+    hawk.api.knobs.groupingPatterns = ['.*'];
+
+    expect((await run(apiAvailabilityStage(TIMEOUT_MS), scenario().context)).details?.degraded).toBeUndefined();
+  });
+
+  it('keeps the quota warning next to the pattern warning', async () => {
+    hawk.api.knobs.workspace = { isBlocked: false,
+      eventsLimit: 100,
+      billingPeriodEventsCount: 95 };
+    hawk.api.knobs.groupingPatterns = ['.*'];
+
+    const { context, plan } = scenario();
+    const result = await run(apiAvailabilityStage(TIMEOUT_MS, { title: plan.title }), context);
+
+    expect(result.details?.quotaLow).toBe(true);
+    expect(result.details?.warning).toContain('quota');
+    expect(result.details?.degraded).toEqual(['grouping_pattern']);
+  });
+});
+
 describe('apiAvailabilityStage', () => {
   it('is ok on a healthy API', async () => {
     const { context } = scenario();
@@ -673,6 +729,34 @@ describe('the fields of the card', () => {
 
     await run(collectorAcceptStage(TIMEOUT_MS), without.context);
     expect((await run(eventVisibleStage(TIMEOUT_MS), without.context)).status).toBe('ok');
+  });
+
+  it('marks a JavaScript event without the JavaScript worker as degraded, not failed', async () => {
+    hawk.store.knobs.noJsWorker = true;
+
+    const { context } = scenario({ transport: 'ws' });
+
+    await run(collectorAcceptStage(TIMEOUT_MS), context);
+
+    const result = await run(eventVisibleStage(TIMEOUT_MS), context);
+
+    expect(result.status).toBe('ok');
+    expect(result.details?.degraded).toEqual(['js_worker_not_seen']);
+    expect(result.details?.warning).toContain('beautifiedUserAgent');
+  });
+
+  it('has no degradation when the JavaScript worker answered or the event is not JavaScript', async () => {
+    const withWorker = scenario({ transport: 'ws' });
+
+    await run(collectorAcceptStage(TIMEOUT_MS), withWorker.context);
+    expect((await run(eventVisibleStage(TIMEOUT_MS), withWorker.context)).details?.degraded).toBeUndefined();
+
+    hawk.store.remove(hawk.projectId, hawk.store.all(hawk.projectId)[0]?.id ?? '');
+
+    const node = scenario({ transport: 'http' });
+
+    await run(collectorAcceptStage(TIMEOUT_MS), node.context);
+    expect((await run(eventVisibleStage(TIMEOUT_MS), node.context)).details?.degraded).toBeUndefined();
   });
 
   it('checks that one user was affected', () => {

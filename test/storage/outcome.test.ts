@@ -79,6 +79,23 @@ describe('outcomeOf', () => {
     expect(outcomeOf(result, { loopEnabled: false }).degraded).toEqual([]);
   });
 
+  it('takes the codes a stage reports in details.degraded, each once', () => {
+    const result = runResultFixture({ stages: [
+      stageFixture('api_availability', 'ok', 0, { details: { degraded: ['grouping_pattern'] } }),
+      stageFixture('event_visible', 'ok', 0, { details: { degraded: ['js_worker_not_seen', 'grouping_pattern'] } }),
+    ] });
+
+    expect(outcomeOf(result, CONTEXT).degraded).toEqual(['js_worker_not_seen', 'grouping_pattern']);
+  });
+
+  it('ignores a code that is not a degradation code and reports nothing for a failed run', () => {
+    const odd = runResultFixture({ stages: [stageFixture('event_visible', 'ok', 0, { details: { degraded: ['nope', 7] } })] });
+
+    expect(outcomeOf(odd, CONTEXT).degraded).toEqual([]);
+    expect(outcomeOf({ ...odd,
+      status: 'failed' }, CONTEXT).degraded).toEqual([]);
+  });
+
   it('both channels arrived is not degraded', () => {
     expect(outcomeOf(notificationResult(), CONTEXT).degraded).toEqual([]);
   });

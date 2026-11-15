@@ -7,6 +7,7 @@ import type { PollResult } from '../../engine/poll.js';
 import type { StageOutcome, StageSpec } from '../../engine/stages.js';
 import { CheckError } from '../../errors/taxonomy.js';
 import { decodeIntegrationToken, tokenKey } from '../../hawk/token.js';
+import type { DegradedCode } from '../../storage/types.js';
 import type { Clock } from '../../time/clock.js';
 import type { RunPlan } from './plan.js';
 
@@ -287,12 +288,52 @@ export function collectorAvailabilityStage(timeoutMs: number): StageSpec<Scenari
   };
 }
 
+/** What `apiAvailabilityStage` may check besides the token and the quota. */
+export interface ApiAvailabilityOptions {
+  /** Title of the next event; a grouping pattern that catches it is reported. */
+  title?: string;
+}
+
+/** What the grouping patterns of a project say about a title. */
+interface PatternFindings {
+  /** Texts for the result. */
+  warnings: string[];
+  /** Degradation codes the warnings stand for. */
+  degraded: DegradedCode[];
+}
+
 /**
- * Stage 2: the monitor can sign in, the token belongs to the project and the workspace has quota.
+ * Names the grouping patterns that catch a title.
+ * @param patterns Pattern texts of the project.
+ * @param title Title of the next event.
+ * @returns Warnings and the codes they stand for.
+ */
+function patternFindings(patterns: readonly string[], title: string): PatternFindings {
+  const warnings: string[] = [];
+  let catches = false;
+
+  for (const pattern of patterns) {
+    try {
+      if (new RegExp(pattern, 'u').test(title)) {
+        catches = true;
+        warnings.push(`The event grouping pattern "${pattern}" of the project catches the title of the monitor's events, so Hawk may glue them together`);
+      }
+    } catch {
+      warnings.push(`The event grouping pattern "${pattern}" of the project is not a regular expression the monitor can read`);
+    }
+  }
+
+  return { warnings,
+    degraded: catches ? ['grouping_pattern'] : [] };
+}
+
+/**
+ * Stage 2: the monitor can sign in, the token belongs to the project, the workspace has quota and no grouping pattern catches the next title.
  * @param timeoutMs Time limit of the stage.
+ * @param options Title of the next event, for the pattern check.
  * @returns Stage spec.
  */
-export function apiAvailabilityStage(timeoutMs: number): StageSpec<ScenarioContext> {
+export function apiAvailabilityStage(timeoutMs: number, options: ApiAvailabilityOptions = {}): StageSpec<ScenarioContext> {
   return {
     name: 'api_availability',
     timeoutMs,
@@ -301,7 +342,8 @@ export function apiAvailabilityStage(timeoutMs: number): StageSpec<ScenarioConte
 
       await api.ensureSession(signal);
 
-      const hawkToken = decodeIntegrationToken(await api.projectToken(projectId, signal));
+      const info = await api.projectInfo(projectId, signal);
+      const hawkToken = decodeIntegrationToken(info.token);
       const ownToken = decodeIntegrationToken(integrationToken);
 
       if (hawkToken === undefined || ownToken === undefined || tokenKey(hawkToken) !== tokenKey(ownToken)) {
@@ -320,21 +362,31 @@ export function apiAvailabilityStage(timeoutMs: number): StageSpec<ScenarioConte
       }
 
       const left = (quota.eventsLimit - quota.eventsCount) / quota.eventsLimit;
+      const findings = options.title === undefined
+        ? { warnings: [],
+            degraded: [] }
+        : patternFindings(info.groupingPatterns, options.title);
+      const details: Record<string, unknown> = { quota: { eventsCount: quota.eventsCount,
+        eventsLimit: quota.eventsLimit } };
 
-      const recorded = { eventsCount: quota.eventsCount,
-        eventsLimit: quota.eventsLimit };
+      if (left < LOW_QUOTA_SHARE) {
+        details.warning = `Event quota is almost used: ${usage}`;
+        details.quotaLow = true;
+      }
 
-      return left < LOW_QUOTA_SHARE
-        ? { status: 'ok',
-            details: { warning: `Event quota is almost used: ${usage}`,
-              quotaLow: true,
-              quota: recorded } }
-        : { status: 'ok',
-            details: { quota: recorded } };
+      if (findings.warnings.length > 0) {
+        details.warnings = findings.warnings;
+      }
+
+      if (findings.degraded.length > 0) {
+        details.degraded = findings.degraded;
+      }
+
+      return { status: 'ok',
+        details };
     },
   };
 }
-
 /**
  * Reads a key of an event context.
  * @param context Context as the API returns it.
@@ -561,6 +613,19 @@ export function collectorAcceptStage(timeoutMs: number, beforeSend?: () => void)
 }
 
 /**
+ * Tells whether a JavaScript event that carries a user agent came back without the description the JavaScript worker adds.
+ * @param card Event card from the API.
+ * @param sent Payload that was sent.
+ * @returns True when the worker left no trace.
+ */
+function workerMissing(card: EventCard, sent: Readonly<Record<string, unknown>>): boolean {
+  const addons = sent.addons as Record<string, unknown> | undefined;
+
+  return card.catcherType === 'errors/javascript' && typeof addons?.userAgent === 'string'
+    && valueAt(card, 'addons.beautifiedUserAgent') === undefined;
+}
+
+/**
  * Stage 4: waits until the event is visible in the API and checks its fields.
  * @param timeoutMs Time limit of the stage.
  * @returns Stage spec.
@@ -632,10 +697,17 @@ export function eventVisibleStage(timeoutMs: number): StageSpec<ScenarioContext>
         throw mismatch;
       }
 
+      const details: Record<string, unknown> = { pollOutcome: 'found',
+        attempts: poll.attempts,
+        errors: poll.errors };
+
+      if (workerMissing(card, shape.message(context).payload)) {
+        details.degraded = ['js_worker_not_seen'];
+        details.warning = 'The JavaScript event has no beautifiedUserAgent: the JavaScript worker did not handle it, or Hawk routes JavaScript events elsewhere';
+      }
+
       return { status: 'ok',
-        details: { pollOutcome: 'found',
-          attempts: poll.attempts,
-          errors: poll.errors } };
+        details };
     },
   };
 }

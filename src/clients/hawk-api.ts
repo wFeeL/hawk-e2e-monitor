@@ -63,6 +63,14 @@ export interface EventCard extends FoundEvent {
   usersAffected?: number | null;
 }
 
+/** What the monitor reads of a project besides its events. */
+export interface ProjectInfo {
+  /** Integration token as Hawk stores it. */
+  token: string;
+  /** Patterns that glue events with matching titles into one group. */
+  groupingPatterns: string[];
+}
+
 /** Accounts and waits the client needs. */
 export interface HawkApiOptions {
   /** Sends GraphQL operations. */
@@ -93,6 +101,13 @@ export interface HawkApi {
    * @returns Integration token as Hawk stores it.
    */
   projectToken(projectId: string, signal: AbortSignal): Promise<string>;
+  /**
+   * Reads the integration token and the event grouping patterns of a project in one request.
+   * @param projectId 24-character hex id of the project.
+   * @param signal Deadline of the caller.
+   * @returns Token and the text of each pattern.
+   */
+  projectInfo(projectId: string, signal: AbortSignal): Promise<ProjectInfo>;
   /**
    * Finds the workspace that holds the project.
    * @param projectId 24-character hex id of the project.
@@ -212,6 +227,12 @@ interface RefreshData {
   refreshTokens: Session;
 }
 
+/** A grouping pattern in a raw answer. */
+interface RawPattern {
+  /** Text of the pattern. */
+  pattern: string;
+}
+
 /** Answer of the ProjectToken query. */
 interface ProjectTokenData {
   /** Null when the project is unknown. */
@@ -228,6 +249,8 @@ interface RemoveData {
 interface ProjectTokenValue {
   /** Integration token. */
   token: string;
+  /** Grouping patterns, null or absent when there are none. */
+  eventGroupingPatterns?: Array<RawPattern | null> | null;
 }
 
 /** An event in a raw answer. */
@@ -507,15 +530,18 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
     return data.project.event ? toCard(data.project.event) : null;
   };
 
-  const projectToken: HawkApi['projectToken'] = async (projectId, signal) => {
+  const projectInfo: HawkApi['projectInfo'] = async (projectId, signal) => {
     const data = await authorized<ProjectTokenData>(PROJECT_TOKEN, { projectId }, signal);
 
     if (!data.project) {
       throw new CheckError('api_error', { detail: 'project not found' });
     }
 
-    return data.project.token;
+    return { token: data.project.token,
+      groupingPatterns: (data.project.eventGroupingPatterns ?? []).flatMap(item => item === null ? [] : [item.pattern]) };
   };
+
+  const projectToken: HawkApi['projectToken'] = async (projectId, signal) => (await projectInfo(projectId, signal)).token;
 
   const workspaceQuota: HawkApi['workspaceQuota'] = async (projectId, signal) => {
     const data = await authorized<WorkspaceQuotaData>(WORKSPACE_QUOTA, { projectId }, signal);
@@ -629,6 +655,7 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
     ensureSession,
     eventCard,
     projectToken,
+    projectInfo,
     workspaceQuota,
     findEvents,
     notificationRules,

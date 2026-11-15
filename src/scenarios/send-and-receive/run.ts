@@ -8,7 +8,7 @@ import { decodeIntegrationToken, tokenKey } from '../../hawk/token.js';
 import type { Logger } from '../../log/logger.js';
 import type { Clock } from '../../time/clock.js';
 import { SEND_AND_RECEIVE_EVENT } from '../names.js';
-import { buildRunResult, runSteps } from '../run-steps.js';
+import { buildRunResult, runSteps, stageWarnings } from '../run-steps.js';
 import { planRun } from './plan.js';
 import type { PlanOptions, RandomLetters } from './plan.js';
 import { apiAvailabilityStage, cleanupStage, collectorAcceptStage, collectorAvailabilityStage, eventRepeatedStage, eventVisibleStage } from './stages.js';
@@ -86,7 +86,7 @@ export async function runSendAndReceive(deps: ScenarioDeps, options: PlanOptions
     ...deps.signal === undefined ? {} : { signal: deps.signal },
     steps: [
       [collectorAvailabilityStage(timeouts.collectorAvailability)],
-      [apiAvailabilityStage(timeouts.apiAvailability)],
+      [apiAvailabilityStage(timeouts.apiAvailability, { title: plan.title })],
       [collectorAcceptStage(timeouts.collectorAccept)],
       [eventVisibleStage(timeouts.eventVisible)],
       [eventRepeatedStage(timeouts.eventRepeated)],
@@ -101,7 +101,7 @@ export async function runSendAndReceive(deps: ScenarioDeps, options: PlanOptions
     outcome,
     clock,
     verdict: decideVerdict(outcome.stages, state),
-    warnings: outcome.stages.flatMap(stage => typeof stage.details?.warning === 'string' ? [stage.details.warning] : []),
+    warnings: stageWarnings(outcome.stages),
     state,
     redact: deps.redact,
     logger: deps.logger });

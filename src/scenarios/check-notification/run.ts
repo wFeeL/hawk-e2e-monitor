@@ -86,7 +86,7 @@ export async function runCheckNotification(deps: NotificationDeps, options: Plan
 
   const steps: Step[] = [
     [collectorAvailabilityStage(timeouts.collectorAvailability)],
-    [apiAvailabilityStage(timeouts.apiAvailability)],
+    [apiAvailabilityStage(timeouts.apiAvailability, { title: plan.title })],
     [notificationSetupStage(settings.setupTimeoutMs)],
     [collectorAcceptStage(timeouts.collectorAccept, notificationBeforeSend(context))],
     [eventVisibleStage(timeouts.eventVisible), notificationFormedStage(settings.timeoutMs + config.httpTimeoutMs)],

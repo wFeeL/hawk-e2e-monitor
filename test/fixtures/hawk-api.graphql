@@ -24,6 +24,7 @@ scalar JSONObject
 #                 ProjectNotificationRulePointer (:102), Mutation.createProjectNotificationsRule (:118),
 #                 updateProjectNotificationsRule (:126), deleteProjectNotificationsRule (:134)
 #   project.ts    Project.notifications (:389)
+#   projectEventGroupingPattern.ts  ProjectEventGroupingPattern; project.ts Project.eventGroupingPatterns
 # The fragment of the Garage event documents (hawk.garage, src/api/fragments.ts) needs more:
 #   event.ts      SourceCodeLine, Commit, Release, EventBacktraceFrame, EventUser,
 #                 Breadcrumb, EventMarks, the full Event and EventPayload
@@ -181,9 +182,15 @@ type DailyEventsPortion {
   dailyEvents: [DailyEvent]
 }
 
+type ProjectEventGroupingPattern {
+  id: ID!
+  pattern: String!
+}
+
 type Project {
   id: ID!
   token: String!
+  eventGroupingPatterns: [ProjectEventGroupingPattern]
   notifications: [ProjectNotificationsRule]
   event(eventId: ID!, originalEventId: ID!): Event
   dailyEventsPortion(
