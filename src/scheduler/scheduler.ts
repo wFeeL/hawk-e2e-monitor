@@ -7,7 +7,7 @@ import type { Logger } from '../log/logger.js';
 import { createRunId } from '../scenarios/send-and-receive/plan.js';
 import type { ScenarioName } from '../scenarios/names.js';
 import type { History, RunStart } from '../storage/history.js';
-import { abortedOutcome, outcomeOf, rowOf } from '../storage/outcome.js';
+import { abortedOutcome, isVerdict, outcomeOf, rowOf } from '../storage/outcome.js';
 import type { RunOutcome, RunRow, RunTrigger } from '../storage/types.js';
 import type { Clock } from '../time/clock.js';
 
@@ -139,6 +139,12 @@ export interface Scheduler {
    */
   activeRunIds(): Set<string>;
   /**
+   * Tells when a scenario last ended a run that carries a verdict (`ok`, `failed`, or skipped for the rule cache warmup).
+   * @param scenario Scenario to ask about.
+   * @returns Wall-clock milliseconds of the end of that run, from this process or, before the first one, from the history; undefined when none is known.
+   */
+  lastVerdictAt(scenario: ScenarioName): number | undefined;
+  /**
    * Counts failed writes to the history.
    * @returns Number since the start.
    */
@@ -199,6 +205,15 @@ function describe(error: unknown): string {
 }
 
 /**
+ * Gives the moment a run with a verdict ended.
+ * @param row Run that carries a verdict.
+ * @returns Wall-clock milliseconds of its end, or of its start when it has no end.
+ */
+function verdictTime(row: RunRow): number {
+  return Date.parse(row.finishedAt ?? row.startedAt);
+}
+
+/**
  * Creates the scheduler.
  * @param deps Runners, history, clock, logger, configuration and hooks.
  * @returns Scheduler that is not started yet.
@@ -212,6 +227,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const listeners = deps.onRunFinished === undefined ? [] : [deps.onRunFinished].flat();
   const states = new Map<ScenarioName, ScenarioState>();
   const stopper = new AbortController();
+  const verdicts = new Map<ScenarioName, number>();
   let started = false;
   let stopped = false;
   let startedMono: number | undefined;
@@ -297,6 +313,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
 
     const finalRow = row ?? rowOf(handle.start, outcome);
+
+    if (isVerdict(finalRow)) {
+      verdicts.set(finalRow.scenario, verdictTime(finalRow));
+    }
 
     handle.resolveDone(finalRow);
     notify(finalRow, outcome.result);
@@ -596,6 +616,19 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     selfCheck();
 
     for (const state of states.values()) {
+      try {
+        const last = history.lastVerdict(state.name);
+
+        // A run of this process that ended before this reading is newer than anything the history holds.
+        if (last !== undefined && !verdicts.has(state.name)) {
+          verdicts.set(state.name, verdictTime(last));
+        }
+      } catch (error) {
+        writeFailed('lastVerdict', error);
+      }
+    }
+
+    for (const state of states.values()) {
       firstTick(state).catch((error: unknown) => {
         logger.error('first tick failed', { scenario: state.name,
           error });
@@ -663,6 +696,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     return evaluate(nowMonoMs ?? clock.monotonicMs());
   };
 
+  const lastVerdictAt: Scheduler['lastVerdictAt'] = scenario => verdicts.get(scenario);
+
   const activeRunIds: Scheduler['activeRunIds'] = () => {
     return new Set([...states.values()].flatMap(state => state.running === undefined ? [] : [state.running.start.runId]));
   };
@@ -675,6 +710,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     healthy,
     health,
     activeRunIds,
+    lastVerdictAt,
     failures: () => writeFailures,
   };
 }

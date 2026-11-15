@@ -107,6 +107,8 @@ describe('loadConfig', () => {
         alertRetryMs: 60_000,
         sweepIntervalMs: 3_600_000,
         sweepMinAgeMs: 900_000,
+        heartbeat: { intervalMs: 60_000 },
+        manual: { minIntervalMs: 60_000 },
       },
     });
   });

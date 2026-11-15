@@ -70,6 +70,22 @@ export interface NotificationConfig {
   ruleCacheWarmupMs: number;
 }
 
+/** Ping that tells an outside service the monitor is alive. */
+export interface HeartbeatConfig {
+  /** Address to ping; absent turns the heartbeat off. */
+  url?: string;
+  /** Time between pings. */
+  intervalMs: number;
+}
+
+/** Settings of runs started by hand. */
+export interface ManualRunConfig {
+  /** Bearer token of `POST /runs/<scenario>`; absent turns the route off. */
+  token?: string;
+  /** Least time between two manual runs of one scenario. */
+  minIntervalMs: number;
+}
+
 /** Settings of the continuous monitoring: schedule, history, alerts and cleanup. */
 export interface MonitoringConfig {
   /** Scenarios to run, in the order the variable lists them. */
@@ -96,6 +112,10 @@ export interface MonitoringConfig {
   sweepIntervalMs: number;
   /** Age a run must have before the sweep removes its event. */
   sweepMinAgeMs: number;
+  /** Ping of an external service that tells the monitor is alive. */
+  heartbeat: HeartbeatConfig;
+  /** Runs started by hand over the internal port. */
+  manual: ManualRunConfig;
 }
 
 /** Service configuration in the shape the rest of the code uses. */
@@ -274,6 +294,10 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): L
         alertRetryMs: values.ALERT_RETRY_MS,
         sweepIntervalMs: values.SWEEP_INTERVAL_MS,
         sweepMinAgeMs: values.SWEEP_MIN_AGE_MS,
+        heartbeat: { ...values.HEARTBEAT_URL === undefined ? {} : { url: values.HEARTBEAT_URL },
+          intervalMs: values.HEARTBEAT_INTERVAL_MS },
+        manual: { ...values.RUN_TOKEN === undefined ? {} : { token: values.RUN_TOKEN },
+          minIntervalMs: values.MANUAL_MIN_INTERVAL_MS },
       },
     },
   };

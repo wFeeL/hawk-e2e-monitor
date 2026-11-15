@@ -39,6 +39,11 @@ const DEFAULT_RETRY_ATTEMPTS = 3;
 const MAX_RETRY_ATTEMPTS = 5;
 const DEFAULT_RETRY_DELAYS = '200,500';
 const MAX_RETRY_DELAY_MS = 60_000;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
+const MIN_HEARTBEAT_INTERVAL_MS = 10_000;
+const MAX_PERIOD_MS = 3_600_000;
+const DEFAULT_MANUAL_MIN_INTERVAL_MS = 60_000;
+const MIN_RUN_TOKEN_LENGTH = 32;
 const DEFAULT_SWEEP_INTERVAL_MS = 3_600_000;
 const DEFAULT_SWEEP_MIN_AGE_MS = 900_000;
 const RECEIVER_SECRET_PATTERN = /^[\w-]{32,}$/;
@@ -267,6 +272,12 @@ export const ENV_SHAPE = {
   ALERT_RETRY_MS: pub(boundedDurationMs(DEFAULT_ALERT_RETRY_MS, MIN_ALERT_RETRY_MS, MAX_ALERT_RETRY_MS)),
   SWEEP_INTERVAL_MS: pub(durationMs(DEFAULT_SWEEP_INTERVAL_MS, { allowZero: true })),
   SWEEP_MIN_AGE_MS: pub(durationMs(DEFAULT_SWEEP_MIN_AGE_MS)),
+  // The address of a ping service is a secret: whoever knows it can ping for the monitor.
+  HEARTBEAT_URL: httpUrl().optional(),
+  HEARTBEAT_INTERVAL_MS: pub(boundedDurationMs(DEFAULT_HEARTBEAT_INTERVAL_MS, MIN_HEARTBEAT_INTERVAL_MS, MAX_PERIOD_MS)),
+  RUN_TOKEN: z.string().min(MIN_RUN_TOKEN_LENGTH, `must be at least ${String(MIN_RUN_TOKEN_LENGTH)} characters`)
+    .optional(),
+  MANUAL_MIN_INTERVAL_MS: pub(boundedDurationMs(DEFAULT_MANUAL_MIN_INTERVAL_MS, 0, MAX_PERIOD_MS)),
 };
 
 /**

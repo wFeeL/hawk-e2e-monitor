@@ -10,13 +10,12 @@ import { createGraphqlTransport } from '../clients/graphql.js';
 import { createHawkApi } from '../clients/hawk-api.js';
 import type { HawkApi } from '../clients/hawk-api.js';
 import type { Config } from '../config/load.js';
-import { createMutableRedactor, redactDeep } from '../errors/redact.js';
+import { redactDeep } from '../errors/redact.js';
 import type { MutableRedactor } from '../errors/redact.js';
 import { collectorEndpoints, decodeIntegrationToken } from '../hawk/token.js';
 import type { Check } from '../http/internal-server.js';
 import { serializeError } from '../log/logger.js';
 import type { LogFields, Logger } from '../log/logger.js';
-import { scenarioSecrets } from '../scenarios/send-and-receive/run.js';
 import { createScheduler } from '../scheduler/scheduler.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import { openDatabase } from '../storage/database.js';
@@ -28,6 +27,7 @@ import type { Clock } from '../time/clock.js';
 import { scenarioSettings } from '../config/scenario.js';
 import { createMetrics } from '../metrics/metrics.js';
 import { SERVICE_VERSION } from '../version.js';
+import { createMasking } from './masking.js';
 import { createRoutes } from './routes.js';
 import { buildRunners } from './runners.js';
 import type { Closer, RunnerOverrides } from './scenario-setup.js';
@@ -36,7 +36,6 @@ import { MS_PER_DAY, MS_PER_SECOND } from '../time/units.js';
 
 const ALERT_BACKLOG_LIMIT_MS = 1_800_000;
 const ALERT_BACKLOG_METRIC_MS = 15_000;
-const NOTIFY_TOKEN_MARKER = '/u/';
 
 /** Test hooks and replacements for the parts of `serve` that talk to the outside. */
 export interface ServeOverrides extends RunnerOverrides {
@@ -126,28 +125,6 @@ function maskedLogger(logger: Logger, masking: MutableRedactor): Logger {
     warn,
     error,
   };
-}
-
-/**
- * Collects what must never reach a log or a message: the secrets of the scenarios and the notify address with its token.
- * @param config Validated configuration.
- * @returns Redactor that learns more secrets while the process runs.
- */
-function createMasking(config: Config): MutableRedactor {
-  const secrets = scenarioSecrets(config);
-  const url = config.monitoring.alertNotifyUrl;
-
-  if (url !== undefined) {
-    secrets.push(url);
-
-    const token = url.includes(NOTIFY_TOKEN_MARKER) ? url.slice(url.indexOf(NOTIFY_TOKEN_MARKER) + NOTIFY_TOKEN_MARKER.length) : '';
-
-    if (token !== '') {
-      secrets.push(token);
-    }
-  }
-
-  return createMutableRedactor(secrets);
 }
 
 /** The clients of Hawk that all runs of a process share. */
