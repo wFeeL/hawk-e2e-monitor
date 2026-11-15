@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { Logger } from '../log/logger.js';
+import { sendJson } from './respond.js';
 import { HttpStatus } from '../net/http-status.js';
 
 const HEALTH_PATH = '/healthz';
@@ -89,23 +90,6 @@ export async function evaluateChecks(checks: readonly Check[], timeoutMs: number
   const results = await Promise.all(checks.map(async check => runCheck(check, timeoutMs)));
 
   return results.filter(result => result !== undefined);
-}
-
-/**
- * Sends a JSON response with the headers every internal reply carries.
- * @param res Response to write.
- * @param status HTTP status.
- * @param body Value serialized as the body.
- * @param headers Extra headers.
- */
-function sendJson(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
-  res.setHeader('content-type', 'application/json; charset=utf-8');
-  res.setHeader('cache-control', 'no-store');
-  for (const [name, value] of Object.entries(headers)) {
-    res.setHeader(name, value);
-  }
-  res.statusCode = status;
-  res.end(JSON.stringify(body));
 }
 
 /**

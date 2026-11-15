@@ -1,4 +1,6 @@
 import type { Config } from '../config/load.js';
+import { scenarioSettings } from '../config/scenario.js';
+import type { ScenarioSettings } from '../config/scenario.js';
 import type { RunResult } from '../engine/result.js';
 import type { Redactor } from '../errors/redact.js';
 import type { Logger } from '../log/logger.js';
@@ -46,7 +48,7 @@ export interface SchedulerDeps {
   redact: Redactor;
   /** Makes run ids; `createRunId` by default. */
   newRunId?: () => string;
-  /** Time between the starts of two runs of a scenario; `config.monitoring.intervalMs` by default. */
+  /** Time between the starts of two runs of a scenario; the scenario's settings by default. */
   intervalOf?: (scenario: ScenarioName) => number;
   /** Waited before the first run of a scenario; a rejection is logged and ignored. */
   beforeFirstRun?: Partial<Record<ScenarioName, (signal: AbortSignal) => Promise<void>>>;
@@ -203,11 +205,11 @@ function describe(error: unknown): string {
  */
 export function createScheduler(deps: SchedulerDeps): Scheduler {
   const { history, clock, logger, config, redact } = deps;
-  const { timeouts, monitoring } = config;
+  const { monitoring } = config;
   const newRunId = deps.newRunId ?? ((): string => createRunId());
-  const intervalOf = deps.intervalOf ?? ((): number => monitoring.intervalMs);
+  const settingsOf = (scenario: ScenarioName): ScenarioSettings => scenarioSettings(config, scenario);
+  const intervalOf = deps.intervalOf ?? ((scenario: ScenarioName): number => settingsOf(scenario).intervalMs);
   const listeners = deps.onRunFinished === undefined ? [] : [deps.onRunFinished].flat();
-  const watchdogMs = timeouts.run + timeouts.cleanup + monitoring.watchdogGraceMs;
   const states = new Map<ScenarioName, ScenarioState>();
   const stopper = new AbortController();
   let started = false;
@@ -224,7 +226,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
 
   const wallIso = (): string => clock.wallTime().toISOString();
-  const thresholdOf = (scenario: ScenarioName): number => intervalOf(scenario) + watchdogMs;
+  const thresholdOf = (scenario: ScenarioName): number => intervalOf(scenario) + settingsOf(scenario).watchdogMs;
 
   /**
    * Runs a callback after a pause unless the signal aborts first.
@@ -373,7 +375,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     handle.controller.abort();
     logger.error('run hung and was abandoned', { runId: handle.start.runId,
       scenario: state.name });
-    finish(state, handle, abortedOutcome('run_hung', { waitedMs: watchdogMs }, wallIso(), clock.monotonicMs() - handle.startedMono));
+    finish(state, handle, abortedOutcome('run_hung', { waitedMs: settingsOf(state.name).watchdogMs }, wallIso(), clock.monotonicMs() - handle.startedMono));
     state.hungStreak += 1;
 
     if (state.hungStreak >= HUNGS_BEFORE_EXIT) {
@@ -382,7 +384,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
 
     // The scenario stays busy while its cleanup may still be running.
-    after(timeouts.cleanup, handle.timers.signal, () => {
+    after(settingsOf(state.name).cleanupMs, handle.timers.signal, () => {
       release(state, handle);
     });
   };
@@ -425,7 +427,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
 
     state.running = handle;
-    after(watchdogMs, handle.timers.signal, () => {
+    after(settingsOf(state.name).watchdogMs, handle.timers.signal, () => {
       onWatchdog(state, handle);
     });
 
@@ -562,9 +564,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     const ticking = started && !stopped && [...states.values()].every(state => nowMonoMs - (state.lastTickMono ?? startedMono ?? nowMonoMs) <= allowedMs(state));
 
     // The watchdog abandons a run at `watchdogMs` and the scenario is held for one more cleanup timeout.
-    const busyLimitMs = watchdogMs + timeouts.cleanup;
     const stuck = [...states.values()]
-      .filter(state => state.running !== undefined && nowMonoMs - state.running.startedMono > busyLimitMs)
+      .filter(state => state.running !== undefined && nowMonoMs - state.running.startedMono > settingsOf(state.name).watchdogMs + settingsOf(state.name).cleanupMs)
       .map(state => state.name);
 
     return { scheduler: ticking,

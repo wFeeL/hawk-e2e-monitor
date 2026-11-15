@@ -2,7 +2,7 @@ import type { FoundEvent, HawkApi } from '../clients/hawk-api.js';
 import type { Config } from '../config/load.js';
 import type { Logger } from '../log/logger.js';
 import { buildTitle } from '../scenarios/send-and-receive/plan.js';
-import { SCENARIO_NAMES } from '../scenarios/names.js';
+import { EVENT_SCENARIOS } from '../scenarios/names.js';
 import type { History } from '../storage/history.js';
 import type { Clock } from '../time/clock.js';
 
@@ -89,7 +89,7 @@ function runIdOf(instanceId: string, title: string): string | undefined {
     return undefined;
   }
 
-  for (const scenario of SCENARIO_NAMES) {
+  for (const scenario of EVENT_SCENARIOS) {
     const suffix = ` ${scenario}`;
 
     if (title.endsWith(suffix)) {

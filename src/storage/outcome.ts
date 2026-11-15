@@ -2,12 +2,14 @@ import type { Config } from '../config/load.js';
 import type { RunResult } from '../engine/result.js';
 import { CheckError } from '../errors/taxonomy.js';
 import type { ErrorClass, MessageFacts } from '../errors/taxonomy.js';
-import { CHECK_NOTIFICATION } from '../scenarios/names.js';
+import { scenarioSettings } from '../config/scenario.js';
+import { CHECK_NOTIFICATION, EVENT_SCENARIOS } from '../scenarios/names.js';
 import type { RunStart } from './history.js';
 import type { DegradedCode, RunOutcome, RunRow } from './types.js';
 import { MS_PER_DAY } from '../time/units.js';
 
 const DAYS_PER_PERIOD = 30;
+const MONITOR_ABORTS: readonly ErrorClass[] = ['monitor_stopped', 'monitor_restarted'];
 
 /** What `outcomeOf` needs to know besides the result. */
 export interface OutcomeContext {
@@ -122,6 +124,42 @@ export function rowOf(start: RunStart, outcome: RunOutcome): RunRow {
       ...stage.culprit === undefined ? {} : { culprit: stage.culprit } })) };
 }
 
+/** What `isVerdict` may count besides the plain verdicts. */
+export interface VerdictOptions {
+  /** Also counts an `aborted` run that is not a stop or restart of the monitor. */
+  aborts?: boolean;
+}
+
+/** The part of a run that tells whether it carries a verdict. */
+export type VerdictFields = Pick<RunRow, 'status'> & Partial<Pick<RunRow, 'errorClass' | 'skipReason'>>;
+
+/**
+ * Tells whether a run ended because the monitor was stopped or restarted, which says nothing about Hawk.
+ * @param row Run to judge.
+ * @returns True for an `aborted` run of class `monitor_stopped` or `monitor_restarted`.
+ */
+export function isMonitorAbort(row: VerdictFields): boolean {
+  return row.status === 'aborted' && row.errorClass !== undefined && MONITOR_ABORTS.includes(row.errorClass);
+}
+
+/**
+ * Tells whether a run says something about the health of Hawk: `ok`, `failed` or a skip for the rule cache warmup.
+ * @param row Run to judge.
+ * @param options `aborts` also counts an `aborted` run that is not a stop or restart of the monitor, such as a hung run.
+ * @returns True when the run carries a verdict.
+ */
+export function isVerdict(row: VerdictFields, options: VerdictOptions = {}): boolean {
+  if (row.status === 'ok' || row.status === 'failed') {
+    return true;
+  }
+
+  if (row.status === 'skipped') {
+    return row.skipReason === 'rule_cache_warmup';
+  }
+
+  return options.aborts === true && row.status === 'aborted' && !isMonitorAbort(row);
+}
+
 /**
  * Counts the events a run sends on average; both scenarios repeat the event by the same rule.
  * @param config Configuration with the transport mode and the repeat period.
@@ -144,7 +182,9 @@ export function eventsPerRun(config: Config): number {
  * @returns Events per run times runs in 30 days, summed over the scenarios.
  */
 export function eventsSentPer30Days(config: Config): number {
-  const runs = DAYS_PER_PERIOD * MS_PER_DAY / config.monitoring.intervalMs;
+  const events = eventsPerRun(config);
 
-  return config.monitoring.scenarios.length * eventsPerRun(config) * runs;
+  return config.monitoring.scenarios
+    .filter(scenario => EVENT_SCENARIOS.includes(scenario))
+    .reduce((sum, scenario) => sum + events * DAYS_PER_PERIOD * MS_PER_DAY / scenarioSettings(config, scenario).intervalMs, 0);
 }

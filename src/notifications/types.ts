@@ -1,5 +1,8 @@
 /** Channels a test notification is checked on. */
-export type NotificationChannel = 'webhook' | 'loop';
+export const CHANNELS = ['webhook', 'loop'] as const;
+
+/** One of `CHANNELS`. */
+export type NotificationChannel = (typeof CHANNELS)[number];
 
 /** Settings of one channel of a rule. */
 export interface ChannelSettings {

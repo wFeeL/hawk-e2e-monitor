@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Alerter } from '../alerting/alerter.js';
 import type { Config } from '../config/load.js';
 import type { RouteHandler } from '../http/internal-server.js';
+import { sendJson } from '../http/respond.js';
 import { SCENARIO_NAMES } from '../scenarios/names.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import { DEFAULT_LIST_LIMIT } from '../storage/history.js';
@@ -26,19 +27,6 @@ export interface RouteDeps {
   alerter: Alerter;
   /** Counts failed sweeps of leftover events. */
   sweepFailures: () => number;
-}
-
-/**
- * Answers with JSON that must not be cached.
- * @param res Response.
- * @param status HTTP status.
- * @param body Value to serialize.
- */
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  res.setHeader('content-type', 'application/json; charset=utf-8');
-  res.setHeader('cache-control', 'no-store');
-  res.statusCode = status;
-  res.end(JSON.stringify(body));
 }
 
 /**
