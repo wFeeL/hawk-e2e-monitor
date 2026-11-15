@@ -3,7 +3,7 @@ import { CheckError, isCheckError } from '../errors/taxonomy.js';
 import type { Clock } from '../time/clock.js';
 import type { PublicAddress } from './address.js';
 import type { ChannelSettings, NotificationChannels, NotificationRule, NotificationRuleInput } from './types.js';
-import { SEND_AND_RECEIVE_EVENT } from '../scenarios/names.js';
+import { CHECK_NOTIFICATION, SCENARIO_NAMES } from '../scenarios/names.js';
 
 const CHANNEL_NAMES = ['email', 'slack', 'loop', 'telegram', 'webhook'] as const;
 const OFF: ChannelSettings = { isEnabled: false,
@@ -13,18 +13,22 @@ const NO_PERMISSIONS = 'Not enough permissions';
 const UNRESOLVED_HOST = 'Cannot resolve webhook hostname';
 const REFUSED = 'ECONNREFUSED';
 const CREATED_AGAIN = 'rule created again';
+const THRESHOLD = 2;
+const THRESHOLD_PERIOD_MS = 3_600_000;
 const VALIDATOR_TEXT = /^(?:Invalid (email|slack|loop|telegram) endpoint passed|Invalid webhook URL|Webhook )/u;
 
 /** What `provision` did. */
 export interface ProvisionResult {
-  /** Whether the rule was left, created or replaced. */
+  /** Whether the rules were left, one was created or one was replaced; creating wins over replacing. */
   action: 'none' | 'created' | 'updated';
   /** Extra rules of the instance that were deleted. */
   deleted: number;
   /** True when the notifier may still match events by the old rule for a while. */
   matchChanged: boolean;
-  /** Id of the rule of the instance. */
+  /** Id of the rule of the instance that tells about new events. */
   ruleId: string;
+  /** Id of the rule of the instance that tells when an event repeats. */
+  thresholdRuleId: string;
 }
 
 /** Keeps the rule of the instance in the wanted state. */
@@ -66,6 +70,9 @@ export interface ProvisionerDeps {
   onMatchChange?: (wallMs: number) => void;
 }
 
+/** Which of the two rules of the instance is meant. */
+type RuleKind = 'newEvents' | 'threshold';
+
 /** Decision about the rule found in Hawk. */
 interface Outcome {
   /** What was done. */
@@ -78,8 +85,22 @@ interface Outcome {
   difference?: string;
 }
 
-/** A result with the first differing matching field. */
-interface Decision extends ProvisionResult {
+/** What was done about both rules. */
+interface Decided extends ProvisionResult {
+  /** First field that made matching change. */
+  difference?: string;
+}
+
+/** What was done about one of the two rules. */
+interface Decision {
+  /** Whether the rule was left, created or replaced. */
+  action: ProvisionResult['action'];
+  /** Extra rules of that kind that were deleted. */
+  deleted: number;
+  /** Whether matching changed. */
+  matchChanged: boolean;
+  /** Id of the rule. */
+  ruleId: string;
   /** Field that made matching change. */
   difference?: string;
 }
@@ -101,7 +122,9 @@ function channelOf(channels: NotificationChannels | NotificationRuleInput['chann
  * @returns Field name and value pairs in a fixed order.
  */
 function fieldsOf(rule: NotificationRule | NotificationRuleInput, withEndpoints: boolean): [string, unknown][] {
-  const fields: [string, unknown][] = [['isEnabled', rule.isEnabled], ['whatToReceive', rule.whatToReceive], ['including', rule.including], ['excluding', rule.excluding]];
+  // Hawk answers null for a rule that has no threshold, the wanted rule leaves it out.
+  const fields: [string, unknown][] = [['isEnabled', rule.isEnabled], ['whatToReceive', rule.whatToReceive], ['including', rule.including], ['excluding', rule.excluding],
+    ['threshold', rule.threshold ?? null], ['thresholdPeriod', rule.thresholdPeriod ?? null]];
 
   for (const name of CHANNEL_NAMES) {
     const channel = channelOf(rule.channels, name);
@@ -119,7 +142,7 @@ function fieldsOf(rule: NotificationRule | NotificationRuleInput, withEndpoints:
 /**
  * Serializes the fields the monitor writes.
  * @param rule Stored rule or input.
- * @returns JSON that equals for equal rules; ids, `minPeriod` and thresholds are left out.
+ * @returns JSON that equals for equal rules; ids and `minPeriod` are left out, the threshold and its period count.
  */
 export function ruleProjection(rule: NotificationRule | NotificationRuleInput): string {
   return JSON.stringify(fieldsOf(rule, true));
@@ -137,8 +160,16 @@ function matchDifference(stored: NotificationRule, wanted: NotificationRuleInput
   return fieldsOf(stored, false).find(([, value], index) => JSON.stringify(value) !== JSON.stringify(right[index]?.[1]))?.[0];
 }
 
+/** The two rules the instance keeps. */
+export interface DesiredRules {
+  /** Tells about new events on the webhook and loop channels. */
+  newEvents: NotificationRuleInput;
+  /** Tells when an event repeats, on its own webhook path. */
+  threshold: NotificationRuleInput;
+}
+
 /**
- * Builds the rule the instance should have.
+ * Builds the rule that tells about new events.
  * @param deps Project, instance, secret and loop switch.
  * @param address Public address of the receiver.
  * @returns Input for create or update.
@@ -148,7 +179,7 @@ export function desiredRule(deps: Pick<ProvisionerDeps, 'instanceId' | 'loop' | 
     isEnabled: true,
     whatToReceive: 'ONLY_NEW',
     including: [`[e2e:${deps.instanceId}]`],
-    excluding: [SEND_AND_RECEIVE_EVENT],
+    excluding: SCENARIO_NAMES.filter(name => name !== CHECK_NOTIFICATION),
     channels: { email: OFF,
       slack: OFF,
       telegram: OFF,
@@ -156,6 +187,26 @@ export function desiredRule(deps: Pick<ProvisionerDeps, 'instanceId' | 'loop' | 
         endpoint: `${address.baseUrl}/hooks/loop/${deps.secret}` },
       webhook: { isEnabled: true,
         endpoint: `${address.baseUrl}/hooks/webhook/${deps.secret}` } } };
+}
+
+/**
+ * Builds the two rules the instance should have.
+ * @param deps Project, instance, secret and loop switch.
+ * @param address Public address of the receiver.
+ * @returns The new-events rule and the threshold rule: two events of one group in an hour.
+ */
+export function desiredRules(deps: Pick<ProvisionerDeps, 'instanceId' | 'loop' | 'projectId' | 'secret'>, address: PublicAddress): DesiredRules {
+  const newEvents = desiredRule(deps, address);
+
+  return { newEvents,
+    threshold: { ...newEvents,
+      whatToReceive: 'SEEN_MORE',
+      threshold: THRESHOLD,
+      thresholdPeriod: THRESHOLD_PERIOD_MS,
+      channels: { ...newEvents.channels,
+        loop: OFF,
+        webhook: { isEnabled: true,
+          endpoint: `${address.baseUrl}/hooks/threshold/${deps.secret}` } } } };
 }
 
 /**
@@ -243,16 +294,21 @@ export function createProvisioner(deps: ProvisionerDeps): Provisioner {
   };
 
   const isOurs = (rule: NotificationRule): boolean => rule.including.length === 1 && rule.including[0] === `[e2e:${deps.instanceId}]`;
-  const ownRules = async (signal: AbortSignal): Promise<NotificationRule[]> => (await api.notificationRules(projectId, signal)).filter(isOurs);
+  const ownRules = async (kind: RuleKind, signal: AbortSignal): Promise<NotificationRule[]> => {
+    const kindOf = kind === 'newEvents' ? 'ONLY_NEW' : 'SEEN_MORE';
+
+    return (await api.notificationRules(projectId, signal)).filter(rule => isOurs(rule) && rule.whatToReceive === kindOf);
+  };
 
   /**
-   * Reads the rules, decides what to change and changes it.
+   * Reads the rules of one kind, decides what to change and changes it.
+   * @param kind Which of the two rules is meant.
+   * @param wanted The rule the instance should have.
    * @param address Public address of the receiver.
    * @param signal Deadline of the caller.
-   * @returns Result with the first differing field for the stability check.
+   * @returns Decision with the first differing field for the stability check.
    */
-  const decide = async (address: PublicAddress, signal: AbortSignal): Promise<Decision> => {
-    const wanted = desiredRule(deps, address);
+  const decideKind = async (kind: RuleKind, wanted: NotificationRuleInput, address: PublicAddress, signal: AbortSignal): Promise<Decision> => {
     const mutate = async <T>(call: () => Promise<T>): Promise<T> => {
       try {
         return await call();
@@ -260,7 +316,7 @@ export function createProvisioner(deps: ProvisionerDeps): Provisioner {
         throw classifyMutation(error, address, projectId);
       }
     };
-    let rules = await ownRules(signal);
+    let rules = await ownRules(kind, signal);
     let created = false;
     let nulls = 0;
     let forced = false;
@@ -285,7 +341,7 @@ export function createProvisioner(deps: ProvisionerDeps): Provisioner {
 
           created = true;
           forced = true;
-          rules = await ownRules(signal);
+          rules = await ownRules(kind, signal);
 
           continue;
         }
@@ -308,7 +364,7 @@ export function createProvisioner(deps: ProvisionerDeps): Provisioner {
             throw new CheckError('provisioning_conflict', { detail: 'the rule disappeared while it was being updated, twice' });
           }
 
-          rules = await ownRules(signal);
+          rules = await ownRules(kind, signal);
 
           continue;
         }
@@ -325,7 +381,7 @@ export function createProvisioner(deps: ProvisionerDeps): Provisioner {
         await mutate(async () => api.deleteNotificationRule(projectId, extra.id, signal));
       }
 
-      if (extras.length > 0 && (await ownRules(signal)).length > 1) {
+      if (extras.length > 0 && (await ownRules(kind, signal)).length > 1) {
         throw new CheckError('provisioning_conflict', { detail: 'an extra rule of the instance was not deleted' });
       }
 
@@ -335,6 +391,27 @@ export function createProvisioner(deps: ProvisionerDeps): Provisioner {
         ruleId: outcome.ruleId,
         ...outcome.difference === undefined ? {} : { difference: outcome.difference } };
     }
+  };
+
+  /**
+   * Brings both rules to the wanted state and merges what was done.
+   * @param address Public address of the receiver.
+   * @param signal Deadline of the caller.
+   * @returns Result with the first differing field for the stability check.
+   */
+  const decide = async (address: PublicAddress, signal: AbortSignal): Promise<Decided> => {
+    const wanted = desiredRules(deps, address);
+    const newEvents = await decideKind('newEvents', wanted.newEvents, address, signal);
+    const threshold = await decideKind('threshold', wanted.threshold, address, signal);
+    const difference = newEvents.difference ?? threshold.difference;
+    const actions = [newEvents.action, threshold.action];
+
+    return { action: actions.includes('created') ? 'created' : actions.includes('updated') ? 'updated' : 'none',
+      deleted: newEvents.deleted + threshold.deleted,
+      matchChanged: newEvents.matchChanged || threshold.matchChanged,
+      ruleId: newEvents.ruleId,
+      thresholdRuleId: threshold.ruleId,
+      ...difference === undefined ? {} : { difference } };
   };
 
   const provision: Provisioner['provision'] = async (address, signal) => {

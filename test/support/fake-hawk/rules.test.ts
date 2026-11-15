@@ -453,3 +453,53 @@ describe('defaultRule', () => {
     });
   });
 });
+
+describe('fake rules: SEEN_MORE threshold', () => {
+  const PERIOD_TEXT = 'Threshold period should be one of the following: 60000, 3600000, 86400000, 604800000';
+
+  it('takes a valid threshold and period on create and update', () => {
+    const h = harness();
+    const rule = ruleOf(h.rules.create(PROJECT, input({}, { whatToReceive: 'SEEN_MORE',
+      threshold: 2,
+      thresholdPeriod: 3_600_000 })));
+
+    expect(rule).toMatchObject({ whatToReceive: 'SEEN_MORE',
+      threshold: 2,
+      thresholdPeriod: 3_600_000 });
+    expect(ruleOf(h.rules.update(PROJECT, input({}, { ruleId: rule.id,
+      whatToReceive: 'SEEN_MORE',
+      threshold: 3,
+      thresholdPeriod: 60_000 }))).threshold).toBe(3);
+  });
+
+  it('refuses a period that is not one of the four', () => {
+    const h = harness();
+
+    expect(messageOf(h, input({}, { whatToReceive: 'SEEN_MORE',
+      threshold: 2,
+      thresholdPeriod: 5000 }))).toBe(PERIOD_TEXT);
+    expect(messageOf(h, input({}, { whatToReceive: 'SEEN_MORE',
+      threshold: 2 }))).toBe(PERIOD_TEXT);
+  });
+
+  it('refuses a threshold below 1 or missing, after the period', () => {
+    const h = harness();
+
+    expect(errorOf(h.rules.create(PROJECT, input({}, { whatToReceive: 'SEEN_MORE',
+      threshold: 0,
+      thresholdPeriod: 60_000 }))).message).toBe('Threshold should be greater than 0');
+    expect(messageOf(h, input({}, { whatToReceive: 'SEEN_MORE',
+      thresholdPeriod: 60_000 }))).toBe('Threshold should be greater than 0');
+  });
+
+  it('refuses a bad threshold on update too, and leaves ONLY_NEW rules alone', () => {
+    const h = harness();
+    const rule = ruleOf(h.rules.create(PROJECT, input()));
+
+    expect(errorOf(h.rules.update(PROJECT, input({}, { ruleId: rule.id,
+      whatToReceive: 'SEEN_MORE',
+      threshold: 2,
+      thresholdPeriod: 1 }))).message).toBe(PERIOD_TEXT);
+    expect(rule.whatToReceive).toBe('ONLY_NEW');
+  });
+});

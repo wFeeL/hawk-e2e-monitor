@@ -54,14 +54,18 @@ export interface NotificationRuleInput {
   projectId: string;
   /** Whether the rule is on. */
   isEnabled: boolean;
-  /** Only new events. */
-  whatToReceive: 'ONLY_NEW';
+  /** Only new events, or every event once the threshold is reached. */
+  whatToReceive: 'ONLY_NEW' | 'SEEN_MORE';
   /** Words of which at least one must be in the title. */
   including: string[];
   /** Words that keep an event out. */
   excluding: string[];
   /** Channels; Hawk needs all of them but the webhook, and the monitor sets the webhook. */
   channels: NotificationRuleInputChannels;
+  /** Events of one group in the period that trigger a `SEEN_MORE` rule. */
+  threshold?: number | null;
+  /** Period of a `SEEN_MORE` rule, ms. */
+  thresholdPeriod?: number | null;
 }
 
 /** Channels of a rule input: the webhook is always set. */

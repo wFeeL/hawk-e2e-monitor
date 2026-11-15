@@ -19,6 +19,7 @@ const PRIVATE_IP_PATTERNS = [
   /^::1$/u, /^::$/u, /^fe80/iu, /^f[cd]/iu, /^ff[0-9a-f]{2}:/iu,
   /^::ffff:(0\.|10\.|127\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/iu,
 ];
+const VALID_THRESHOLD_PERIODS = [60_000, 3_600_000, 86_400_000, 604_800_000];
 const MANDATORY_CHANNELS = ['email', 'slack', 'loop', 'telegram'] as const;
 
 /** An error the fake API turns into a GraphQL error. */
@@ -226,6 +227,20 @@ function validateChannels(channels: ChannelMap, options: FakeRulesOptions): Fake
 }
 
 /**
+ * Checks the threshold of a `SEEN_MORE` rule the way `validateNotificationsRuleTresholdAndPeriod` does.
+ * @param threshold Events that trigger the rule.
+ * @param period Period in milliseconds.
+ * @returns Hawk's text, or null when both are fine.
+ */
+function thresholdError(threshold: unknown, period: unknown): string | null {
+  if (typeof period !== 'number' || !VALID_THRESHOLD_PERIODS.includes(period)) {
+    return 'Threshold period should be one of the following: 60000, 3600000, 86400000, 604800000';
+  }
+
+  return typeof threshold === 'number' && threshold >= 1 ? null : 'Threshold should be greater than 0';
+}
+
+/**
  * Builds the rule Hawk adds to every new project.
  * @param email Email of the project creator.
  * @param newId Id generator.
@@ -336,6 +351,13 @@ export function createFakeRules(options: FakeRulesOptions, newId: () => string =
     };
 
     if (whatToReceive === 'SEEN_MORE') {
+      const refusal = thresholdError(input.threshold, input.thresholdPeriod);
+
+      if (refusal !== null) {
+        return { code: 'BAD_USER_INPUT',
+          message: refusal };
+      }
+
       rule.threshold = typeof input.threshold === 'number' ? input.threshold : null;
       rule.thresholdPeriod = typeof input.thresholdPeriod === 'number' ? input.thresholdPeriod : null;
     }

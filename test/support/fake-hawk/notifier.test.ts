@@ -385,7 +385,9 @@ describe('fake notifier rules', () => {
   });
 
   it('SEEN_MORE also fires on a repetition', async () => {
-    const { store, receiver, notifier } = await setup({ whatToReceive: 'SEEN_MORE' });
+    const { store, receiver, notifier } = await setup({ whatToReceive: 'SEEN_MORE',
+      threshold: 1,
+      thresholdPeriod: 3_600_000 });
 
     ingest(store);
     ingest(store);
