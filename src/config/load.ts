@@ -134,6 +134,26 @@ export interface MonitoringConfig {
   probe: ProbeConfig;
 }
 
+/** Settings of the `telegram-delivery` scenario. */
+export interface TelegramDeliveryConfig {
+  /** Time between the starts of two runs. */
+  intervalMs: number;
+  /** Token of the bot that reads the group; checked when the scenario starts. */
+  botToken?: string;
+  /** Notify URL of @codex_bot that the Hawk rule delivers to; checked when the scenario starts. */
+  notifyUrl?: string;
+  /** Id of the group, as text; absent means any chat. */
+  chatId?: string;
+  /** Username of the bot that posts for Hawk. */
+  senderUsername: string;
+  /** Address of the Telegram Bot API. */
+  apiUrl: string;
+  /** Time to wait for the Telegram message of a run. */
+  deliveryTimeoutMs: number;
+  /** Time to wait for the probe message. */
+  probeTimeoutMs: number;
+}
+
 /** Settings of the scenarios that have their own interval or time limit. */
 export interface ScenariosConfig {
   /** Scenario `new-project`. */
@@ -155,6 +175,8 @@ export interface ScenariosConfig {
     /** Time between the starts of two runs. */
     intervalMs: number;
   };
+  /** Scenario `telegram-delivery`. */
+  telegramDelivery: TelegramDeliveryConfig;
 }
 
 /** Service configuration in the shape the rest of the code uses. */
@@ -351,6 +373,16 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): L
         sourcemaps: { intervalMs: values.SOURCEMAPS_INTERVAL_MS,
           releaseSaveTimeoutMs: values.RELEASE_SAVE_TIMEOUT_MS },
         sentryEnvelope: { intervalMs: values.SENTRY_ENVELOPE_INTERVAL_MS },
+        telegramDelivery: {
+          intervalMs: values.TELEGRAM_DELIVERY_INTERVAL_MS,
+          ...values.TELEGRAM_BOT_TOKEN === undefined ? {} : { botToken: values.TELEGRAM_BOT_TOKEN },
+          ...values.TELEGRAM_NOTIFY_URL === undefined ? {} : { notifyUrl: values.TELEGRAM_NOTIFY_URL },
+          ...values.TELEGRAM_CHAT_ID === undefined ? {} : { chatId: values.TELEGRAM_CHAT_ID },
+          senderUsername: values.TELEGRAM_SENDER_USERNAME,
+          apiUrl: values.TELEGRAM_API_URL,
+          deliveryTimeoutMs: values.TELEGRAM_DELIVERY_TIMEOUT_MS,
+          probeTimeoutMs: values.TELEGRAM_PROBE_TIMEOUT_MS,
+        },
       },
     },
   };
@@ -393,4 +425,44 @@ export function notificationSettings(config: Config): NotificationConfig & Requi
 
   return { ...notifications,
     receiverSecret: notifications.receiverSecret };
+}
+
+/** What the Hawk validator accepts as the address of the Telegram channel. */
+export const NOTIFY_URL_PATTERN = /^https:\/\/notify\.bot\.codex\.so\/u\/[A-Za-z0-9]+$/u;
+const BOT_TOKEN_PATTERN = /^\d+:[\w-]{30,}$/u;
+
+/**
+ * Checks the settings that only a chosen `telegram-delivery` needs.
+ * @param config Loaded configuration.
+ * @returns The Telegram settings with the token and the notify URL present and well formed.
+ * @throws ConfigFailure naming each variable that is missing or malformed, without its value.
+ */
+export function telegramSettings(config: Config): TelegramDeliveryConfig & Required<Pick<TelegramDeliveryConfig, 'botToken' | 'notifyUrl'>> {
+  const settings = config.scenarios.telegramDelivery;
+  const { botToken, notifyUrl } = settings;
+  const errors: ConfigError[] = [];
+
+  if (botToken === undefined) {
+    errors.push({ variable: 'TELEGRAM_BOT_TOKEN',
+      message: 'is required for telegram-delivery' });
+  } else if (!BOT_TOKEN_PATTERN.test(botToken)) {
+    errors.push({ variable: 'TELEGRAM_BOT_TOKEN',
+      message: 'must be a bot token: digits, a colon and at least 30 characters' });
+  }
+
+  if (notifyUrl === undefined) {
+    errors.push({ variable: 'TELEGRAM_NOTIFY_URL',
+      message: 'is required for telegram-delivery' });
+  } else if (!NOTIFY_URL_PATTERN.test(notifyUrl)) {
+    errors.push({ variable: 'TELEGRAM_NOTIFY_URL',
+      message: 'must be a notify address of the form https://notify.bot.codex.so/u/<token>' });
+  }
+
+  if (botToken === undefined || notifyUrl === undefined || errors.length > 0) {
+    throw new ConfigFailure(errors);
+  }
+
+  return { ...settings,
+    botToken,
+    notifyUrl };
 }

@@ -33,6 +33,8 @@ export interface Arrivals {
   loop: Arrival[];
   /** POSTs of the threshold webhook. */
   threshold: Arrival[];
+  /** POSTs of the webhook of the Telegram rule. */
+  telegram: Arrival[];
   /** POSTs that matched no run while the run was waiting. */
   unmatched: number;
 }
@@ -131,6 +133,7 @@ function snapshot(arrivals: Arrivals): Arrivals {
   return { webhook: [...arrivals.webhook],
     loop: [...arrivals.loop],
     threshold: [...arrivals.threshold],
+    telegram: [...arrivals.telegram],
     unmatched: arrivals.unmatched };
 }
 
@@ -293,6 +296,7 @@ export async function startReceiver(options: ReceiverOptions): Promise<Receiver>
       return { webhook: [],
         loop: [],
         threshold: [],
+        telegram: [],
         unmatched: 0 };
     }
 
@@ -358,6 +362,7 @@ export async function startReceiver(options: ReceiverOptions): Promise<Receiver>
       runs.set(runId, { arrivals: { webhook: [],
         loop: [],
         threshold: [],
+        telegram: [],
         unmatched: 0 },
       listeners: new Set() });
     }
@@ -382,6 +387,7 @@ export async function startReceiver(options: ReceiverOptions): Promise<Receiver>
     counts: runId => snapshot(runs.get(runId)?.arrivals ?? { webhook: [],
       loop: [],
       threshold: [],
+      telegram: [],
       unmatched: 0 }),
     release,
     close,

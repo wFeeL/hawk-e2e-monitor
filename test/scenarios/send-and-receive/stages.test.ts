@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EventCard, FoundEvent, HawkApi } from '../../../src/clients/hawk-api.js';
 import { runStage } from '../../../src/engine/stages.js';
 import type { StageResult } from '../../../src/engine/result.js';
@@ -28,6 +28,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await hawk.close();
 });
 
@@ -899,6 +900,10 @@ describe('eventVisibleStage on a fake clock', () => {
   }
 
   it('an event found at the end of the search gets its card read before the deadline', async () => {
+    // Without jitter the probes fall on 0, 500, ... 7500, so one of them sees the event before the search ends at 8000.
+    // With the default jitter a probe gap of up to 600 ms can step over the end of the search.
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+
     const { result } = await runOnFakeClock(7500, HTTP_MS - 1);
 
     expect(result.status).toBe('ok');

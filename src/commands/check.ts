@@ -2,7 +2,7 @@ import { createCollectorClient } from '../clients/collector.js';
 import { createGraphqlTransport } from '../clients/graphql.js';
 import { createHawkApi } from '../clients/hawk-api.js';
 import type { CheckCommand } from '../cli.js';
-import { ConfigFailure, formatConfigErrors, notificationSettings } from '../config/load.js';
+import { ConfigFailure, formatConfigErrors, notificationSettings, telegramSettings } from '../config/load.js';
 import type { Config } from '../config/load.js';
 import type { RunResult } from '../engine/result.js';
 import { createMutableRedactor } from '../errors/redact.js';
@@ -19,14 +19,16 @@ import { createHistory } from '../storage/history.js';
 import { pendingProjects } from '../storage/pending-projects.js';
 import { runEndpointsProbe } from '../scenarios/endpoints-probe/run.js';
 import { runCheckNotification } from '../scenarios/check-notification/run.js';
-import type { NotificationDeps } from '../scenarios/check-notification/run.js';
+import type { TelegramDeliveryDeps } from '../scenarios/telegram-delivery/run.js';
+import { runTelegramDelivery } from '../scenarios/telegram-delivery/run.js';
 import { runSendAndReceive, scenarioSecrets } from '../scenarios/send-and-receive/run.js';
 import type { ScenarioDeps } from '../scenarios/send-and-receive/run.js';
+import { MATCH_CHANGED_KEY, TELEGRAM_MATCH_CHANGED_KEY } from '../storage/keys.js';
 import { systemClock } from '../time/clock.js';
 import { MS_PER_SECOND } from '../time/units.js';
 import { readMatchChange, recordMatchChange } from './match-change.js';
 import { refusalWhileServing } from './serving.js';
-import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, NEW_PROJECT, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS } from '../scenarios/names.js';
+import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, NEW_PROJECT, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS, TELEGRAM_DELIVERY } from '../scenarios/names.js';
 import type { ScenarioName } from '../scenarios/names.js';
 
 /** Where the command writes. */
@@ -102,22 +104,36 @@ function summarize(result: RunResult, io: CheckIo, masking: MutableRedactor): nu
   return 1;
 }
 
+/** What differs between the scenarios that run on the receiver. */
+interface ReceiverScenario {
+  /** Key of the history that holds the time their rule last changed matching. */
+  key: string;
+  /** Checks the settings of the scenario before anything starts; throws `ConfigFailure`. */
+  validate: (config: Config) => void;
+  /** Runs the scenario once. */
+  run: (deps: TelegramDeliveryDeps, command: CheckCommand) => Promise<RunResult>;
+}
+
 /**
- * Runs `check-notification` with a receiver that is closed at the end when the command started it.
+ * Runs a scenario that needs the receiver, with a receiver that is closed at the end when the command started it.
+ * A rule changed by an earlier check may still be cached by Hawk, so the command waits that out before it checks.
  * @param command Parsed `check` command.
  * @param config Validated configuration.
  * @param io Output streams.
  * @param deps Replacements for the default dependencies, for tests.
  * @param masking Redactor shared with the logger.
+ * @param scenario What differs between the scenarios.
  * @returns Exit code.
  */
-async function runNotificationCommand(command: CheckCommand, config: Config, io: CheckIo, deps: Partial<NotificationDeps>, masking: MutableRedactor): Promise<number> {
+async function runOnReceiver(command: CheckCommand, config: Config, io: CheckIo, deps: Partial<TelegramDeliveryDeps>, masking: MutableRedactor, scenario: ReceiverScenario): Promise<number> {
   const base = defaultDeps(config, io, masking);
   let receiver = deps.receiver;
   const startedHere = receiver === undefined;
 
   try {
     const settings = notificationSettings(config);
+
+    scenario.validate(config);
 
     if (receiver === undefined) {
       receiver = await startReceiver({ host: settings.receiverHost,
@@ -128,7 +144,7 @@ async function runNotificationCommand(command: CheckCommand, config: Config, io:
     }
 
     const clock = deps.clock ?? base.clock;
-    const lastChange = deps.provisioner === undefined ? readMatchChange(config, io) : undefined;
+    const lastChange = deps.provisioner === undefined ? readMatchChange(config, io, scenario.key) : undefined;
     // A stored time in the future must not stretch the wait beyond the warmup.
     const remainingMs = lastChange === undefined
       ? 0
@@ -149,19 +165,17 @@ async function runNotificationCommand(command: CheckCommand, config: Config, io:
       }
     }
 
-    const result = await runCheckNotification({ ...base,
+    const result = await scenario.run({ ...base,
       ...deps,
       ...deps.provisioner === undefined
         // A stored time in the future is clamped, so the provisioner sees the waited warmup as over.
         ? { ...lastChange === undefined ? {} : { lastMatchChangeAtWallMs: Math.min(lastChange, clock.wallTime().getTime() - settings.ruleCacheWarmupMs) },
             onMatchChange: (wallMs: number) => {
-              recordMatchChange(config, new Date(wallMs), io);
+              recordMatchChange(config, new Date(wallMs), io, scenario.key);
             } }
         : {},
       receiver,
-      addSecret: deps.addSecret ?? masking.add }, { sequence: command.sequence,
-      transport: command.transport,
-      repeat: command.repeat ? true : undefined });
+      addSecret: deps.addSecret ?? masking.add }, command);
 
     io.stdout(`${JSON.stringify(result)}\n`);
 
@@ -181,8 +195,40 @@ async function runNotificationCommand(command: CheckCommand, config: Config, io:
   }
 }
 
+/**
+ * Runs `check-notification` on the receiver.
+ * @param command Parsed `check` command.
+ * @param config Validated configuration.
+ * @param io Output streams.
+ * @param deps Replacements for the default dependencies, for tests.
+ * @param masking Redactor shared with the logger.
+ * @returns Exit code.
+ */
+const runNotificationCommand: CheckScenario = async (command, config, io, deps, masking) => runOnReceiver(command, config, io, deps, masking, { key: MATCH_CHANGED_KEY,
+  validate: () => undefined,
+  run: async (runDeps, parsed) => runCheckNotification(runDeps, { sequence: parsed.sequence,
+    transport: parsed.transport,
+    repeat: parsed.repeat ? true : undefined }) });
+
+/**
+ * Runs `telegram-delivery` on the receiver, with its own rule and its own warmup key.
+ * @param command Parsed `check` command.
+ * @param config Validated configuration.
+ * @param io Output streams.
+ * @param deps Replacements for the default dependencies, for tests.
+ * @param masking Redactor shared with the logger.
+ * @returns Exit code.
+ */
+const runTelegramDeliveryCommand: CheckScenario = async (command, config, io, deps, masking) => runOnReceiver(command, config, io, deps, masking, { key: TELEGRAM_MATCH_CHANGED_KEY,
+  validate: (checked) => {
+    telegramSettings(checked);
+  },
+  run: async (runDeps, parsed) => runTelegramDelivery(runDeps, { sequence: parsed.sequence,
+    transport: parsed.transport,
+    repeat: parsed.repeat ? true : undefined }) });
+
 /** Runs one scenario for `check` and returns the exit code. */
-type CheckScenario = (command: CheckCommand, config: Config, io: CheckIo, deps: Partial<NotificationDeps>, masking: MutableRedactor) => Promise<number>;
+type CheckScenario = (command: CheckCommand, config: Config, io: CheckIo, deps: Partial<TelegramDeliveryDeps>, masking: MutableRedactor) => Promise<number>;
 
 /**
  * Runs `send-and-receive-event` and prints the result.
@@ -302,6 +348,7 @@ const CHECKS: Readonly<Record<ScenarioName, CheckScenario>> = {
   [NEW_PROJECT]: runNewProjectCommand,
   [SOURCEMAPS]: runSourcemapsCommand,
   [SENTRY_ENVELOPE]: runSentryEnvelopeCommand,
+  [TELEGRAM_DELIVERY]: runTelegramDeliveryCommand,
   [ENDPOINTS_PROBE]: runProbeCommand,
 };
 
@@ -313,7 +360,7 @@ const CHECKS: Readonly<Record<ScenarioName, CheckScenario>> = {
  * @param deps Replacements for the default dependencies, for tests.
  * @returns Exit code: 0 when the run is ok, 1 when it failed.
  */
-export async function runCheckCommand(command: CheckCommand, config: Config, io: CheckIo, deps: Partial<NotificationDeps> = {}): Promise<number> {
+export async function runCheckCommand(command: CheckCommand, config: Config, io: CheckIo, deps: Partial<TelegramDeliveryDeps> = {}): Promise<number> {
   const refusal = refusalWhileServing(config, deps.clock?.wallTime() ?? new Date());
 
   if (refusal !== undefined) {

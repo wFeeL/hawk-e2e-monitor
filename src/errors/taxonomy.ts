@@ -15,7 +15,8 @@ export const ERROR_CLASSES = [
   'notification_endpoint_rejected', 'provisioning_conflict', 'provisioning_unstable',
   'notification_timeout', 'notification_mismatch', 'duplicate_notification',
   'run_hung', 'monitor_restarted', 'monitor_stopped', 'alert_rejected',
-  'garage_unavailable',
+  'garage_unavailable', 'telegram_auth_failed', 'telegram_conflict', 'telegram_bot_misconfigured',
+  'telegram_api_unavailable', 'telegram_bot_unavailable', 'telegram_not_delivered',
 ] as const;
 
 /** One of `ERROR_CLASSES`. */
@@ -81,6 +82,12 @@ export const CULPRIT_OF: Readonly<Record<ErrorClass, Culprit>> = Object.fromEntr
   ['monitor_stopped', 'monitor'],
   ['alert_rejected', 'config'],
   ['garage_unavailable', 'hawk'],
+  ['telegram_auth_failed', 'config'],
+  ['telegram_conflict', 'config'],
+  ['telegram_bot_misconfigured', 'config'],
+  ['telegram_api_unavailable', 'network'],
+  ['telegram_bot_unavailable', 'network'],
+  ['telegram_not_delivered', 'hawk'],
 ] satisfies readonly (readonly [ErrorClass, Culprit])[]) as Record<ErrorClass, Culprit>;
 
 /** Facts a message may mention; absent facts are skipped. */
@@ -125,6 +132,8 @@ export interface MessageFacts {
 export interface CheckErrorOptions extends ErrorOptions {
   /** Replaces the text built by `describeError`. */
   message?: string;
+  /** Replaces the culprit of the class, for a class whose blame depends on the case. */
+  culprit?: Culprit;
 }
 
 /** A failure with a taxonomy class, culprit and human-readable text. */
@@ -140,12 +149,12 @@ export class CheckError extends Error {
    * @param options Cause and an optional replacement text.
    */
   constructor(errorClass: ErrorClass, facts: MessageFacts = {}, options: CheckErrorOptions = {}) {
-    const { message, ...errorOptions } = options;
+    const { message, culprit, ...errorOptions } = options;
 
     super(message ?? describeError(errorClass, facts), errorOptions);
     this.name = 'CheckError';
     this.errorClass = errorClass;
-    this.culprit = CULPRIT_OF[errorClass];
+    this.culprit = culprit ?? CULPRIT_OF[errorClass];
     this.facts = facts;
   }
 }

@@ -2,7 +2,7 @@ import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type { RunResult, StageName } from '../engine/result.js';
 import { CheckError, CULPRIT_OF } from '../errors/taxonomy.js';
 import type { Culprit, ErrorClass } from '../errors/taxonomy.js';
-import type { NotificationChannel } from '../notifications/types.js';
+import type { LateKind } from '../notifications/types.js';
 import type { ScenarioName } from '../scenarios/names.js';
 import type { AlertLevelState, DegradedCode, RunOutcome, RunRow, RunStatus, RunTrigger, SkipReason, StageRow } from './types.js';
 import { MS_PER_DAY } from '../time/units.js';
@@ -248,7 +248,7 @@ export interface History {
    * @param at Time of the POST, ISO.
    * @returns Which mark was written, undefined when none.
    */
-  markLateNotification(runId: string, channel: NotificationChannel, at: string): 'duplicate' | 'late' | undefined;
+  markLateNotification(runId: string, channel: LateKind, at: string): 'duplicate' | 'late' | undefined;
   /**
    * Reads the alert state of a scenario.
    * @param scenario Scenario whose state is read.
@@ -441,7 +441,7 @@ export function createHistory(db: DatabaseSync): History {
     lateEventFoundAt: text(row, 'late_event_found_at'),
     lateEventDelayMs: num(row, 'late_event_delay_ms'),
     lateNotificationAt: text(row, 'late_notification_at'),
-    lateNotificationChannel: text(row, 'late_notification_channel') as NotificationChannel | undefined,
+    lateNotificationChannel: text(row, 'late_notification_channel') as LateKind | undefined,
     lateDuplicateNotificationAt: text(row, 'late_duplicate_notification_at'),
     stages: stagesOf(num(row, 'id') ?? 0),
   });

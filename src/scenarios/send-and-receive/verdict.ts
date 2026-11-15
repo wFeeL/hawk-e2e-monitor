@@ -19,39 +19,22 @@ export interface Verdict {
  * @returns Error with the recorded class and text.
  */
 export function errorOf(stage: StageResult): CheckError {
-  return new CheckError(stage.errorClass ?? 'monitor_internal', {}, { message: stage.message });
+  return new CheckError(stage.errorClass ?? 'monitor_internal', {}, { message: stage.message,
+    ...stage.culprit === undefined ? {} : { culprit: stage.culprit } });
 }
 
 /**
- * Decides whether the run passed and which stage and error represent it.
+ * Finds the failure of the first failed stage, with the corrections for a silent collector or release upload.
  * A silent collector must not look like a loss inside Hawk, so an uncertain accept followed by a missing event is blamed on the collector,
  * and so is an uncertain release upload followed by a release that is not saved.
- * @param stages Recorded stages, cleanup last.
- * @param _state Run state, unused: everything needed is in the stage results.
- * @returns Pass, or the stage and error that stand for the failure.
+ * @param stages Recorded stages; cleanup is not looked at.
+ * @returns The verdict that stands for the failure, or undefined when no stage failed.
  */
-export function decideVerdict(stages: readonly StageResult[], _state: ScenarioState): Verdict {
+export function decideHead(stages: readonly StageResult[]): Verdict | undefined {
   const failed = stages.find(stage => stage.name !== 'cleanup' && stage.status === 'failed');
 
   if (failed === undefined) {
-    const late = stages.find(stage => stage.name === 'cleanup')?.details?.lateTotalCount;
-
-    if (typeof late === 'number') {
-      const repeated = stages.find(stage => stage.name === 'event_repeated')?.status === 'ok';
-
-      return { status: 'failed',
-        failedStage: repeated ? 'event_repeated' : 'event_visible',
-        error: new CheckError('duplicate_event', { count: late },
-          { message: `The event count grew to ${String(late)} after the check, expected ${repeated ? '2' : '1'}` }) };
-    }
-
-    const cleanup = stages.find(stage => stage.name === 'cleanup' && stage.status === 'failed');
-
-    return cleanup === undefined
-      ? { status: 'ok' }
-      : { status: 'failed',
-          failedStage: 'cleanup',
-          error: errorOf(cleanup) };
+    return undefined;
   }
 
   const accept = stages.find(stage => stage.name === 'collector_accept');
@@ -86,4 +69,40 @@ export function decideVerdict(stages: readonly StageResult[], _state: ScenarioSt
   return { status: 'failed',
     failedStage: failed.name,
     error: errorOf(failed) };
+}
+
+/**
+ * Judges what only a run without a failed stage can fail on: the event counted again after the check, and the cleanup.
+ * @param stages Recorded stages with the cleanup stage.
+ * @returns Pass, or the failure of the late count or of the cleanup.
+ */
+export function decideTail(stages: readonly StageResult[]): Verdict {
+  const late = stages.find(stage => stage.name === 'cleanup')?.details?.lateTotalCount;
+
+  if (typeof late === 'number') {
+    const repeated = stages.find(stage => stage.name === 'event_repeated')?.status === 'ok';
+
+    return { status: 'failed',
+      failedStage: repeated ? 'event_repeated' : 'event_visible',
+      error: new CheckError('duplicate_event', { count: late },
+        { message: `The event count grew to ${String(late)} after the check, expected ${repeated ? '2' : '1'}` }) };
+  }
+
+  const cleanup = stages.find(stage => stage.name === 'cleanup' && stage.status === 'failed');
+
+  return cleanup === undefined
+    ? { status: 'ok' }
+    : { status: 'failed',
+        failedStage: 'cleanup',
+        error: errorOf(cleanup) };
+}
+
+/**
+ * Decides whether the run passed and which stage and error represent it.
+ * @param stages Recorded stages, cleanup last.
+ * @param _state Run state, unused: everything needed is in the stage results.
+ * @returns Pass, or the stage and error that stand for the failure.
+ */
+export function decideVerdict(stages: readonly StageResult[], _state: ScenarioState): Verdict {
+  return decideHead(stages) ?? decideTail(stages);
 }

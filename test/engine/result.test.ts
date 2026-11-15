@@ -6,6 +6,7 @@ describe('STAGE_NAMES', () => {
     expect(STAGE_NAMES).toEqual([
       'collector_availability',
       'api_availability',
+      'telegram_ready',
       'notification_setup',
       'project_created',
       'token_accepted',
@@ -14,6 +15,8 @@ describe('STAGE_NAMES', () => {
       'collector_accept',
       'event_visible',
       'notification_formed',
+      'telegram_delivered',
+      'telegram_probe',
       'event_repeated',
       'threshold_formed',
       'cleanup',

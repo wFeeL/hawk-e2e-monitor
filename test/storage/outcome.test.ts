@@ -135,6 +135,33 @@ describe('outcomeOf', () => {
     expect(outcomeOf(notificationResult(), CONTEXT).degraded).toEqual([]);
   });
 
+  it('telegram-delivery: single_channel when the message came and the webhook of rule T did not', () => {
+    const result = runResultFixture({ scenario: 'telegram-delivery',
+      stages: [stageFixture('notification_formed', 'failed', 10, { errorClass: 'notification_timeout' }),
+        stageFixture('telegram_delivered', 'ok', 10)] });
+
+    expect(outcomeOf(result, CONTEXT).degraded).toEqual(['single_channel']);
+  });
+
+  it('telegram-delivery: both arrived, or the message did not come, is not single_channel', () => {
+    const both = runResultFixture({ scenario: 'telegram-delivery',
+      stages: [stageFixture('notification_formed', 'ok', 10), stageFixture('telegram_delivered', 'ok', 10)] });
+    const noMessage = runResultFixture({ scenario: 'telegram-delivery',
+      stages: [stageFixture('notification_formed', 'failed', 10), stageFixture('telegram_delivered', 'failed', 10)] });
+
+    expect(outcomeOf(both, CONTEXT).degraded).toEqual([]);
+    expect(outcomeOf(noMessage, CONTEXT).degraded).toEqual([]);
+  });
+
+  it('telegram-delivery in the rule cache warmup is skipped like check-notification', () => {
+    const result = runResultFixture({ scenario: 'telegram-delivery',
+      stages: [stageFixture('notification_formed', 'skipped', 0, { details: { reason: 'rule_cache_warmup' } }),
+        stageFixture('telegram_delivered', 'skipped', 0)] });
+
+    expect(outcomeOf(result, CONTEXT)).toMatchObject({ status: 'skipped',
+      skipReason: 'rule_cache_warmup' });
+  });
+
   it('single_channel is only for check-notification and only for ok', () => {
     expect(outcomeOf(runResultFixture({ notification: { unmatched: 0 } }), CONTEXT).degraded).toEqual([]);
     expect(outcomeOf(notificationResult({ status: 'failed',

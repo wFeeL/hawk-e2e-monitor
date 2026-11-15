@@ -16,6 +16,9 @@ export const SOURCEMAPS = 'sourcemaps';
 /** Name of the scenario that sends an event through the Sentry endpoint. */
 export const SENTRY_ENVELOPE = 'sentry-envelope';
 
+/** Name of the scenario that checks that a Hawk notification reaches Telegram. */
+export const TELEGRAM_DELIVERY = 'telegram-delivery';
+
 /** All scenarios; a new one is appended at the end. */
 export const SCENARIO_NAMES = [
   SEND_AND_RECEIVE_EVENT,
@@ -23,6 +26,7 @@ export const SCENARIO_NAMES = [
   NEW_PROJECT,
   SOURCEMAPS,
   SENTRY_ENVELOPE,
+  TELEGRAM_DELIVERY,
   ENDPOINTS_PROBE,
 ] as const;
 
@@ -57,6 +61,9 @@ export const SCENARIO_TRAITS: Readonly<Record<ScenarioName, ScenarioTraits>> = {
     inHeartbeat: true,
     hiddenByDefault: false },
   [SENTRY_ENVELOPE]: { sendsEvents: true,
+    inHeartbeat: true,
+    hiddenByDefault: false },
+  [TELEGRAM_DELIVERY]: { sendsEvents: true,
     inHeartbeat: true,
     hiddenByDefault: false },
 };

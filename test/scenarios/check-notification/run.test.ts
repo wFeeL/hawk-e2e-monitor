@@ -190,6 +190,7 @@ describe('a healthy fake Hawk', () => {
     expect(parts.receiver.counts(RUN_ID)).toEqual({ webhook: [],
       loop: [],
       threshold: [],
+      telegram: [],
       unmatched: 0 });
   });
 

@@ -3,7 +3,7 @@ import type { RunResult } from '../engine/result.js';
 import { CheckError } from '../errors/taxonomy.js';
 import type { ErrorClass, MessageFacts } from '../errors/taxonomy.js';
 import { scenarioSettings } from '../config/scenario.js';
-import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, EVENT_SCENARIOS, SEND_AND_RECEIVE_EVENT } from '../scenarios/names.js';
+import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, EVENT_SCENARIOS, SEND_AND_RECEIVE_EVENT, TELEGRAM_DELIVERY } from '../scenarios/names.js';
 import type { RunStart } from './history.js';
 import { DEGRADED_CODES } from './types.js';
 import type { DegradedCode, RunOutcome, RunRow } from './types.js';
@@ -32,6 +32,13 @@ function degradationOf(result: RunResult, context: OutcomeContext): DegradedCode
 
   if (result.scenario === CHECK_NOTIFICATION && notification !== undefined
     && (notification.webhook === undefined || (context.loopEnabled && notification.loop === undefined))) {
+    codes.push('single_channel');
+  }
+
+  // The message reached Telegram although the webhook of rule T did not come: one of the two ways is broken.
+  if (result.scenario === TELEGRAM_DELIVERY
+    && result.stages.some(stage => stage.name === 'telegram_delivered' && stage.status === 'ok')
+    && result.stages.some(stage => stage.name === 'notification_formed' && stage.status === 'failed')) {
     codes.push('single_channel');
   }
 

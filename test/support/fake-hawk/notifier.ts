@@ -3,7 +3,13 @@ import type { FakeRules } from './rules.js';
 import type { FakeStore, StoredEvent } from './store.js';
 
 const SEND_TIMEOUT_MS = 10_000;
-const CHANNELS: readonly NotificationChannel[] = ['webhook', 'loop'];
+
+/** The senders of a rule: the two channels the monitor reads directly and the Telegram worker. */
+type SenderChannel = NotificationChannel | 'telegram';
+
+const CHANNELS: readonly SenderChannel[] = ['webhook', 'loop', 'telegram'];
+const CODEX_NOTIFY_ORIGIN = 'https://notify.bot.codex.so';
+const MARKDOWN_SPECIALS = /[_*`[]/gu;
 const WEBHOOK_PERIOD = 60;
 
 /** How a test breaks the notifier or one of its senders. */
@@ -14,8 +20,12 @@ export interface FakeNotifierKnobs {
   webhookOff?: boolean;
   /** The loop sender is not running. */
   loopOff?: boolean;
+  /** The Telegram worker is not running. */
+  telegramWorkerDown?: boolean;
+  /** Where `https://notify.bot.codex.so` is reached; a Telegram send is logged as an error, with no request, when this is absent. */
+  codexNotifyBase?: string;
   /** Pause before every send, in real time; a record sets it by channel. */
-  delayMs?: number | Partial<Record<NotificationChannel, number>>;
+  delayMs?: number | Partial<Record<SenderChannel, number>>;
   /** Sends a channel twice; the second send waits for `after` when it is given. */
   duplicate?: DuplicateKnob;
   /** Rewrites a copy of the webhook body; the result is sent as JSON. */
@@ -41,7 +51,7 @@ export interface DuplicateKnob {
 /** One send the notifier attempted. */
 export interface SentRecord {
   /** Channel of the send. */
-  channel: NotificationChannel;
+  channel: SenderChannel;
   /** Address the request went to. */
   url: string;
   /** HTTP status, or `'error'` when there was no answer or the loop sender failed. */
@@ -132,6 +142,15 @@ function deferred(): Deferred {
 
   return { promise,
     resolve };
+}
+
+/**
+ * Escapes the characters that break the legacy Markdown of Telegram, as the Telegram worker does.
+ * @param text Raw text.
+ * @returns Text with a backslash before each special character.
+ */
+function escapeMarkdown(text: string): string {
+  return text.replaceAll(MARKDOWN_SPECIALS, String.raw`\$&`);
 }
 
 /**
@@ -252,7 +271,7 @@ export function startFakeNotifier(options: FakeNotifierOptions): FakeNotifier {
     return fresh;
   };
 
-  const post = async (channel: NotificationChannel, url: string, headers: Record<string, string>, body: string): Promise<void> => {
+  const post = async (channel: SenderChannel, url: string, headers: Record<string, string>, body: string): Promise<void> => {
     let status: number | 'error';
 
     try {
@@ -347,6 +366,27 @@ export function startFakeNotifier(options: FakeNotifierOptions): FakeNotifier {
     await post('webhook', url, headers, body);
   };
 
+  const sendTelegram = async (url: string, event: StoredEvent, repetitionId: string | null): Promise<void> => {
+    const [first] = framesOf(event);
+    const location = first === undefined ? '' : `\n\`\`\`\n${typeof first.file === 'string' && first.file !== '' ? first.file : 'Unknown location'}\n\`\`\``;
+    const link = `${options.garageUrl}/project/${projectId}/event/${event.id}/${repetitionId === null ? '' : `${repetitionId}/overview`}`;
+    const message = `${escapeMarkdown(titleOf(event))}\n${location}\n[View details](${link}) | ${escapeMarkdown(options.projectName)} | 1 new (${String(event.totalCount)} total)`;
+    const base = knobs.codexNotifyBase;
+
+    if (base === undefined || !url.startsWith(CODEX_NOTIFY_ORIGIN)) {
+      // Nothing may leave the machine in a test, so an address without a stand-in is a failed send.
+      sent.push({ channel: 'telegram',
+        url,
+        status: 'error' });
+
+      return;
+    }
+
+    await post('telegram', `${base}${url.slice(CODEX_NOTIFY_ORIGIN.length)}`,
+      Object.fromEntries([['Content-Type', 'application/x-www-form-urlencoded']]),
+      `parse_mode=Markdown&message=${encodeURIComponent(message)}`);
+  };
+
   const sendLoop = async (url: string, event: StoredEvent, _repetitionId: string | null): Promise<void> => {
     const frames = framesOf(event);
 
@@ -373,7 +413,7 @@ export function startFakeNotifier(options: FakeNotifierOptions): FakeNotifier {
    * @param eventId Original event id.
    * @param repetitionId Id of the repetition that caused the job, null for a new event.
    */
-  const perform = async (channel: NotificationChannel, ruleId: string, eventId: string, repetitionId: string | null): Promise<void> => {
+  const perform = async (channel: SenderChannel, ruleId: string, eventId: string, repetitionId: string | null): Promise<void> => {
     const { delayMs } = knobs;
     const pause = typeof delayMs === 'object' ? delayMs[channel] : delayMs;
 
@@ -397,7 +437,7 @@ export function startFakeNotifier(options: FakeNotifierOptions): FakeNotifier {
       return;
     }
 
-    const send = channel === 'webhook' ? sendWebhook : sendLoop;
+    const send = channel === 'webhook' ? sendWebhook : channel === 'loop' ? sendLoop : sendTelegram;
 
     await send(settings.endpoint, event, repetitionId);
 
@@ -437,7 +477,7 @@ export function startFakeNotifier(options: FakeNotifierOptions): FakeNotifier {
       }
 
       for (const channel of CHANNELS) {
-        const switchedOff = channel === 'webhook' ? knobs.webhookOff === true : knobs.loopOff === true;
+        const switchedOff = channel === 'webhook' ? knobs.webhookOff === true : channel === 'loop' ? knobs.loopOff === true : knobs.telegramWorkerDown === true;
 
         if (rule.channels[channel]?.isEnabled !== true || switchedOff) {
           continue;

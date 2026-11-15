@@ -527,6 +527,22 @@ describe('late marks', () => {
     expect(history.markLateNotification('rnnnnnnnnnnnnnnnn', 'loop', at(0))).toBeUndefined();
   });
 
+  it('markLateNotification tells a late telegram POST from a duplicate', () => {
+    const history = memoryHistory();
+
+    store(history, { runId: 'raaaaaaaaaaaaaaaa',
+      result: runResultFixture({ runId: 'raaaaaaaaaaaaaaaa',
+        scenario: 'telegram-delivery',
+        notification: { telegram: { latencyMs: 900 },
+          unmatched: 0 } }) });
+    store(history, { runId: 'rbbbbbbbbbbbbbbbb',
+      outcome: { status: 'failed' } });
+
+    expect(history.markLateNotification('raaaaaaaaaaaaaaaa', 'telegram', at(1))).toBe('duplicate');
+    expect(history.markLateNotification('rbbbbbbbbbbbbbbbb', 'telegram', at(2))).toBe('late');
+    expect(history.get('rbbbbbbbbbbbbbbbb')).toMatchObject({ lateNotificationChannel: 'telegram' });
+  });
+
   it('a second late POST of the late channel is a duplicate, of the other channel nothing', () => {
     const history = memoryHistory();
 

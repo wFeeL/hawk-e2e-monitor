@@ -163,6 +163,7 @@ describe('threshold kind', () => {
     const empty = { webhook: [],
       loop: [],
       threshold: [],
+      telegram: [],
       unmatched: 0 };
 
     expect(await receiver.wait('nope', waitOptions())).toEqual(empty);
@@ -175,6 +176,18 @@ describe('threshold kind', () => {
     const { receiver } = await start();
 
     expect((await post(receiver, 'other', 'x')).status).toBe(404);
+  });
+});
+
+describe('receiver telegram path', () => {
+  it('binds a POST to /hooks/telegram to the run', async () => {
+    const { receiver } = await start();
+
+    receiver.expect('run-1');
+    expect((await post(receiver, 'telegram', 'about run-1')).status).toBe(200);
+    await arrived(receiver, 'run-1', 'telegram', 1);
+
+    expect(receiver.counts('run-1').telegram[0]?.channel).toBe('telegram');
   });
 });
 
@@ -397,6 +410,7 @@ describe('receiver', () => {
     expect(await receiver.wait('nope', waitOptions())).toEqual({ webhook: [],
       loop: [],
       threshold: [],
+      telegram: [],
       unmatched: 0 });
   });
 
@@ -413,6 +427,7 @@ describe('receiver', () => {
     expect(receiver.counts('run-1')).toEqual({ webhook: [],
       loop: [],
       threshold: [],
+      telegram: [],
       unmatched: 0 });
   });
 
@@ -576,6 +591,7 @@ describe('wait on a fake clock', () => {
     expect(await waiting.result).toEqual({ webhook: [],
       loop: [],
       threshold: [],
+      telegram: [],
       unmatched: 0 });
   });
 
