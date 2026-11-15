@@ -24,11 +24,12 @@ const EXPECTED_CULPRITS: readonly (readonly [ErrorClass, Culprit])[] = [
   ['monitor_stopped', 'monitor'],
   ['alert_rejected', 'config'],
   ['garage_unavailable', 'hawk'],
+  ['api_unexpected_response', 'hawk'],
 ];
 
 describe('taxonomy', () => {
   it('culprit table covers every class', () => {
-    expect(ERROR_CLASSES).toHaveLength(43);
+    expect(ERROR_CLASSES).toHaveLength(44);
 
     for (const errorClass of ERROR_CLASSES) {
       expect(CULPRIT_OF[errorClass]).toBeDefined();

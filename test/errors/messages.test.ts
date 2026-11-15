@@ -30,6 +30,13 @@ describe('blocked port', () => {
   });
 });
 
+describe('api_unexpected_response', () => {
+  it('names the address and points at HAWK_API_URL', () => {
+    expect(describeError('api_unexpected_response', { url: 'https://api.example/graphql',
+      status: 404 })).toBe('Hawk API at https://api.example/graphql gave a non-GraphQL answer: HTTP 404; check HAWK_API_URL');
+  });
+});
+
 describe('describeError', () => {
   it('every class has a non-empty message without "undefined"', () => {
     for (const errorClass of ERROR_CLASSES) {

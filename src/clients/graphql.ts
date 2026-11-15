@@ -167,8 +167,14 @@ export function createGraphqlTransport(options: GraphqlTransportOptions): Graphq
       const waitedMs = Math.round(clock.monotonicMs() - startedAt);
       const body = parseObject(response.text);
 
-      if (response.status >= HttpStatus.internalServerError || !body) {
+      if (response.status >= HttpStatus.internalServerError) {
         throw new CheckError('api_unavailable', { url,
+          status: response.status,
+          waitedMs });
+      }
+
+      if (!body) {
+        throw new CheckError('api_unexpected_response', { url,
           status: response.status,
           waitedMs });
       }
