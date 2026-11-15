@@ -24,7 +24,8 @@ export function errorOf(stage: StageResult): CheckError {
 
 /**
  * Decides whether the run passed and which stage and error represent it.
- * A silent collector must not look like a loss inside Hawk, so an uncertain accept followed by a missing event is blamed on the collector.
+ * A silent collector must not look like a loss inside Hawk, so an uncertain accept followed by a missing event is blamed on the collector,
+ * and so is an uncertain release upload followed by a release that is not saved.
  * @param stages Recorded stages, cleanup last.
  * @param _state Run state, unused: everything needed is in the stage results.
  * @returns Pass, or the stage and error that stand for the failure.
@@ -71,6 +72,15 @@ export function decideVerdict(stages: readonly StageResult[], _state: ScenarioSt
         error: new CheckError(failed.errorClass ?? 'monitor_internal', {},
           { message: `${failed.message ?? 'API error'}; the event was not confirmed by the collector either` }) };
     }
+  }
+
+  const upload = stages.find(stage => stage.name === 'release_uploaded');
+
+  // A release that never showed after an unconfirmed upload was most likely lost by the collector.
+  if (failed.name === 'release_saved' && failed.errorClass === 'release_not_saved' && upload?.status === 'uncertain') {
+    return { status: 'failed',
+      failedStage: 'release_uploaded',
+      error: errorOf(upload) };
   }
 
   return { status: 'failed',
