@@ -24,6 +24,8 @@ export interface FakeNotifierKnobs {
   webhookRawBody?: string;
   /** Replaces all headers of the webhook. */
   webhookHeaders?: Record<string, string>;
+  /** A rule that counts also sends on the first event of a group, as a notifier that ignores the threshold would. */
+  fireThresholdOnFirst?: boolean;
   /** How long the notifier keeps the rules it read, counted from the read; 0 reads them every time. */
   ruleCacheMs?: number;
 }
@@ -426,8 +428,12 @@ export function startFakeNotifier(options: FakeNotifierOptions): FakeNotifier {
 
     for (const rule of rulesOfProject().filter(candidate => matches(candidate, title, isNew))) {
       // A rule that counts sends on the event that makes the count equal its threshold, and on no other.
-      if (rule.whatToReceive === 'SEEN_MORE' && countFor(rule, event) !== rule.threshold) {
-        continue;
+      if (rule.whatToReceive === 'SEEN_MORE') {
+        const count = countFor(rule, event);
+
+        if (count !== rule.threshold && !(knobs.fireThresholdOnFirst === true && count === 1)) {
+          continue;
+        }
       }
 
       for (const channel of CHANNELS) {

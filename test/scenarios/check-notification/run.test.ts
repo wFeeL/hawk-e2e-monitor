@@ -439,6 +439,21 @@ describe('a notification that does not fit the event', () => {
   });
 });
 
+describe('a run without a repeat', () => {
+  it('fails with threshold_early when the threshold rule fires on the first event', async () => {
+    const parts = await start();
+
+    hawk.notifier.knobs.fireThresholdOnFirst = true;
+
+    const result = await go(parts, {}, { sequence: 1,
+      repeat: false });
+
+    expect(result).toMatchObject({ status: 'failed',
+      failedStage: 'threshold_formed',
+      errorClass: 'threshold_early' });
+  });
+});
+
 describe('a repeat run', () => {
   it('is ok with the threshold notification timed from the repeat', async () => {
     const parts = await start();
