@@ -758,7 +758,8 @@ describe('health', () => {
     const { scheduler, clock } = setup({ scenarios: [SEND] });
 
     expect(scheduler.health()).toEqual({ scheduler: false,
-      storage: true });
+      storage: true,
+      stuck: [] });
     scheduler.start();
     await settle(clock);
     expect(scheduler.healthy()).toBe(true);
@@ -906,6 +907,32 @@ describe('storage failure', () => {
     callOf(runners[SEND], 0).resolve();
     await clock.advance(INTERVAL_MS);
     expect([callOf(runners[SEND], 0).sequence, callOf(runners[SEND], 1).sequence]).toEqual([1, 2]);
+  });
+});
+
+describe('a scenario that stays busy', () => {
+  it('is reported as stuck once its run should have been abandoned and released', async () => {
+    const { scheduler, clock } = setup({ scenarios: [SEND, NOTIFY] });
+
+    scheduler.start();
+    await settle(clock);
+
+    const limit = WATCHDOG_MS + CLEANUP_MS;
+    const now = clock.monotonicMs();
+
+    expect(scheduler.health(now + limit).stuck).toEqual([]);
+    expect(scheduler.health(now + limit + 1).stuck).toEqual([SEND]);
+    expect(scheduler.healthy(now + limit + 1)).toBe(false);
+  });
+
+  it('is not stuck while an abandoned run is held for its cleanup', async () => {
+    const { scheduler, clock } = setup({ scenarios: [SEND] });
+
+    scheduler.start();
+    await settle(clock);
+    await clock.advance(WATCHDOG_MS);
+    expect(scheduler.activeRunIds().size).toBe(1);
+    expect(scheduler.health().stuck).toEqual([]);
   });
 });
 

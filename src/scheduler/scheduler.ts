@@ -96,6 +96,8 @@ export interface SchedulerHealth {
   scheduler: boolean;
   /** The last write to the history worked. */
   storage: boolean;
+  /** Scenarios whose run has been busy longer than the watchdog and the hold after it allow. */
+  stuck: ScenarioName[];
 }
 
 /** Starts scenario runs on a schedule and watches them. */
@@ -559,8 +561,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const evaluate = (nowMonoMs: number): SchedulerHealth => {
     const ticking = started && !stopped && [...states.values()].every(state => nowMonoMs - (state.lastTickMono ?? startedMono ?? nowMonoMs) <= thresholdOf(state.name));
 
+    // The watchdog abandons a run at `watchdogMs` and the scenario is held for one more cleanup timeout.
+    const busyLimitMs = watchdogMs + timeouts.cleanup;
+    const stuck = [...states.values()]
+      .filter(state => state.running !== undefined && nowMonoMs - state.running.startedMono > busyLimitMs)
+      .map(state => state.name);
+
     return { scheduler: ticking,
-      storage: !storageFailed };
+      storage: !storageFailed,
+      stuck };
   };
 
   const selfCheck = (): void => {
@@ -646,7 +655,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const healthy: Scheduler['healthy'] = (nowMonoMs) => {
     const health = evaluate(nowMonoMs ?? clock.monotonicMs());
 
-    return health.scheduler && health.storage;
+    return health.scheduler && health.storage && health.stuck.length === 0;
   };
 
   const health: Scheduler['health'] = (nowMonoMs) => {
