@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import { CHECK_NOTIFICATION } from '../scenarios/names.js';
 import { ENV_SHAPE, publicVars } from './schema.js';
 import type { ParsedEnv } from './schema.js';
 
@@ -79,6 +80,12 @@ export function describeEnv(shape: Readonly<Record<string, z.ZodType>>, env: Rea
  * @returns Printable values and warnings.
  */
 export function describeConfig(env: ParsedEnv): ConfigSummary {
+  const warnings: string[] = [];
+
+  if (env.REPEAT_EVERY_N_RUNS === 0 && env.SCENARIOS.includes(CHECK_NOTIFICATION)) {
+    warnings.push('REPEAT_EVERY_N_RUNS is 0: the threshold rule is not checked');
+  }
+
   return { values: describeEnv(ENV_SHAPE, env),
-    warnings: [] };
+    warnings };
 }

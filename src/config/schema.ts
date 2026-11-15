@@ -205,8 +205,15 @@ export const ENV_SHAPE = {
   INSTANCE_ID: pub(z.string().regex(/^[a-z0-9-]{1,32}$/, 'must be 1-32 characters: a-z, 0-9, -')
     // The grouper masks values that look like card numbers (13-19 digits).
     .refine(value => value.replaceAll(/\D/gu, '').length <= MAX_INSTANCE_DIGITS, 'must contain at most 12 digits')
-    // The title of this scenario's events must not match the other scenario's events.
-    .refine(value => !value.toLowerCase().includes(SEND_AND_RECEIVE_EVENT), `must not contain "${SEND_AND_RECEIVE_EVENT}"`)),
+    // The notification rules exclude events by scenario name, so no name may appear in an instance id.
+    .superRefine((value, ctx) => {
+      const name = SCENARIO_NAMES.find(scenario => value.toLowerCase().includes(scenario));
+
+      if (name !== undefined) {
+        ctx.addIssue({ code: 'custom',
+          message: `must not contain the name of a scenario: "${name}"` });
+      }
+    })),
   LOG_LEVEL: pub(z.enum(LOG_LEVELS).default('info')),
   INTERNAL_HOST: pub(z.string().min(1)
     .default('127.0.0.1')),
@@ -408,22 +415,6 @@ function checkMonitoring(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx)
   }
 
   checkScenarioIntervals(env, ctx);
-
-  if (!Array.isArray(env.SCENARIOS) || !env.SCENARIOS.includes(CHECK_NOTIFICATION)) {
-    return;
-  }
-
-  if (env.RECEIVER_SECRET === undefined) {
-    ctx.addIssue({ code: 'custom',
-      path: ['SCENARIOS'],
-      message: 'check-notification needs RECEIVER_SECRET' });
-  }
-
-  if (env.PUBLIC_BASE_URL === undefined && env.TUNNEL_METRICS_URL === undefined) {
-    ctx.addIssue({ code: 'custom',
-      path: ['SCENARIOS'],
-      message: 'check-notification needs PUBLIC_BASE_URL or TUNNEL_METRICS_URL' });
-  }
 }
 
 /**

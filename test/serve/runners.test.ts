@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createMutableRedactor } from '../../src/errors/redact.js';
+import { StartupError } from '../../src/app.js';
 import { buildRunners } from '../../src/serve/runners.js';
 import type { Closer, RunnerContext } from '../../src/serve/scenario-setup.js';
 import { openDatabase } from '../../src/storage/database.js';
@@ -26,14 +27,16 @@ afterEach(async () => {
 /**
  * Builds the context of the runners for the given scenarios.
  * @param scenarios Comma-separated names the configuration enables.
+ * @param env Variables that replace the test defaults; undefined removes one.
  * @returns Context over a fake Hawk and an in-memory history.
  */
-async function contextFor(scenarios: string): Promise<RunnerContext> {
+async function contextFor(scenarios: string, env: Record<string, string | undefined> = {}): Promise<RunnerContext> {
   hawk = await startFakeHawk();
 
   const { deps } = createTestDeps(hawk, { env: { SCENARIOS: scenarios,
     RECEIVER_SECRET: TEST_RECEIVER_SECRET,
-    TUNNEL_METRICS_URL: 'http://127.0.0.1:9100' } });
+    TUNNEL_METRICS_URL: 'http://127.0.0.1:9100',
+    ...env } });
 
   return { config: { ...deps.config,
     notifications: { ...deps.config.notifications,
@@ -72,5 +75,21 @@ describe('buildRunners', () => {
     }
 
     await expect(built.readiness[0]?.run(new AbortController().signal)).resolves.toBe(false);
+  });
+
+  it('names the missing variable when check-notification is chosen without the receiver secret', async () => {
+    const context = await contextFor('check-notification', { RECEIVER_SECRET: undefined });
+    const error: unknown = await buildRunners(context).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(StartupError);
+    expect((error as StartupError).message).toContain('RECEIVER_SECRET');
+  });
+
+  it('names the address variables when check-notification has no address', async () => {
+    const context = await contextFor('check-notification', { TUNNEL_METRICS_URL: undefined });
+    const error: unknown = await buildRunners(context).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(StartupError);
+    expect((error as StartupError).message).toContain('PUBLIC_BASE_URL');
   });
 });

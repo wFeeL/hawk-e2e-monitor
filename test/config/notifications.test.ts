@@ -121,10 +121,13 @@ describe('check-notification variables', () => {
     expect(expectErrors(loadConfig(validEnv({ [name]: 'abc' }))).map(error => error.variable)).toContain(name);
   });
 
-  it('INSTANCE_ID must not contain the name of the other scenario', () => {
-    expect(expectErrors(loadConfig(validEnv({ INSTANCE_ID: 'send-and-receive-event' })))).toEqual([{ variable: 'INSTANCE_ID',
-      message: 'must not contain "send-and-receive-event"' }]);
-    expect(expectErrors(loadConfig(validEnv({ INSTANCE_ID: 'x-send-and-receive-event-y' }))).map(error => error.variable)).toEqual(['INSTANCE_ID']);
+  it.each(['send-and-receive-event', 'check-notification', 'new-project', 'sourcemaps', 'sentry-envelope'])('INSTANCE_ID must not contain the scenario name %s', (name) => {
+    expect(expectErrors(loadConfig(validEnv({ INSTANCE_ID: name })))).toEqual([{ variable: 'INSTANCE_ID',
+      message: `must not contain the name of a scenario: "${name}"` }]);
+    expect(expectErrors(loadConfig(validEnv({ INSTANCE_ID: `x-${name}-y` }))).map(error => error.variable)).toEqual(['INSTANCE_ID']);
+  });
+
+  it('INSTANCE_ID may hold a part of a scenario name', () => {
     expect(load({ INSTANCE_ID: 'send-and-receive' }).instanceId).toBe('send-and-receive');
   });
 });

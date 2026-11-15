@@ -49,6 +49,15 @@ describe('describeConfig', () => {
     expect(value).not.toContain('pa55');
   });
 
+  it('warns that the threshold rule is not checked when repeats are off and check-notification runs', () => {
+    expect(summarize({ REPEAT_EVERY_N_RUNS: '0',
+      SCENARIOS: 'send-and-receive-event,check-notification' }).warnings).toEqual(['REPEAT_EVERY_N_RUNS is 0: the threshold rule is not checked']);
+    expect(summarize({ REPEAT_EVERY_N_RUNS: '0',
+      SCENARIOS: 'send-and-receive-event' }).warnings).toEqual([]);
+    expect(summarize({ REPEAT_EVERY_N_RUNS: '6',
+      SCENARIOS: 'check-notification' }).warnings).toEqual([]);
+  });
+
   it('has no warnings', () => {
     expect(summarize().warnings).toEqual([]);
   });

@@ -131,16 +131,13 @@ describe('monitoring configuration', () => {
     expect(messagesOf({ SCENARIOS: 'send-and-receive-event,' }, 'SCENARIOS')).not.toHaveLength(0);
   });
 
-  it('check-notification needs RECEIVER_SECRET', () => {
-    expect(messagesOf({ SCENARIOS: 'check-notification',
-      RECEIVER_SECRET: undefined,
-      PUBLIC_BASE_URL: 'https://monitor.example.test' }, 'SCENARIOS')[0]).toContain('RECEIVER_SECRET');
-  });
+  it('loads without receiver settings, whichever scenarios are chosen', () => {
+    const env = { RECEIVER_SECRET: undefined,
+      SCENARIOS: undefined };
 
-  it('check-notification needs an address source', () => {
-    expect(messagesOf({ SCENARIOS: 'check-notification' }, 'SCENARIOS')[0]).toMatch(/PUBLIC_BASE_URL.*TUNNEL_METRICS_URL/u);
-    expectOk(loadConfig(validEnv({ SCENARIOS: 'check-notification',
-      TUNNEL_METRICS_URL: 'http://tunnel:2000' })));
+    expect(expectOk(loadConfig(validEnv(env))).config.monitoring.scenarios).toContain('check-notification');
+    expectOk(loadConfig(validEnv({ ...env,
+      SCENARIOS: 'check-notification' })));
   });
 
   it('CHECK_INTERVAL_MS must exceed the run, cleanup and grace', () => {
