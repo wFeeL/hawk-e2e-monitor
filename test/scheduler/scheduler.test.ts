@@ -7,7 +7,6 @@ import type { ScenarioName } from '../../src/scenarios/names.js';
 import { openDatabase } from '../../src/storage/database.js';
 import { createHistory } from '../../src/storage/history.js';
 import type { History } from '../../src/storage/history.js';
-import { projectedEventsPer30Days } from '../../src/storage/outcome.js';
 import type { RunRow } from '../../src/storage/types.js';
 import { testConfig } from '../support/config.js';
 import { createFakeClock } from '../support/fake-clock.js';
@@ -615,22 +614,17 @@ describe('failures of the runner', () => {
 });
 
 describe('degradation', () => {
-  it('two scenarios at a 600000 ms interval project more events than an eventsLimit of 1000', async () => {
-    const config = testConfig();
-    const projected = projectedEventsPer30Days({ ...config,
-      monitoring: { ...config.monitoring,
-        scenarios: [SEND, NOTIFY],
-        intervalMs: INTERVAL_MS } });
-    const { scheduler, clock, runners, finished } = setup({ deps: { projectedEventsPer30Days: projected } });
+  it('a run whose quota stage found the event limit nearly used is degraded with quota_usage', async () => {
+    const { scheduler, clock, runners, finished } = setup();
 
     scheduler.start();
     await settle(clock);
-    callOf(runners[SEND], 0).resolve({ stages: [stageFixture('api_availability', 'ok', 5, { details: { quota: { eventsCount: 1,
-      eventsLimit: 1000 } } })] });
+    callOf(runners[SEND], 0).resolve({ stages: [stageFixture('api_availability', 'ok', 5, { details: { quotaLow: true,
+      quota: { eventsCount: 950,
+        eventsLimit: 1000 } } })] });
     await settle(clock);
 
-    expect(projected).toBeGreaterThan(1000);
-    expect(finished[0]?.row.degraded).toEqual(['quota_projection']);
+    expect(finished[0]?.row.degraded).toEqual(['quota_usage']);
   });
 });
 

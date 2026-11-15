@@ -183,11 +183,11 @@ describe('decideAlert: successes', () => {
   });
 
   it('ok to degraded sends DEGRADED', () => {
-    const decision = decideAlert(state(), row({ degraded: ['quota_projection'] }), SETTINGS, NOW);
+    const decision = decideAlert(state(), row({ degraded: ['quota_usage'] }), SETTINGS, NOW);
 
     expect(decision.kind).toBe('degraded');
     expect(decision.state).toMatchObject({ state: 'degraded',
-      degraded: ['quota_projection'] });
+      degraded: ['quota_usage'] });
   });
 
   it('degraded to ok sends RECOVERED without an episode', () => {
@@ -205,13 +205,13 @@ describe('decideAlert: successes', () => {
     const before = state({ state: 'degraded',
       degraded: ['single_channel'] });
 
-    expect(decideAlert(before, row({ degraded: ['single_channel', 'quota_projection'] }), SETTINGS, NOW).kind).toBe('degraded');
-    expect(decideAlert(before, row({ degraded: ['quota_projection'] }), SETTINGS, NOW).kind).toBe('degraded');
+    expect(decideAlert(before, row({ degraded: ['single_channel', 'quota_usage'] }), SETTINGS, NOW).kind).toBe('degraded');
+    expect(decideAlert(before, row({ degraded: ['quota_usage'] }), SETTINGS, NOW).kind).toBe('degraded');
     expect(decideAlert(before, row({ degraded: ['single_channel'] }), SETTINGS, NOW).kind).toBeUndefined();
 
     const both = state({ state: 'degraded',
-      degraded: ['single_channel', 'quota_projection'] });
-    const reordered: DegradedCode[] = ['quota_projection', 'single_channel'];
+      degraded: ['single_channel', 'quota_usage'] });
+    const reordered: DegradedCode[] = ['quota_usage', 'single_channel'];
 
     expect(decideAlert(both, row({ degraded: reordered }), SETTINGS, NOW).kind).toBeUndefined();
   });

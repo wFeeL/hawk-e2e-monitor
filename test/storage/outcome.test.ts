@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { testConfig } from '../support/config.js';
 import { runResultFixture, stageFixture } from '../support/run-result.js';
 import type { RunResult } from '../../src/engine/result.js';
-import { abortedOutcome, eventsPerRun, outcomeOf, projectedEventsPer30Days, rowOf } from '../../src/storage/outcome.js';
+import { abortedOutcome, eventsPerRun, outcomeOf, eventsSentPer30Days, rowOf } from '../../src/storage/outcome.js';
 
 const CONTEXT = { loopEnabled: true };
 
@@ -89,35 +89,37 @@ describe('outcomeOf', () => {
       notification: { unmatched: 0 } }), CONTEXT).degraded).toEqual([]);
   });
 
-  it('quota_projection when the projected events exceed eventsLimit', () => {
-    const result = runResultFixture({ stages: [stageFixture('api_availability', 'ok', 10, { details: { quota: { eventsCount: 5,
+  it('quota_usage when the quota stage found the event limit nearly used', () => {
+    const low = runResultFixture({ stages: [stageFixture('api_availability', 'ok', 10, { details: { quotaLow: true,
+      quota: { eventsCount: 950,
+        eventsLimit: 1000 } } })] });
+    const fine = runResultFixture({ stages: [stageFixture('api_availability', 'ok', 10, { details: { quota: { eventsCount: 5,
       eventsLimit: 1000 } } })] });
 
-    expect(outcomeOf(result, { ...CONTEXT,
-      projectedEventsPer30Days: 1001 }).degraded).toEqual(['quota_projection']);
-    expect(outcomeOf(result, { ...CONTEXT,
-      projectedEventsPer30Days: 1000 }).degraded).toEqual([]);
+    expect(outcomeOf(low, CONTEXT).degraded).toEqual(['quota_usage']);
+    expect(outcomeOf(fine, CONTEXT).degraded).toEqual([]);
+  });
+
+  it('the events the monitor sends never degrade a run by themselves', () => {
+    const result = runResultFixture({ stages: [stageFixture('api_availability', 'ok', 10, { details: { quota: { eventsCount: 0,
+      eventsLimit: 10 } } })] });
+
     expect(outcomeOf(result, CONTEXT).degraded).toEqual([]);
   });
 
-  it('quota_projection ignores a limit that is not a number and failed runs', () => {
-    const odd = runResultFixture({ stages: [stageFixture('api_availability', 'ok', 10, { details: { quota: { eventsLimit: '1000' } } })] });
+  it('quota_usage is only for ok runs', () => {
     const failed = runResultFixture({ status: 'failed',
-      stages: [stageFixture('api_availability', 'ok', 10, { details: { quota: { eventsLimit: 10 } } })] });
+      stages: [stageFixture('api_availability', 'ok', 10, { details: { quotaLow: true } })] });
 
-    expect(outcomeOf(odd, { ...CONTEXT,
-      projectedEventsPer30Days: 99_999 }).degraded).toEqual([]);
-    expect(outcomeOf(failed, { ...CONTEXT,
-      projectedEventsPer30Days: 99_999 }).degraded).toEqual([]);
+    expect(outcomeOf(failed, CONTEXT).degraded).toEqual([]);
   });
 
   it('lists both codes in a fixed order', () => {
     const result = notificationResult({ notification: { unmatched: 0 },
-      stages: [stageFixture('api_availability', 'ok', 10, { details: { quota: { eventsLimit: 10 } } }),
+      stages: [stageFixture('api_availability', 'ok', 10, { details: { quotaLow: true } }),
         stageFixture('notification_formed')] });
 
-    expect(outcomeOf(result, { ...CONTEXT,
-      projectedEventsPer30Days: 100 }).degraded).toEqual(['single_channel', 'quota_projection']);
+    expect(outcomeOf(result, CONTEXT).degraded).toEqual(['single_channel', 'quota_usage']);
   });
 });
 
@@ -172,7 +174,7 @@ describe('projection', () => {
       intervalMs: 600_000,
       scenarios: ['check-notification'] } });
 
-    expect(projectedEventsPer30Days(only)).toBeCloseTo(DAY_RUNS * 30 * (1 + 1 / 12));
+    expect(eventsSentPer30Days(only)).toBeCloseTo(DAY_RUNS * 30 * (1 + 1 / 12));
   });
 
   it('projects 144 runs a day per scenario at a 600000 ms interval', () => {
@@ -186,7 +188,7 @@ describe('projection', () => {
       monitoring: { ...base,
         scenarios: ['send-and-receive-event', 'check-notification'] } });
 
-    expect(projectedEventsPer30Days(one)).toBe(DAY_RUNS * 30);
-    expect(projectedEventsPer30Days(two)).toBe(DAY_RUNS * 30 * 2);
+    expect(eventsSentPer30Days(one)).toBe(DAY_RUNS * 30);
+    expect(eventsSentPer30Days(two)).toBe(DAY_RUNS * 30 * 2);
   });
 });

@@ -232,18 +232,18 @@ describe('alertText: the layout of every kind', () => {
       row: failedRow({ status: 'ok',
         errorClass: undefined,
         eventLatencyMs: undefined,
-        degraded: ['quota_projection'],
+        degraded: ['quota_usage'],
         stages: [{ name: 'cleanup',
           status: 'ok',
           durationMs: 900 }] }),
       state: stateRow({ state: 'degraded',
-        degraded: ['quota_projection'] }),
-      result: runResultFixture({ warnings: ['Event quota is almost used: 9/10'] }) }), IDENTITY)).toBe([
+        degraded: ['quota_usage'] }),
+      result: runResultFixture({ warnings: ['Event quota is almost used: 940/1000'] }) }), IDENTITY)).toBe([
       '🟡 <b>DEGRADED</b> send-and-receive-event',
       'instance prod | warning',
       '',
-      'degraded: quota_projection',
-      'Event quota is almost used: 9/10',
+      'degraded: quota_usage',
+      'Event quota is almost used: 940/1000',
       '',
       'run #12 raaaaaaaaaaaaaaaa',
       'started 2026-03-10 12:00:00 UTC',
@@ -346,11 +346,11 @@ describe('alertText', () => {
       row: failedRow({ status: 'ok',
         errorClass: undefined }),
       state: stateRow({ state: 'degraded',
-        degraded: ['quota_projection'] }),
+        degraded: ['quota_usage'] }),
       result: runResultFixture({ warnings }) }), IDENTITY);
 
     expect(text.length).toBeLessThanOrEqual(ALERT_TEXT_LIMIT);
-    expect(text).toContain('degraded: quota_projection');
+    expect(text).toContain('degraded: quota_usage');
     expect(text).toContain('run #12 raaaaaaaaaaaaaaaa');
     expect(text).toContain('warning 0');
   });

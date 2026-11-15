@@ -52,8 +52,6 @@ export interface SchedulerDeps {
   beforeFirstRun?: Partial<Record<ScenarioName, (signal: AbortSignal) => Promise<void>>>;
   /** Called after a row is finished, whatever its status; each listener has its own error handling. */
   onRunFinished?: RunFinishedListener | readonly RunFinishedListener[];
-  /** Events per 30 days of all enabled scenarios, for the quota check of `outcomeOf`. */
-  projectedEventsPer30Days?: number;
   /** Called with code 1 after three hung runs of one scenario in a row, or when a scenario stops ticking. */
   exit: (code: number) => void;
 }
@@ -357,8 +355,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       return;
     }
 
-    const outcome = outcomeOf(result, { loopEnabled: config.notifications.loop,
-      ...deps.projectedEventsPer30Days === undefined ? {} : { projectedEventsPer30Days: deps.projectedEventsPer30Days } });
+    const outcome = outcomeOf(result, { loopEnabled: config.notifications.loop });
 
     finish(state, handle, outcome);
 

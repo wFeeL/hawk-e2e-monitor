@@ -11,28 +11,14 @@ const DAYS_PER_PERIOD = 30;
 
 /** What `outcomeOf` needs to know besides the result. */
 export interface OutcomeContext {
-  /** Events per 30 days that all enabled scenarios will send; absent turns the quota check off. */
-  projectedEventsPer30Days?: number;
   /** Whether the notification rule has the loop channel. */
   loopEnabled: boolean;
 }
 
 /**
- * Reads the event limit that the `api_availability` stage recorded.
- * @param result Finished run.
- * @returns The limit, or undefined when it is missing or not a number.
- */
-function recordedEventsLimit(result: RunResult): number | undefined {
-  const quota = result.stages.find(stage => stage.name === 'api_availability')?.details?.quota;
-  const limit = typeof quota === 'object' && quota !== null ? (quota as Record<string, unknown>).eventsLimit : undefined;
-
-  return typeof limit === 'number' ? limit : undefined;
-}
-
-/**
  * Lists the degradation codes of an `ok` run.
  * @param result Finished run with status `ok`.
- * @param context Loop switch and the projected spend.
+ * @param context Loop switch.
  * @returns Codes in a fixed order.
  */
 function degradationOf(result: RunResult, context: OutcomeContext): DegradedCode[] {
@@ -44,10 +30,9 @@ function degradationOf(result: RunResult, context: OutcomeContext): DegradedCode
     codes.push('single_channel');
   }
 
-  const limit = recordedEventsLimit(result);
-
-  if (limit !== undefined && context.projectedEventsPer30Days !== undefined && context.projectedEventsPer30Days > limit) {
-    codes.push('quota_projection');
+  // The quota stage marks a nearly used event limit; the monitor's own events do not count, because cleanup removes them.
+  if (result.stages.find(stage => stage.name === 'api_availability')?.details?.quotaLow === true) {
+    codes.push('quota_usage');
   }
 
   return codes;
@@ -56,7 +41,7 @@ function degradationOf(result: RunResult, context: OutcomeContext): DegradedCode
 /**
  * Turns a finished result into what the history stores: status, skip reason and degradation.
  * @param result Result of a scenario run.
- * @param context Loop switch and the projected spend.
+ * @param context Loop switch.
  * @returns Outcome with the result attached.
  */
 export function outcomeOf(result: RunResult, context: OutcomeContext): RunOutcome {
@@ -154,11 +139,11 @@ export function eventsPerRun(config: Config): number {
 }
 
 /**
- * Projects the events the enabled scenarios send in 30 days.
+ * Counts the events the enabled scenarios send in 30 days; the quota ignores them once cleanup removes them, but the rate limits of the plan apply.
  * @param config Configuration with the scenarios and the interval.
  * @returns Events per run times runs in 30 days, summed over the scenarios.
  */
-export function projectedEventsPer30Days(config: Config): number {
+export function eventsSentPer30Days(config: Config): number {
   const runs = DAYS_PER_PERIOD * MS_PER_DAY / config.monitoring.intervalMs;
 
   return config.monitoring.scenarios.length * eventsPerRun(config) * runs;
