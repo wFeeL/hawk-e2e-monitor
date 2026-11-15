@@ -150,6 +150,30 @@ function contextInstance(context: unknown, title: string): unknown {
 }
 
 /**
+ * Reads `context.instanceId`, which an event of the Sentry path does not have unless another source wrote it.
+ * @param context Context as Hawk returns it.
+ * @returns The id, or undefined when the context has none.
+ */
+function plainInstance(context: unknown): unknown {
+  return typeof context === 'object' && context !== null && !Array.isArray(context) ? (context as Record<string, unknown>).instanceId : undefined;
+}
+
+/**
+ * Tells whether the context of an event names this instance.
+ * An event in the form of the Sentry path may have lost its context, so a title of this instance is enough there
+ * unless the context names another instance.
+ * @param context Context as Hawk returns it.
+ * @param title Title of the event, which tells the form.
+ * @param instanceId Id of this monitor.
+ * @returns True when the event is of this instance as far as its context says.
+ */
+function inInstance(context: unknown, title: string, instanceId: string): boolean {
+  const named = contextInstance(context, title) ?? plainInstance(context);
+
+  return named === instanceId || (named === undefined && title.startsWith(SENTRY_PREFIX));
+}
+
+/**
  * Describes a thrown value.
  * @param error Anything thrown.
  * @returns Its message.
@@ -182,7 +206,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
       lateMarked: false };
     const runId = runIdOf(config.instanceId, event.title);
 
-    if (runId === undefined || contextInstance(event.context, event.title) !== config.instanceId || deps.activeRunIds().has(runId)) {
+    if (runId === undefined || !inInstance(event.context, event.title, config.instanceId) || deps.activeRunIds().has(runId)) {
       return left;
     }
 
@@ -200,7 +224,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
     const card = await api.eventCard(projectId, event.originalEventId, signal);
 
     // The event may be gone already, or Hawk may show something other than the search did.
-    if (card === null || runIdOf(config.instanceId, card.title) !== runId || contextInstance(card.context, card.title) !== config.instanceId) {
+    if (card === null || runIdOf(config.instanceId, card.title) !== runId || !inInstance(card.context, card.title, config.instanceId)) {
       return left;
     }
 

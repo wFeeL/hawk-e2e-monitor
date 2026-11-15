@@ -134,6 +134,23 @@ describe('failures', () => {
     expect(result.message).toContain('catcherType');
   });
 
+  it('an event whose contexts the collector dropped is an event_mismatch on context.e2e, and it is removed', async () => {
+    hawk.collector.knobs.mutatePayload = (payload) => {
+      delete payload.context;
+
+      return payload;
+    };
+
+    const result = await run();
+
+    expect(result).toMatchObject({ status: 'failed',
+      failedStage: 'event_visible',
+      errorClass: 'event_mismatch' });
+    expect(result.message).toContain('context.e2e');
+    expect(stageOf(result, 'cleanup').status).toBe('ok');
+    expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
+  });
+
   it('a collector that is down stops the run at the first stage', async () => {
     hawk.collector.knobs.health = { status: 500,
       redis: false,

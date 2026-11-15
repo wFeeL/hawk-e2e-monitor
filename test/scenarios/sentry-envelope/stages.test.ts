@@ -48,10 +48,17 @@ describe('checkSentryCard', () => {
     ['the scenario of the context', { context: { e2e: { runId: plan.runId,
       instanceId: 'mon',
       scenario: 'x' } } }, 'context.e2e.scenario'],
-    ['a context that is not there', { context: null }, 'context.e2e.runId'],
+    ['a context that is not there', { context: null }, 'context.e2e'],
+    ['a context without e2e', { context: { other: 1 } }, 'context.e2e'],
   ] as const)('names %s when it differs', (_name, changes, field) => {
     expect(checkSentryCard(card(changes as Partial<EventCard>), plan, 'mon', 1)).toMatchObject({ errorClass: 'event_mismatch',
       facts: { field } });
+  });
+
+  it('names context.e2e before the title when the event has no e2e context', () => {
+    expect(checkSentryCard(card({ title: 'Other: x',
+      context: {} }), plan, 'mon', 1)).toMatchObject({ errorClass: 'event_mismatch',
+      facts: { field: 'context.e2e' } });
   });
 
   it('counts the event', () => {

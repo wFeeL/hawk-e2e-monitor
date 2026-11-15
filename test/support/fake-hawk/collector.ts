@@ -74,7 +74,7 @@ export interface FakeCollectorKnobs {
   releaseSaveDelayMs?: number;
   /** The collector says 200 to a release and the worker never saves it. */
   dropReleases?: boolean;
-  /** Rewrites the payload before it is stored. */
+  /** Rewrites the payload before it is stored, also for the events of an envelope. */
   mutatePayload?: (payload: Record<string, unknown>) => Record<string, unknown>;
   /**
    * Awaited before the answer of an accepted event, after its (possibly delayed) `ingest`.
@@ -548,7 +548,7 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
 
     if (knobs.dropEvents !== true) {
       for (const event of events) {
-        ingest(target, event.catcherType, event.payload);
+        ingest(target, event.catcherType, knobs.mutatePayload ? knobs.mutatePayload(structuredClone(event.payload)) : event.payload);
       }
     }
 

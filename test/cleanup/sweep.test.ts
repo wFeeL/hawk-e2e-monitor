@@ -73,6 +73,8 @@ interface LeftoverOptions {
   title?: string;
   /** Age of the event in Hawk. */
   ageMs?: number;
+  /** Leaves the context out, as a collector that drops contexts would. */
+  noContext?: boolean;
 }
 
 /**
@@ -485,9 +487,11 @@ function leftoverProject(runId: string, options: ProjectOptions = {}): string {
 function sentryLeftover(runId: string, options: LeftoverOptions = {}): string {
   const instanceId = options.instanceId ?? INSTANCE;
   const stored = hawk.store.ingest(hawk.projectId, 'errors/default', { title: options.title ?? `E2eMonitorCheck: ${buildTitle(INSTANCE, runId, 'sentry-envelope')}`,
-    context: { e2e: { runId,
-      instanceId,
-      scenario: 'sentry-envelope' } } });
+    ...options.noContext === true
+      ? {}
+      : { context: { e2e: { runId,
+          instanceId,
+          scenario: 'sentry-envelope' } } } });
 
   hawk.store.setTimestamp(hawk.projectId, stored.id, Math.floor((Date.now() - (options.ageMs ?? 2 * HOUR_MS)) / 1000));
 
@@ -513,6 +517,29 @@ describe('sweepOnce of events from the Sentry path', () => {
     await sweeper().sweepOnce(SIGNAL);
 
     expect(hawk.store.get(hawk.projectId, id)).toBeUndefined();
+  });
+
+  it('removes an old event whose title is ours and whose context the collector dropped', async () => {
+    const id = sentryLeftover('raaaaaaaaaaaaaaa', { noContext: true });
+
+    finished('raaaaaaaaaaaaaaa', 'failed', 2 * HOUR_MS, false);
+
+    const report = await sweeper().sweepOnce(SIGNAL);
+
+    expect(report).toMatchObject({ removed: 1 });
+    expect(hawk.store.get(hawk.projectId, id)).toBeUndefined();
+  });
+
+  it('leaves such an event when its title names another instance or it is young', async () => {
+    const young = sentryLeftover('raaaaaaaaaaaaaaa', { noContext: true,
+      ageMs: 60_000 });
+    const foreign = sentryLeftover('rbbbbbbbbbbbbbbb', { noContext: true,
+      title: `E2eMonitorCheck: ${buildTitle('other', 'rbbbbbbbbbbbbbbb', 'sentry-envelope')}` });
+
+    await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.store.get(hawk.projectId, young)).toBeDefined();
+    expect(hawk.store.get(hawk.projectId, foreign)).toBeDefined();
   });
 
   it('leaves a young event and an event of a run that is going', async () => {
