@@ -59,11 +59,11 @@ async function serve(config: Config, env: ParsedEnv): Promise<number> {
   const shutdown = (): void => {
     app?.stop().then(() => {
       logger.info('stopped');
-      // eslint-disable-next-line n/no-process-exit -- a fatal error ends the process and the container restarts it
+      // eslint-disable-next-line n/no-process-exit -- exit explicitly: keep-alive sockets or leftover timers could hold the event loop open after a clean stop
       process.exit(0);
     }, (error: unknown) => {
       logger.error('stop failed', { error });
-      // eslint-disable-next-line n/no-process-exit -- a fatal error ends the process and the container restarts it
+      // eslint-disable-next-line n/no-process-exit -- the stop failed, so end with an error code instead of hanging
       process.exit(1);
     });
   };
