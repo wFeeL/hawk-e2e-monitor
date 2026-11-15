@@ -1,0 +1,44 @@
+# hawk-e2e-monitor with a cloudflared quick tunnel for the notification receiver.
+# Start: cp .env.example .env, fill it in, then `docker compose up -d --build`.
+
+services:
+  monitor:
+    build: .
+    image: hawk-e2e-monitor:local
+    env_file: .env
+    environment:
+      # The receiver must be reachable from the tunnel container.
+      RECEIVER_HOST: 0.0.0.0
+      INTERNAL_HOST: 0.0.0.0
+      TUNNEL_METRICS_URL: http://tunnel:2000
+      DATABASE_PATH: /app/data/monitor.db
+    volumes:
+      - monitor-data:/app/data
+    ports:
+      # Internal port: health, readiness, history and stats. Never expose it beyond localhost.
+      - "127.0.0.1:${MONITOR_INTERNAL_PORT:-8090}:8090"
+    extra_hosts:
+      # Lets the monitor reach a Hawk running on the host as host.docker.internal.
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    # Longer than SHUTDOWN_TIMEOUT_MS, so a stop records runs as monitor_stopped.
+    stop_grace_period: 15s
+    # Podman builds OCI images by default and drops the HEALTHCHECK of the Dockerfile.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+
+  tunnel:
+    image: docker.io/cloudflare/cloudflared:2026.10.1@sha256:a15a3b50b8dabd57ac2090e9484c0247dba9dfa1f0df4d298d4317f9d69eb2d5
+    command: ["tunnel", "--no-autoupdate", "--metrics", "0.0.0.0:2000", "--url", "http://monitor:8091"]
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  monitor-data:
