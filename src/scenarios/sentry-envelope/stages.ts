@@ -34,6 +34,17 @@ function e2eContext(context: unknown): Record<string, unknown> {
 }
 
 /**
+ * Tells whether the context has the `e2e` object the envelope put there.
+ * @param context Context as Hawk returns it.
+ * @returns True when there is one.
+ */
+function hasE2eContext(context: unknown): boolean {
+  const e2e = typeof context === 'object' && context !== null ? (context as Record<string, unknown>).e2e : undefined;
+
+  return typeof e2e === 'object' && e2e !== null;
+}
+
+/**
  * Prints a value for an error text.
  * @param value Anything.
  * @returns The string itself or its JSON.
@@ -52,6 +63,13 @@ function show(value: unknown): string {
  */
 export function checkSentryCard(card: EventCard, plan: RunPlan, instanceId: string, expectedCount: number): CheckError | undefined {
   const e2e = e2eContext(card.context);
+
+  if (!hasE2eContext(card.context)) {
+    return new CheckError('event_mismatch', { field: 'context.e2e',
+      expected: 'object',
+      actual: 'missing' });
+  }
+
   const fields: Array<[string, unknown, string]> = [
     ['title', card.title, sentryTitle(plan)],
     ['catcherType', card.catcherType, DEFAULT_CATCHER],
@@ -83,13 +101,15 @@ export function checkSentryCard(card: EventCard, plan: RunPlan, instanceId: stri
 
 /**
  * Tells whether an event came from the envelope of this run and instance: the title carries the value of the exception and the context names the instance.
+ * An event with exactly the title of the run is ours even when its context was lost, so the card check can name the lost context.
  * @param event Event from the API.
  * @param plan Plan of the run.
  * @param instanceId Id of this monitor.
  * @returns True for our event.
  */
 function isOurSentryEvent(event: FoundEvent, plan: RunPlan, instanceId: string): boolean {
-  return event.title.includes(`[e2e:${instanceId}] ${plan.runId}`) && e2eContext(event.context).instanceId === instanceId;
+  return event.title === sentryTitle(plan)
+    || (event.title.includes(`[e2e:${instanceId}] ${plan.runId}`) && e2eContext(event.context).instanceId === instanceId);
 }
 
 /**

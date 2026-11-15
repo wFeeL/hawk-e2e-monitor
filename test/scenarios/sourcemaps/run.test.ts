@@ -147,6 +147,22 @@ describe('failures', () => {
     expect(stageOf(result, 'collector_accept').status).toBe('skipped');
   });
 
+  it('a release whose upload got a 502 and never shows is blamed on the collector at release_uploaded', async () => {
+    hawk.collector.knobs.releaseReply = { status: 502,
+      body: 'Bad Gateway' };
+
+    const result = await run({ env: { RELEASE_SAVE_TIMEOUT_MS: '400' } });
+
+    expect(result).toMatchObject({ status: 'failed',
+      failedStage: 'release_uploaded',
+      errorClass: 'collector_unavailable',
+      culprit: 'hawk' });
+    expect(stageOf(result, 'release_uploaded').status).toBe('uncertain');
+    expect(stageOf(result, 'release_saved')).toMatchObject({ status: 'failed',
+      errorClass: 'release_not_saved' });
+    expect(result.message).toBe(stageOf(result, 'release_uploaded').message);
+  });
+
   it('a release without the file of the map is release_not_saved too', async () => {
     const { deps } = createTestDeps(hawk, { env: { SCENARIOS: 'sourcemaps',
       RELEASE_SAVE_TIMEOUT_MS: '400' } });

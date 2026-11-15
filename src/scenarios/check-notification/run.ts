@@ -141,7 +141,7 @@ export async function runCheckNotification(deps: NotificationDeps, options: Plan
     receiver.release(plan.runId);
   }
 
-  const decided = decideNotificationVerdict(stages, state, notification, config.hawk.projectId);
+  const decided = decideNotificationVerdict(stages, state, notification, config.hawk.projectId, plan.repeat);
   const { verdict } = decided;
   const cleanupStageResult = stages.at(-1);
   const result: RunResult = {

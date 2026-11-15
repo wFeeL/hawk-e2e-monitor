@@ -81,7 +81,6 @@ export function collectorEndpoints(token: IntegrationToken, collectorUrl: string
   return { postUrl: base.href,
     healthUrl: new URL('health', base).href,
     wsUrl: ws.href,
-    // The collector routes these two paths from the root, whatever prefix its base address has.
-    releaseUrl: new URL('/release', base.origin).href,
-    envelopeUrl: new URL('/api/0/envelope/', base.origin).href };
+    releaseUrl: new URL('release', base).href,
+    envelopeUrl: new URL('api/0/envelope/', base).href };
 }

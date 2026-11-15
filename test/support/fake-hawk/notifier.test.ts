@@ -489,6 +489,15 @@ describe('fake notifier threshold rule', () => {
     expect(of(receiver, 'webhook')).toHaveLength(2);
   });
 
+  it('fires a threshold rule on the first event when the knob says so, and then keeps counting', async () => {
+    const { store, receiver, notifier } = await setup(THRESHOLD);
+
+    notifier.knobs.fireThresholdOnFirst = true;
+    ingest(store);
+    await notifier.idle();
+    expect(repetitionIds(receiver)).toEqual([null]);
+  });
+
   it('a threshold of 1 fires on the first event, with no repetition id', async () => {
     const { store, receiver, notifier } = await setup({ ...THRESHOLD,
       threshold: 1 });

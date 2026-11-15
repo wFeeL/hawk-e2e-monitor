@@ -5,6 +5,7 @@ import { buildTitle } from '../scenarios/send-and-receive/plan.js';
 import { EVENT_SCENARIOS, SENTRY_ENVELOPE } from '../scenarios/names.js';
 import { createdProjects } from '../storage/created-projects.js';
 import type { History } from '../storage/history.js';
+import { pendingProjects } from '../storage/pending-projects.js';
 import type { Clock } from '../time/clock.js';
 
 const PAGE_SIZE = 50;
@@ -41,6 +42,8 @@ export interface ProjectsReport {
   gone: number;
   /** Projects left alone: another workspace, another name, too young or still in use. */
   skipped: number;
+  /** The first error that stopped the removal of one project; the pass went on with the others. */
+  error?: string;
 }
 
 /** What the sweep needs from outside. */
@@ -149,6 +152,30 @@ function contextInstance(context: unknown, title: string): unknown {
 }
 
 /**
+ * Reads `context.instanceId`, which an event of the Sentry path does not have unless another source wrote it.
+ * @param context Context as Hawk returns it.
+ * @returns The id, or undefined when the context has none.
+ */
+function plainInstance(context: unknown): unknown {
+  return typeof context === 'object' && context !== null && !Array.isArray(context) ? (context as Record<string, unknown>).instanceId : undefined;
+}
+
+/**
+ * Tells whether the context of an event names this instance.
+ * An event in the form of the Sentry path may have lost its context, so a title of this instance is enough there
+ * unless the context names another instance.
+ * @param context Context as Hawk returns it.
+ * @param title Title of the event, which tells the form.
+ * @param instanceId Id of this monitor.
+ * @returns True when the event is of this instance as far as its context says.
+ */
+function inInstance(context: unknown, title: string, instanceId: string): boolean {
+  const named = contextInstance(context, title) ?? plainInstance(context);
+
+  return named === instanceId || (named === undefined && title.startsWith(SENTRY_PREFIX));
+}
+
+/**
  * Describes a thrown value.
  * @param error Anything thrown.
  * @returns Its message.
@@ -181,7 +208,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
       lateMarked: false };
     const runId = runIdOf(config.instanceId, event.title);
 
-    if (runId === undefined || contextInstance(event.context, event.title) !== config.instanceId || deps.activeRunIds().has(runId)) {
+    if (runId === undefined || !inInstance(event.context, event.title, config.instanceId) || deps.activeRunIds().has(runId)) {
       return left;
     }
 
@@ -199,7 +226,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
     const card = await api.eventCard(projectId, event.originalEventId, signal);
 
     // The event may be gone already, or Hawk may show something other than the search did.
-    if (card === null || runIdOf(config.instanceId, card.title) !== runId || contextInstance(card.context, card.title) !== config.instanceId) {
+    if (card === null || runIdOf(config.instanceId, card.title) !== runId || !inInstance(card.context, card.title, config.instanceId)) {
       return left;
     }
 
@@ -225,18 +252,23 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
    * Hawk checks no rights on `removeProject`, so a project goes only when every check says it is ours:
    * it was recorded by this monitor, sits in the workspace of the monitored project, is not that project,
    * carries the exact name of this instance, belongs to no running run and is old enough.
+   * A run whose project id was never learned is found by the exact name instead, under the same checks.
    * @param signal Ends the pass.
    * @returns What was done, undefined when nothing is recorded.
    */
   const sweepProjects = async (signal: AbortSignal): Promise<ProjectsReport | undefined> => {
     const record = createdProjects(history);
+    const pending = pendingProjects(history);
     const candidates = record.ids();
+    const nowMs = clock.wallTime().getTime();
+    const lookups = pending.list().filter(entry => !deps.activeRunIds().has(entry.runId) && nowMs - Date.parse(entry.at) >= sweepMinAgeMs);
 
-    if (candidates.length === 0) {
+    if (candidates.length === 0 && lookups.length === 0) {
       return undefined;
     }
 
-    const lists = await api.workspaceProjects([projectId, ...candidates], signal);
+    // A project without a known id can be found only in the full list.
+    const lists = await api.workspaceProjects(lookups.length > 0 ? [] : [projectId, ...candidates], signal);
     const home = lists.find(list => list.projects.some(project => project.id === projectId));
 
     if (home === undefined) {
@@ -247,6 +279,25 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
     const report: ProjectsReport = { removed: 0,
       gone: 0,
       skipped: 0 };
+    // One project that cannot be removed must not keep the others from it.
+    const removing = async (remove: () => Promise<boolean>, runId: string): Promise<boolean> => {
+      try {
+        const done = await remove();
+
+        if (!done) {
+          logger.warn('sweep: Hawk did not remove a project', { runId });
+        }
+
+        return done;
+      } catch (error) {
+        signal.throwIfAborted();
+        report.error ??= describe(error);
+        logger.warn('sweep: a project could not be removed', { runId,
+          error: describe(error) });
+
+        return false;
+      }
+    };
 
     for (const id of candidates) {
       signal.throwIfAborted();
@@ -270,11 +321,34 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
         continue;
       }
 
-      if (await api.removeProject(id, signal)) {
+      if (await removing(() => api.removeProject(id, signal), runId)) {
         record.forget(id);
         report.removed += 1;
       } else {
-        logger.warn('sweep: Hawk did not remove a project', { runId });
+        report.skipped += 1;
+      }
+    }
+
+    for (const { runId } of lookups) {
+      signal.throwIfAborted();
+
+      const name = `[e2e:${config.instanceId}] new-project ${runId}`;
+      const project = home.projects.find(item => item.name === name);
+
+      if (project === undefined) {
+        pending.drop(runId);
+        report.gone += 1;
+      } else if (project.id === projectId) {
+        // Nothing here may ever remove it, so the entry has no use.
+        pending.drop(runId);
+        report.skipped += 1;
+      } else if (clock.wallTime().getTime() - project.createdAtMs < sweepMinAgeMs) {
+        report.skipped += 1;
+      } else if (await removing(() => api.removeProject(project.id, signal), runId)) {
+        record.forget(project.id);
+        pending.drop(runId);
+        report.removed += 1;
+      } else {
         report.skipped += 1;
       }
     }
@@ -325,6 +399,12 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
 
       if (projects !== undefined) {
         report.projects = projects;
+
+        if (projects.error !== undefined) {
+          report.error = projects.error;
+          failures += 1;
+          logger.warn('sweep failed', { ...report });
+        }
       }
     } catch (error) {
       report.error = describe(error);

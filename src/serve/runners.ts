@@ -6,6 +6,7 @@ import { runSentryEnvelope } from '../scenarios/sentry-envelope/run.js';
 import { runSourcemaps } from '../scenarios/sourcemaps/run.js';
 import { runNewProject } from '../scenarios/new-project/run.js';
 import { createdProjects } from '../storage/created-projects.js';
+import { pendingProjects } from '../storage/pending-projects.js';
 import { runSendAndReceive } from '../scenarios/send-and-receive/run.js';
 import type { Check } from '../http/internal-server.js';
 import { setupCheckNotification } from './notification-setup.js';
@@ -72,6 +73,7 @@ const setupProbe: SetupScenario = async (context): Promise<ScenarioSetup> => {
 const setupNewProject: SetupScenario = async (context): Promise<ScenarioSetup> => {
   const { config, history, clock, logger, masking, api, collector, overrides } = context;
   const projects = createdProjects(history);
+  const pending = pendingProjects(history);
 
   return Promise.resolve({
     runner: async ({ runId, sequence, signal }) => runNewProject({ config,
@@ -82,6 +84,7 @@ const setupNewProject: SetupScenario = async (context): Promise<ScenarioSetup> =
       redact: masking.redact,
       addSecret: masking.add,
       projects,
+      pending,
       ...overrides.pollScheduleMs === undefined ? {} : { pollScheduleMs: overrides.pollScheduleMs },
       signal }, { sequence,
       runId }),

@@ -146,9 +146,10 @@ function lateMismatch(notification: NotificationState, title: string, projectId:
  * @param state Run state of the scenario.
  * @param notification State of the notification stages.
  * @param projectId Project of the monitor, for the link in the loop message.
+ * @param repeat Whether the run sent the event a second time; without it no threshold notification may come.
  * @returns Verdict, warnings and the notification summary.
  */
-export function decideNotificationVerdict(stages: readonly StageResult[], state: ScenarioState, notification: NotificationState, projectId: string): NotificationVerdict {
+export function decideNotificationVerdict(stages: readonly StageResult[], state: ScenarioState, notification: NotificationState, projectId: string, repeat: boolean): NotificationVerdict {
   const rest = {
     warnings: buildWarnings(stages, state, notification),
     ...notification.finalArrivals === undefined ? {} : { notification: summarize(state, notification.finalArrivals) },
@@ -191,6 +192,14 @@ export function decideNotificationVerdict(stages: readonly StageResult[], state:
           count }) },
       ...rest };
     }
+  }
+
+  // The threshold is 2, so a POST in a run that sent one event means the rule fired on the first.
+  if (!repeat && finalArrivals.threshold.length > 0) {
+    return { verdict: { status: 'failed',
+      failedStage: 'threshold_formed',
+      error: new CheckError('threshold_early', { detail: 'a threshold POST arrived in a run that sent no repeat' }) },
+    ...rest };
   }
 
   const thresholdStage = stages.find(stage => stage.name === 'threshold_formed');

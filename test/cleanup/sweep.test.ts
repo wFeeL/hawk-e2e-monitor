@@ -7,6 +7,7 @@ import type { ScenarioName } from '../../src/scenarios/names.js';
 import { openDatabase } from '../../src/storage/database.js';
 import { createdProjects } from '../../src/storage/created-projects.js';
 import { createHistory } from '../../src/storage/history.js';
+import { pendingProjects } from '../../src/storage/pending-projects.js';
 import type { History } from '../../src/storage/history.js';
 import { testConfig } from '../support/config.js';
 import { createFakeClock } from '../support/fake-clock.js';
@@ -72,6 +73,8 @@ interface LeftoverOptions {
   title?: string;
   /** Age of the event in Hawk. */
   ageMs?: number;
+  /** Leaves the context out, as a collector that drops contexts would. */
+  noContext?: boolean;
 }
 
 /**
@@ -484,9 +487,11 @@ function leftoverProject(runId: string, options: ProjectOptions = {}): string {
 function sentryLeftover(runId: string, options: LeftoverOptions = {}): string {
   const instanceId = options.instanceId ?? INSTANCE;
   const stored = hawk.store.ingest(hawk.projectId, 'errors/default', { title: options.title ?? `E2eMonitorCheck: ${buildTitle(INSTANCE, runId, 'sentry-envelope')}`,
-    context: { e2e: { runId,
-      instanceId,
-      scenario: 'sentry-envelope' } } });
+    ...options.noContext === true
+      ? {}
+      : { context: { e2e: { runId,
+          instanceId,
+          scenario: 'sentry-envelope' } } } });
 
   hawk.store.setTimestamp(hawk.projectId, stored.id, Math.floor((Date.now() - (options.ageMs ?? 2 * HOUR_MS)) / 1000));
 
@@ -512,6 +517,29 @@ describe('sweepOnce of events from the Sentry path', () => {
     await sweeper().sweepOnce(SIGNAL);
 
     expect(hawk.store.get(hawk.projectId, id)).toBeUndefined();
+  });
+
+  it('removes an old event whose title is ours and whose context the collector dropped', async () => {
+    const id = sentryLeftover('raaaaaaaaaaaaaaa', { noContext: true });
+
+    finished('raaaaaaaaaaaaaaa', 'failed', 2 * HOUR_MS, false);
+
+    const report = await sweeper().sweepOnce(SIGNAL);
+
+    expect(report).toMatchObject({ removed: 1 });
+    expect(hawk.store.get(hawk.projectId, id)).toBeUndefined();
+  });
+
+  it('leaves such an event when its title names another instance or it is young', async () => {
+    const young = sentryLeftover('raaaaaaaaaaaaaaa', { noContext: true,
+      ageMs: 60_000 });
+    const foreign = sentryLeftover('rbbbbbbbbbbbbbbb', { noContext: true,
+      title: `E2eMonitorCheck: ${buildTitle('other', 'rbbbbbbbbbbbbbbb', 'sentry-envelope')}` });
+
+    await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.store.get(hawk.projectId, young)).toBeDefined();
+    expect(hawk.store.get(hawk.projectId, foreign)).toBeDefined();
   });
 
   it('leaves a young event and an event of a run that is going', async () => {
@@ -672,6 +700,41 @@ describe('sweepOnce of projects', () => {
     expect(createdProjects(history).ids()).toEqual([id]);
   });
 
+  it('goes on with the other projects when one fails, keeps the failed one and reports the first error', async () => {
+    const first = leftoverProject('raaaaaaaaaaaaaaa');
+    const second = leftoverProject('rbbbbbbbbbbbbbbb');
+    const report = await sweeper({ api: { ...api,
+      removeProject: async (id, signal) => {
+        if (id === first) {
+          throw new Error('cannot remove the first');
+        }
+
+        return api.removeProject(id, signal);
+      } } }).sweepOnce(SIGNAL);
+
+    expect(hawk.projects.has(first)).toBe(true);
+    expect(hawk.projects.has(second)).toBe(false);
+    expect(createdProjects(history).ids()).toEqual([first]);
+    expect(report.projects).toMatchObject({ removed: 1,
+      error: 'cannot remove the first' });
+    expect(report.error).toBe('cannot remove the first');
+  });
+
+  it('a pass that is aborted does not turn into a project error', async () => {
+    leftoverProject('raaaaaaaaaaaaaaa');
+
+    const stop = new AbortController();
+    const report = await sweeper({ api: { ...api,
+      removeProject: () => {
+        stop.abort();
+
+        return Promise.reject(new Error('aborted while removing'));
+      } } }).sweepOnce(stop.signal);
+
+    expect(report.error).toBeDefined();
+    expect(report.projects).toBeUndefined();
+  });
+
   it('a project that the cleanup of its run could not remove goes in a later pass', async () => {
     const id = leftoverProject(PROJECT_RUN, { ageMs: 60_000 });
 
@@ -707,5 +770,127 @@ describe('sweepOnce of projects', () => {
 
     expect(report.error).toContain('monitored project');
     expect(hawk.projects.has(id)).toBe(true);
+  });
+});
+
+/** How a pending run and its project look. */
+interface PendingOptions {
+  /** Whether Hawk has the project. */
+  created?: boolean;
+  /** Age of the pending entry. */
+  entryAgeMs?: number;
+  /** Age of the project in Hawk. */
+  projectAgeMs?: number;
+  /** Workspace of the project. */
+  workspaceId?: string;
+}
+
+/**
+ * Records a run whose project id the monitor never learned, and puts its project into the fake Hawk.
+ * @param runId Run that asked for the project.
+ * @param options Differences from an old entry with an old project in the home workspace.
+ * @returns Id of the project, undefined when none was made.
+ */
+function pendingRun(runId: string, options: PendingOptions = {}): string | undefined {
+  pendingProjects(history).add(runId, new Date(Date.now() - (options.entryAgeMs ?? 2 * HOUR_MS)).toISOString());
+
+  return options.created === false
+    ? undefined
+    : hawk.projects.add({ id: `${runId.slice(1, 9)}${'0'.repeat(16)}`.slice(0, 24).replaceAll(/[^0-9a-f]/gu, 'b'),
+      name: `[e2e:${INSTANCE}] new-project ${runId}`,
+      workspaceId: options.workspaceId ?? 'fake-workspace',
+      token: `token-${runId}`,
+      creationDate: Date.now() - (options.projectAgeMs ?? 2 * HOUR_MS) }).id;
+}
+
+describe('sweepOnce of projects whose id was never learned', () => {
+  it('removes the project found by the name of an old pending run and drops the entry', async () => {
+    const id = pendingRun(PROJECT_RUN);
+    const report = await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.projects.has(id ?? '')).toBe(false);
+    expect(report.projects).toMatchObject({ removed: 1 });
+    expect(pendingProjects(history).list()).toEqual([]);
+  });
+
+  it('drops an old pending run whose project does not exist', async () => {
+    pendingRun(PROJECT_RUN, { created: false });
+
+    const report = await sweeper().sweepOnce(SIGNAL);
+
+    expect(report.projects).toMatchObject({ removed: 0,
+      gone: 1 });
+    expect(pendingProjects(history).list()).toEqual([]);
+    expect(hawk.api.operations).not.toContain('RemoveProject');
+  });
+
+  it('does not touch a project with the pending name in a foreign workspace', async () => {
+    const id = pendingRun(PROJECT_RUN, { workspaceId: 'foreign-workspace' });
+
+    await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.projects.has(id ?? '')).toBe(true);
+    expect(hawk.api.operations).not.toContain('RemoveProject');
+  });
+
+  it('leaves a young entry and a run that is going, without a look at Hawk', async () => {
+    const young = pendingRun(PROJECT_RUN, { entryAgeMs: 60_000 });
+    const going = pendingRun('rbbbbbbbbbbbbbbb');
+
+    active.add('rbbbbbbbbbbbbbbb');
+    await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.projects.has(young ?? '')).toBe(true);
+    expect(hawk.projects.has(going ?? '')).toBe(true);
+    expect(pendingProjects(history).list()).toHaveLength(2);
+    expect(hawk.api.operations).not.toContain('WorkspaceProjects');
+  });
+
+  it('keeps the entry of a project that is too young', async () => {
+    const id = pendingRun(PROJECT_RUN, { projectAgeMs: 60_000 });
+    const report = await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.projects.has(id ?? '')).toBe(true);
+    expect(report.projects).toMatchObject({ removed: 0,
+      skipped: 1 });
+    expect(pendingProjects(history).list()).toHaveLength(1);
+  });
+
+  it('keeps the entry when Hawk removes nothing', async () => {
+    pendingRun(PROJECT_RUN);
+    hawk.api.knobs.errors = Object.fromEntries([['RemoveProject', { code: 'INTERNAL_SERVER_ERROR',
+      message: 'boom' }]]);
+
+    const report = await sweeper().sweepOnce(SIGNAL);
+
+    expect(report.error).toContain('boom');
+    expect(pendingProjects(history).list()).toHaveLength(1);
+  });
+
+  it('never removes the monitored project, even under a pending name', async () => {
+    pendingProjects(history).add(PROJECT_RUN, new Date(Date.now() - 2 * HOUR_MS).toISOString());
+
+    const main = hawk.projects.get(hawk.projectId);
+
+    if (main) {
+      main.name = `[e2e:${INSTANCE}] new-project ${PROJECT_RUN}`;
+      main.creationDate = Date.now() - 2 * HOUR_MS;
+    }
+
+    await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.projects.has(hawk.projectId)).toBe(true);
+    expect(hawk.api.operations).not.toContain('RemoveProject');
+  });
+
+  it('keeps the entry and logs the error when the lookup fails', async () => {
+    pendingRun(PROJECT_RUN);
+
+    const report = await sweeper({ api: { ...api,
+      workspaceProjects: async () => Promise.reject(new Error('lookup down')) } }).sweepOnce(SIGNAL);
+
+    expect(report.error).toContain('lookup down');
+    expect(pendingProjects(history).list()).toHaveLength(1);
+    expect(logger.lines).toContainEqual(expect.objectContaining({ level: 'warn' }));
   });
 });

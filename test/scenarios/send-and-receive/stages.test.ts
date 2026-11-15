@@ -106,6 +106,16 @@ describe('apiAvailabilityStage grouping patterns', () => {
     expect((result.details?.warnings as string[]).join(' ')).toContain('\\[e2e:.*\\] .* send-and-receive-event');
   });
 
+  it('reads a pattern as Hawk does, without the u flag, so an escaped colon still works', async () => {
+    hawk.api.knobs.groupingPatterns = ['\\[e2e\\:.*'];
+
+    const { context, plan } = scenario();
+    const result = await run(apiAvailabilityStage(TIMEOUT_MS, { title: plan.title }), context);
+
+    expect(result.details?.degraded).toEqual(['grouping_pattern']);
+    expect(JSON.stringify(result.details?.warnings)).not.toContain('not a regular expression');
+  });
+
   it('only warns about a pattern that is not a regular expression', async () => {
     hawk.api.knobs.groupingPatterns = ['(unclosed'];
 
@@ -759,6 +769,61 @@ describe('the fields of the card', () => {
 
     await run(collectorAcceptStage(TIMEOUT_MS), node.context);
     expect((await run(eventVisibleStage(TIMEOUT_MS), node.context)).details?.degraded).toBeUndefined();
+  });
+
+  describe('the shape of beautifiedUserAgent on a JavaScript event', () => {
+    /**
+     * Builds the card of a JavaScript event with a given value of the field.
+     * @param value Value of `addons.beautifiedUserAgent`; the key is left out when undefined.
+     * @returns The error of the check and nothing else.
+     */
+    function checked(value: unknown): CheckError | undefined {
+      const { context, plan } = scenario({ transport: 'ws' });
+      const sent = eventMessage(context).payload;
+      const groomed = groom(plan.catcherType, sent);
+      const addons = { ...groomed.addons as Record<string, unknown> };
+
+      if (value === undefined) {
+        delete addons.beautifiedUserAgent;
+      } else {
+        addons.beautifiedUserAgent = value;
+      }
+
+      return checkCard({ originalEventId: 'e',
+        groupHash: 'g',
+        totalCount: 1,
+        catcherType: plan.catcherType,
+        title: plan.title,
+        ...groomed,
+        addons,
+        usersAffected: 1 } as EventCard, sent, plan, 1);
+    }
+
+    it('accepts an object with the four string fields, extra fields included, and an absent value', () => {
+      expect(checked({ os: 'Linux',
+        osVersion: '6',
+        browser: 'Chrome',
+        browserVersion: '120',
+        extra: 1 })).toBeUndefined();
+      expect(checked(undefined)).toBeUndefined();
+    });
+
+    it.each([
+      ['null', null],
+      ['an empty object', {}],
+      ['an object without osVersion', { os: 'Linux',
+        browser: 'Chrome',
+        browserVersion: '120' }],
+      ['a field that is not a string', { os: 'Linux',
+        osVersion: 6,
+        browser: 'Chrome',
+        browserVersion: '120' }],
+      ['an array', []],
+      ['a string', 'Linux'],
+    ])('rejects %s as event_mismatch of addons.beautifiedUserAgent', (_label, value) => {
+      expect(checked(value)).toMatchObject({ errorClass: 'event_mismatch',
+        facts: { field: 'addons.beautifiedUserAgent' } });
+    });
   });
 
   it('checks that one user was affected', () => {
