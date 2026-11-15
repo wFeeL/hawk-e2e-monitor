@@ -5,6 +5,7 @@ import { runResultFixture } from '../support/run-result.js';
 import { buildTitle } from '../../src/scenarios/send-and-receive/plan.js';
 import type { ScenarioName } from '../../src/scenarios/names.js';
 import { openDatabase } from '../../src/storage/database.js';
+import { createdProjects } from '../../src/storage/created-projects.js';
 import { createHistory } from '../../src/storage/history.js';
 import type { History } from '../../src/storage/history.js';
 import { testConfig } from '../support/config.js';
@@ -436,5 +437,200 @@ describe('the timer', () => {
     await clock.advance(HOUR_MS * 3);
     expect(searches()).toBe(0);
     await instance.stop();
+  });
+});
+
+const PROJECT_RUN = 'raaaaaaaaaaaaaaa';
+
+/** How a project in the fake Hawk differs from one that `new-project` left. */
+interface ProjectOptions {
+  /** Workspace that holds it, the one of the monitored project by default. */
+  workspaceId?: string;
+  /** Name that replaces the generated one. */
+  name?: string;
+  /** Age in Hawk. */
+  ageMs?: number;
+  /** Whether the monitor recorded the id, as `new-project` does. */
+  recorded?: boolean;
+}
+
+/**
+ * Puts a project of `new-project` into the fake Hawk.
+ * @param runId Run the project belongs to.
+ * @param options Differences from a leftover project.
+ * @returns Id of the project.
+ */
+function leftoverProject(runId: string, options: ProjectOptions = {}): string {
+  const id = `${runId.slice(1, 9)}${'0'.repeat(16)}`.slice(0, 24).replaceAll(/[^0-9a-f]/gu, 'a');
+  const project = hawk.projects.add({ id,
+    name: options.name ?? `[e2e:${INSTANCE}] new-project ${runId}`,
+    workspaceId: options.workspaceId ?? 'fake-workspace',
+    token: `token-${runId}`,
+    creationDate: Date.now() - (options.ageMs ?? 2 * HOUR_MS) });
+
+  if (options.recorded !== false) {
+    createdProjects(history).record(project.id);
+  }
+
+  return project.id;
+}
+
+describe('sweepOnce of projects', () => {
+  it('removes a recorded project of this instance that is old enough, and forgets it', async () => {
+    const id = leftoverProject(PROJECT_RUN);
+    const report = await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.projects.has(id)).toBe(false);
+    expect(report.projects).toEqual({ removed: 1,
+      gone: 0,
+      skipped: 0 });
+    expect(createdProjects(history).ids()).toEqual([]);
+  });
+
+  it('does nothing about projects while the record is empty', async () => {
+    const report = await sweeper().sweepOnce(SIGNAL);
+
+    expect(report.projects).toBeUndefined();
+    expect(hawk.api.operations).not.toContain('WorkspaceProjects');
+  });
+
+  it('leaves a project that is too young', async () => {
+    const id = leftoverProject(PROJECT_RUN, { ageMs: 60_000 });
+    const report = await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.projects.has(id)).toBe(true);
+    expect(report.projects).toMatchObject({ removed: 0,
+      skipped: 1 });
+    expect(createdProjects(history).ids()).toEqual([id]);
+  });
+
+  it('leaves a project of a run that is still going', async () => {
+    const id = leftoverProject(PROJECT_RUN);
+
+    active.add(PROJECT_RUN);
+    await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.projects.has(id)).toBe(true);
+  });
+
+  it('does not touch a project with the same name in another workspace', async () => {
+    const id = leftoverProject(PROJECT_RUN, { workspaceId: 'foreign-workspace' });
+    const report = await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.projects.has(id)).toBe(true);
+    expect(hawk.api.operations).not.toContain('RemoveProject');
+    expect(report.projects).toMatchObject({ removed: 0,
+      skipped: 1 });
+  });
+
+  it('does not touch the monitored project, even when its id is in the record', async () => {
+    createdProjects(history).record(hawk.projectId);
+
+    const main = hawk.projects.get(hawk.projectId);
+
+    if (main) {
+      main.name = `[e2e:${INSTANCE}] new-project ${PROJECT_RUN}`;
+      main.creationDate = Date.now() - 2 * HOUR_MS;
+    }
+
+    await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.projects.has(hawk.projectId)).toBe(true);
+    expect(hawk.api.operations).not.toContain('RemoveProject');
+  });
+
+  it('does not touch a project with a fitting name that the monitor did not record', async () => {
+    const id = leftoverProject(PROJECT_RUN, { recorded: false });
+
+    await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.projects.has(id)).toBe(true);
+    expect(hawk.api.operations).not.toContain('WorkspaceProjects');
+  });
+
+  it.each([
+    ['another instance', `[e2e:other] new-project ${PROJECT_RUN}`],
+    ['a longer run id', `[e2e:${INSTANCE}] new-project ${PROJECT_RUN}x`],
+    ['an upper case run id', `[e2e:${INSTANCE}] new-project Raaaaaaaaaaaaaaa`],
+    ['a prefix before the mark', `x [e2e:${INSTANCE}] new-project ${PROJECT_RUN}`],
+    ['another scenario', `[e2e:${INSTANCE}] sourcemaps ${PROJECT_RUN}`],
+  ])('does not touch a recorded project whose name is of %s', async (_label, name) => {
+    const id = leftoverProject(PROJECT_RUN, { name });
+
+    await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.projects.has(id)).toBe(true);
+  });
+
+  it('matches the instance id literally, dots and all', async () => {
+    const id = leftoverProject(PROJECT_RUN, { name: `[e2e:f.ke] new-project ${PROJECT_RUN}` });
+
+    await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.projects.has(id)).toBe(true);
+  });
+
+  it('forgets a recorded project that Hawk no longer has', async () => {
+    const id = leftoverProject(PROJECT_RUN);
+
+    hawk.projects.remove(id);
+
+    const report = await sweeper().sweepOnce(SIGNAL);
+
+    expect(report.projects).toEqual({ removed: 0,
+      gone: 1,
+      skipped: 0 });
+    expect(createdProjects(history).ids()).toEqual([]);
+    expect(hawk.api.operations).not.toContain('RemoveProject');
+  });
+
+  it('keeps the record when Hawk says it removed nothing or fails, and goes on with the pass', async () => {
+    const id = leftoverProject(PROJECT_RUN);
+
+    hawk.api.knobs.errors = Object.fromEntries([['RemoveProject', { code: 'INTERNAL_SERVER_ERROR',
+      message: 'boom' }]]);
+
+    const report = await sweeper().sweepOnce(SIGNAL);
+
+    expect(report.error).toContain('boom');
+    expect(hawk.projects.has(id)).toBe(true);
+    expect(createdProjects(history).ids()).toEqual([id]);
+  });
+
+  it('a project that the cleanup of its run could not remove goes in a later pass', async () => {
+    const id = leftoverProject(PROJECT_RUN, { ageMs: 60_000 });
+
+    await sweeper().sweepOnce(SIGNAL);
+    expect(hawk.projects.has(id)).toBe(true);
+
+    const project = hawk.projects.get(id);
+
+    if (project) {
+      project.creationDate = Date.now() - 2 * HOUR_MS;
+    }
+
+    await sweeper().sweepOnce(SIGNAL);
+    expect(hawk.projects.has(id)).toBe(false);
+  });
+
+  it('removes every old project of the record in one pass', async () => {
+    const first = leftoverProject('raaaaaaaaaaaaaaa');
+    const second = leftoverProject('rbbbbbbbbbbbbbbb');
+    const report = await sweeper().sweepOnce(SIGNAL);
+
+    expect(hawk.projects.has(first)).toBe(false);
+    expect(hawk.projects.has(second)).toBe(false);
+    expect(report.projects?.removed).toBe(2);
+  });
+
+  it('reports an error and removes nothing when the monitored project is not in any workspace', async () => {
+    const id = leftoverProject(PROJECT_RUN);
+
+    const report = await sweeper({ api: { ...api,
+      workspaceProjects: async () => Promise.resolve([{ workspaceId: 'fake-workspace',
+        projects: [] }]) } }).sweepOnce(SIGNAL);
+
+    expect(report.error).toContain('monitored project');
+    expect(hawk.projects.has(id)).toBe(true);
   });
 });

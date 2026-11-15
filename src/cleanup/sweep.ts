@@ -3,6 +3,7 @@ import type { Config } from '../config/load.js';
 import type { Logger } from '../log/logger.js';
 import { buildTitle } from '../scenarios/send-and-receive/plan.js';
 import { EVENT_SCENARIOS } from '../scenarios/names.js';
+import { createdProjects } from '../storage/created-projects.js';
 import type { History } from '../storage/history.js';
 import type { Clock } from '../time/clock.js';
 
@@ -24,8 +25,20 @@ export interface SweepReport {
   lateMarked: number;
   /** Searches made. */
   pages: number;
+  /** What the pass did about the projects of `new-project`; absent when none was recorded. */
+  projects?: ProjectsReport;
   /** Why the pass ended early. */
   error?: string;
+}
+
+/** What a pass did about the projects `new-project` left behind. */
+export interface ProjectsReport {
+  /** Projects removed. */
+  removed: number;
+  /** Recorded projects that Hawk no longer has. */
+  gone: number;
+  /** Projects left alone: another workspace, another name, too young or still in use. */
+  skipped: number;
 }
 
 /** What the sweep needs from outside. */
@@ -102,6 +115,15 @@ function runIdOf(instanceId: string, title: string): string | undefined {
   }
 
   return undefined;
+}
+
+/**
+ * Builds the pattern of the name `new-project` gives its projects.
+ * @param instanceId Id of this monitor; its characters are matched literally.
+ * @returns Pattern with the run id as its first group.
+ */
+function projectNamePattern(instanceId: string): RegExp {
+  return new RegExp(`^\\[e2e:${instanceId.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`)}\\] new-project (r[a-z]{15})$`, 'u');
 }
 
 /**
@@ -187,6 +209,68 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
       lateMarked: late === true };
   };
 
+  /**
+   * Removes the recorded projects of `new-project` that a run left behind.
+   * Hawk checks no rights on `removeProject`, so a project goes only when every check says it is ours:
+   * it was recorded by this monitor, sits in the workspace of the monitored project, is not that project,
+   * carries the exact name of this instance, belongs to no running run and is old enough.
+   * @param signal Ends the pass.
+   * @returns What was done, undefined when nothing is recorded.
+   */
+  const sweepProjects = async (signal: AbortSignal): Promise<ProjectsReport | undefined> => {
+    const record = createdProjects(history);
+    const candidates = record.ids();
+
+    if (candidates.length === 0) {
+      return undefined;
+    }
+
+    const lists = await api.workspaceProjects([projectId, ...candidates], signal);
+    const home = lists.find(list => list.projects.some(project => project.id === projectId));
+
+    if (home === undefined) {
+      throw new Error('the workspace of the monitored project was not found, so no project is removed');
+    }
+
+    const pattern = projectNamePattern(config.instanceId);
+    const report: ProjectsReport = { removed: 0,
+      gone: 0,
+      skipped: 0 };
+
+    for (const id of candidates) {
+      signal.throwIfAborted();
+
+      const holder = lists.find(list => list.projects.some(project => project.id === id));
+
+      if (holder === undefined) {
+        record.forget(id);
+        report.gone += 1;
+
+        continue;
+      }
+
+      const project = holder.projects.find(item => item.id === id);
+      const runId = project === undefined ? undefined : pattern.exec(project.name)?.[1];
+
+      if (project === undefined || holder.workspaceId !== home.workspaceId || id === projectId || runId === undefined
+        || deps.activeRunIds().has(runId) || clock.wallTime().getTime() - project.createdAtMs < sweepMinAgeMs) {
+        report.skipped += 1;
+
+        continue;
+      }
+
+      if (await api.removeProject(id, signal)) {
+        record.forget(id);
+        report.removed += 1;
+      } else {
+        logger.warn('sweep: Hawk did not remove a project', { runId });
+        report.skipped += 1;
+      }
+    }
+
+    return report;
+  };
+
   const sweepOnce = async (outer: AbortSignal): Promise<SweepReport> => {
     const report: SweepReport = { scanned: 0,
       removed: 0,
@@ -225,6 +309,12 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
           break;
         }
       }
+
+      const projects = await sweepProjects(signal);
+
+      if (projects !== undefined) {
+        report.projects = projects;
+      }
     } catch (error) {
       report.error = describe(error);
       failures += 1;
@@ -237,6 +327,10 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
     if (report.error === undefined && (report.removed > 0 || report.lateMarked > 0)) {
       logger.info('sweep removed leftover events', { removed: report.removed,
         lateMarked: report.lateMarked });
+    }
+
+    if (report.error === undefined && report.projects !== undefined && report.projects.removed + report.projects.gone > 0) {
+      logger.info('sweep dealt with leftover projects', { ...report.projects });
     }
 
     return report;
