@@ -5,7 +5,7 @@ const TLS_CODE = /^(ERR_TLS_|ERR_SSL_|CERT_|UNABLE_TO_|DEPTH_ZERO_SELF_SIGNED_CE
 const ABORT_NAMES = new Set(['AbortError', 'TimeoutError']);
 
 /** Which side a request goes to. */
-export type NetTarget = 'api' | 'collector' | 'garage' | 'heartbeat' | 'notify';
+export type NetTarget = 'api' | 'collector' | 'garage' | 'heartbeat' | 'notify' | 'telegram';
 
 /**
  * Names the class of a request that got no usable answer.
@@ -20,6 +20,8 @@ export function unavailableClass(target: NetTarget): ErrorClass {
       return 'api_unavailable';
     case 'garage':
       return 'garage_unavailable';
+    case 'telegram':
+      return 'telegram_api_unavailable';
     case 'heartbeat':
     case 'notify':
       return 'network_error';

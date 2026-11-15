@@ -89,3 +89,12 @@ describe('classifyNetworkError', () => {
     expect(classifyNetworkError(fetchFailed('ENOTFOUND'), 'notify').errorClass).toBe('dns_error');
   });
 });
+
+describe('classifyNetworkError for the Telegram API', () => {
+  it('names a bot that cannot be reached telegram_api_unavailable', () => {
+    expect(classifyNetworkError(fetchFailed('ECONNREFUSED'), 'telegram'))
+      .toEqual({ errorClass: 'telegram_api_unavailable',
+        code: 'ECONNREFUSED',
+        beforeSend: true });
+  });
+});
