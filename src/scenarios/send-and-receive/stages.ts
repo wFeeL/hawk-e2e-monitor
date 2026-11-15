@@ -494,6 +494,16 @@ function valueAt(card: EventCard, name: string): unknown {
 }
 
 /**
+ * Tells whether a value is what the JavaScript worker writes for a user agent.
+ * @param value Value of `addons.beautifiedUserAgent`.
+ * @returns True for an object with string `os`, `osVersion`, `browser` and `browserVersion`.
+ */
+function hasBrowserDetails(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    && ['os', 'osVersion', 'browser', 'browserVersion'].every(key => typeof (value as Record<string, unknown>)[key] === 'string');
+}
+
+/**
  * Compares the card Garage shows with the event that was sent, field by field.
  * Values the grouper must mask are expected as `[filtered]`.
  * @param card Event card from the API.
@@ -525,6 +535,14 @@ export function checkCard(card: EventCard, sent: Readonly<Record<string, unknown
 
   if (plan.catcherType !== 'errors/javascript' && valueAt(card, 'addons.beautifiedUserAgent') !== undefined) {
     return new CheckError('event_mismatch', { field: 'addons.beautifiedUserAgent' }, { message: 'Event has an unexpected field beautifiedUserAgent: only a JavaScript event is described by the JavaScript worker' });
+  }
+
+  const described = valueAt(card, 'addons.beautifiedUserAgent');
+
+  if (described !== undefined && !hasBrowserDetails(described)) {
+    return new CheckError('event_mismatch', { field: 'addons.beautifiedUserAgent',
+      expected: 'object with string os, osVersion, browser and browserVersion',
+      actual: show(described) });
   }
 
   if (card.usersAffected !== 1) {
