@@ -105,6 +105,38 @@ describe('sharedReceiver', () => {
     expect(lookups).toBe(afterFirst);
   });
 
+  it('a wait that the first caller cancelled is not inherited: the next scenario waits for the tunnel itself', async () => {
+    let lookups = 0;
+    const context = await contextFor({ resolveAddress: () => {
+      lookups += 1;
+
+      return Promise.reject(new Error('no tunnel yet'));
+    },
+    tunnelPollMs: 5 });
+    const runtime = await sharedReceiver({ ...context,
+      config: { ...context.config,
+        monitoring: { ...context.config.monitoring,
+          tunnelReadyTimeoutMs: 60 } } });
+    const cancelled = new AbortController();
+    const first = runtime.waitForTunnel(cancelled.signal);
+
+    await expect.poll(() => lookups).toBeGreaterThan(0);
+    cancelled.abort();
+    await first;
+
+    const afterFirst = lookups;
+
+    await runtime.waitForTunnel(new AbortController().signal);
+
+    expect(lookups).toBeGreaterThan(afterFirst);
+
+    // The second wait ran to its limit, so a third scenario does not wait again.
+    const afterSecond = lookups;
+
+    await runtime.waitForTunnel(new AbortController().signal);
+    expect(lookups).toBe(afterSecond);
+  });
+
   it('marks a late POST to /hooks/telegram as a late notification of that channel', async () => {
     const context = await contextFor();
     const { receiver } = await sharedReceiver(context);

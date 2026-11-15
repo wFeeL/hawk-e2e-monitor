@@ -2,7 +2,7 @@ import { createGraphqlTransport } from '../clients/graphql.js';
 import { createHawkApi } from '../clients/hawk-api.js';
 import type { HawkApi } from '../clients/hawk-api.js';
 import type { ProvisionCommand } from '../cli.js';
-import { ConfigFailure, formatConfigErrors, notificationSettings } from '../config/load.js';
+import { ConfigFailure, formatConfigErrors, notificationSettings, telegramSettings } from '../config/load.js';
 import type { Config } from '../config/load.js';
 import { createMutableRedactor } from '../errors/redact.js';
 import { isCheckError } from '../errors/taxonomy.js';
@@ -11,7 +11,8 @@ import { resolvePublicAddress } from '../notifications/address.js';
 import type { PublicAddress } from '../notifications/address.js';
 import { createProvisioner } from '../notifications/provisioning.js';
 import { scenarioSecrets } from '../scenarios/send-and-receive/run.js';
-import { MATCH_CHANGED_KEY } from '../storage/keys.js';
+import { TELEGRAM_DELIVERY } from '../scenarios/names.js';
+import { MATCH_CHANGED_KEY, TELEGRAM_MATCH_CHANGED_KEY } from '../storage/keys.js';
 import { systemClock } from '../time/clock.js';
 import type { Clock } from '../time/clock.js';
 import type { CheckIo } from './check.js';
@@ -55,6 +56,8 @@ export async function runProvisionCommand(command: ProvisionCommand, config: Con
 
   try {
     const settings = notificationSettings(config);
+    // Rule T exists only for a configuration that chooses the scenario; its settings are checked before anything changes.
+    const bot = config.monitoring.scenarios.includes(TELEGRAM_DELIVERY) ? telegramSettings(config) : undefined;
     const signal = AbortSignal.timeout(settings.setupTimeoutMs);
     const api = deps.api ?? createHawkApi({ transport: createGraphqlTransport({ url: config.hawk.apiUrl,
       httpTimeoutMs: config.httpTimeoutMs,
@@ -73,24 +76,46 @@ export async function runProvisionCommand(command: ProvisionCommand, config: Con
     add(address.baseUrl);
     add(address.hostname);
 
-    const provisioner = createProvisioner({ api,
+    const provisionerDeps = { api,
       clock,
       projectId: config.hawk.projectId,
       instanceId: config.instanceId,
       secret: settings.receiverSecret,
       loop: settings.loop,
-      warmupMs: settings.ruleCacheWarmupMs });
+      warmupMs: settings.ruleCacheWarmupMs };
+    const provisioner = createProvisioner({ ...provisionerDeps,
+      kinds: ['newEvents', 'threshold'] });
+    const telegramProvisioner = bot === undefined
+      ? undefined
+      : createProvisioner({ ...provisionerDeps,
+          loop: false,
+          kinds: ['telegram'],
+          notifyUrl: bot.notifyUrl });
     const result = await provisioner.provision(address, signal);
+    const telegramResult = await telegramProvisioner?.provision(address, signal);
 
     logger.info('provisioned', { ...result });
-    io.stdout(`${redact(JSON.stringify(result))}\n`);
+
+    if (telegramResult !== undefined) {
+      logger.info('provisioned the Telegram rule', { ...telegramResult });
+    }
+
+    // One object with a field for each provisioner; a configuration without the Telegram scenario prints the plain result as before.
+    io.stdout(`${redact(JSON.stringify(telegramResult === undefined
+      ? result
+      : { notification: result,
+          telegram: telegramResult }))}\n`);
 
     if (result.matchChanged) {
       recordMatchChange(config, clock.wallTime(), io, MATCH_CHANGED_KEY);
     }
 
-    if (result.matchChanged && command.wait) {
-      const remainingMs = provisioner.warmupRemainingMs();
+    if (telegramResult?.matchChanged === true) {
+      recordMatchChange(config, clock.wallTime(), io, TELEGRAM_MATCH_CHANGED_KEY);
+    }
+
+    if ((result.matchChanged || telegramResult?.matchChanged === true) && command.wait) {
+      const remainingMs = Math.max(provisioner.warmupRemainingMs(), telegramProvisioner?.warmupRemainingMs() ?? 0);
 
       io.stderr(`${redact(`waiting ${String(Math.ceil(remainingMs / MS_PER_SECOND))} s for Hawk to reload notification rules`)}\n`);
       await clock.sleep(remainingMs);

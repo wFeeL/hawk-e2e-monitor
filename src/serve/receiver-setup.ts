@@ -138,7 +138,7 @@ export interface ReceiverRuntime {
   findAddress: FindAddress;
   /** Host of the address of the previous run; both scenarios see the same address, so they share it. */
   lastHostname: LastHostname;
-  /** Waits for the tunnel once for the process, later callers get the same wait; never rejects, and a signal that aborts ends the wait of the first caller. */
+  /** Waits for the tunnel once for the process, later callers get the same wait; never rejects. A wait that its caller cancelled is not shared: the next caller waits again. */
   waitForTunnel: (signal: AbortSignal) => Promise<void>;
   /** Readiness check of the receiver. */
   readiness: Check[];
@@ -194,15 +194,24 @@ async function startRuntime(context: RunnerContext): Promise<ReceiverRuntime> {
     findAddress,
     lastHostname: {},
     waitForTunnel: async (signal) => {
-      tunnel ??= waitForTunnel({ findAddress,
-        receiver: started,
-        secret: settings.receiverSecret,
-        config,
-        clock,
-        logger,
-        masking,
-        signal,
-        pollMs: overrides.tunnelPollMs ?? TUNNEL_POLL_MS });
+      if (tunnel === undefined) {
+        const own = waitForTunnel({ findAddress,
+          receiver: started,
+          secret: settings.receiverSecret,
+          config,
+          clock,
+          logger,
+          masking,
+          signal,
+          pollMs: overrides.tunnelPollMs ?? TUNNEL_POLL_MS }).then(() => {
+          // A wait that was cut short says nothing about the tunnel, so the next scenario must not inherit it.
+          if (signal.aborted && tunnel === own) {
+            tunnel = undefined;
+          }
+        });
+
+        tunnel = own;
+      }
 
       return tunnel;
     },

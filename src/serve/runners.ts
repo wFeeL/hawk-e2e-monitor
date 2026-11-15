@@ -1,4 +1,3 @@
-import { StartupError } from '../app.js';
 import type { ScenarioRunner } from '../scheduler/scheduler.js';
 import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, NEW_PROJECT, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS, TELEGRAM_DELIVERY } from '../scenarios/names.js';
 import type { ScenarioName } from '../scenarios/names.js';
@@ -11,6 +10,7 @@ import { pendingProjects } from '../storage/pending-projects.js';
 import { runSendAndReceive } from '../scenarios/send-and-receive/run.js';
 import type { Check } from '../http/internal-server.js';
 import { setupCheckNotification } from './notification-setup.js';
+import { setupTelegramDelivery } from './telegram-setup.js';
 import type { RunnerContext, ScenarioSetup, SetupScenario } from './scenario-setup.js';
 
 /** What the scheduler and the internal server get from the scenarios of the configuration. */
@@ -132,15 +132,6 @@ const setupSentryEnvelope: SetupScenario = async (context): Promise<ScenarioSetu
       signal }, { sequence,
       runId }),
   });
-};
-
-/**
- * Placeholder until the scenario is wired in: refuses to start.
- * @returns Never resolves.
- * @throws StartupError always.
- */
-const setupTelegramDelivery: SetupScenario = async (): Promise<ScenarioSetup> => {
-  return Promise.reject(new StartupError('telegram-delivery is not available yet'));
 };
 
 /** One entry per scenario; a new scenario is added here. */

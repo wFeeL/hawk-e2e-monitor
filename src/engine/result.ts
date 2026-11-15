@@ -109,6 +109,23 @@ export interface RunProvisioning {
   matchChanged: boolean;
 }
 
+/** What the run learned from the chat of the `telegram-delivery` scenario. */
+export interface RunTelegram {
+  /** Time from the collector's answer to the message of Hawk in the chat. */
+  latencyMs?: number;
+  /** Messages of the chat that were not the one awaited. */
+  unmatched: number;
+  /** The probe sent through @codex_bot, when the message of Hawk did not come. */
+  probe?: {
+    /** Wall-clock time the probe was sent, ISO. */
+    sentAt: string;
+    /** Time from the send to the arrival of the probe in the chat. */
+    arrivedMs?: number;
+    /** Time from the collector's answer to a message of Hawk that came while the probe was awaited. */
+    lateHawkMessageMs?: number;
+  };
+}
+
 /** Everything a run reports. */
 export interface RunResult {
   /** Random id of the run. */
@@ -155,6 +172,8 @@ export interface RunResult {
   cleanup: CleanupResult;
   /** Notifications, for `check-notification` runs that got to read them. */
   notification?: RunNotification;
-  /** Provisioning, for `check-notification` runs that got past the setup. */
+  /** Provisioning, for `check-notification` and `telegram-delivery` runs that got past the setup. */
   provisioning?: RunProvisioning;
+  /** The chat, for `telegram-delivery` runs that got to read it. */
+  telegram?: RunTelegram;
 }
