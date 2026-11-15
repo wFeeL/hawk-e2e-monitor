@@ -268,6 +268,93 @@ describe('provision', () => {
     expect(same.warmupRemainingMs()).toBe(WARMUP_MS);
   });
 
+  describe('the warmup starts before a mutation that changes matching, whatever happens next', () => {
+    /**
+     * Wraps the read so that its n-th call fails.
+     * @param api Real client.
+     * @param failing Number of the call that fails, from 1.
+     * @returns Client whose read fails once.
+     */
+    function failingRead(api: HawkApi, failing: number): HawkApi {
+      let calls = 0;
+
+      return { ...api,
+        notificationRules: async (projectId, callSignal) => {
+          calls += 1;
+
+          if (calls === failing) {
+            throw new CheckError('api_unavailable', { code: 'ECONNRESET' });
+          }
+
+          return api.notificationRules(projectId, callSignal);
+        } };
+    }
+
+    /**
+     * Leaves two rules of the instance in the fake, so that the next provision deletes one.
+     * @returns Nothing.
+     */
+    async function seedTwoOfOurs(): Promise<void> {
+      await provisioner().provision(address(), signal);
+      hawk.rules.seed(hawk.projectId, { ...ours()[0] as NotificationRule,
+        id: 'e'.repeat(24) });
+    }
+
+    it('an unknown outcome of create followed by a failed reread', async () => {
+      hawk.api.knobs.createThenHang = true;
+
+      const same = provisioner({ api: failingRead(apiFor(100), 2) });
+      const error = await checkErrorOf(same.provision(address(), signal));
+
+      expect(error.errorClass).toBe('api_unavailable');
+      expect(ours()).toHaveLength(1);
+      expect(same.warmupRemainingMs()).toBe(WARMUP_MS);
+    });
+
+    it('a failed delete of the extra rule after an update of matching', async () => {
+      await seedTwoOfOurs();
+
+      const same = provisioner({ loop: false,
+        api: { ...apiFor(),
+          deleteNotificationRule: async () => Promise.reject(new CheckError('api_unavailable', { code: 'ECONNRESET' })) } });
+
+      await checkErrorOf(same.provision(address(), signal));
+
+      expect(same.warmupRemainingMs()).toBe(WARMUP_MS);
+    });
+
+    it('a failed reread after the extra rule was deleted', async () => {
+      await seedTwoOfOurs();
+
+      const same = provisioner({ loop: false,
+        api: failingRead(apiFor(), 2) });
+
+      await checkErrorOf(same.provision(address(), signal));
+
+      expect(same.warmupRemainingMs()).toBe(WARMUP_MS);
+    });
+
+    it('a failed delete after an update of the address only does not start it', async () => {
+      await seedTwoOfOurs();
+
+      const same = provisioner({ api: { ...apiFor(),
+        deleteNotificationRule: async () => Promise.reject(new CheckError('api_unavailable', { code: 'ECONNRESET' })) } });
+
+      await checkErrorOf(same.provision(address('two.example.com'), signal));
+
+      expect(same.warmupRemainingMs()).toBe(0);
+    });
+
+    it('a success does not move the start back', async () => {
+      const same = provisioner();
+
+      await same.provision(address(), signal);
+      await clock.advance(1000);
+
+      expect(same.warmupRemainingMs()).toBe(WARMUP_MS - 1000);
+    });
+  });
+
   it('create that failed before sending is not hidden', async () => {
     const api = apiFor();
     const error = await checkErrorOf(provisioner({ api: { ...api,

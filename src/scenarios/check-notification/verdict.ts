@@ -5,7 +5,7 @@ import type { NotificationChannel } from '../../notifications/types.js';
 import type { ScenarioState } from '../send-and-receive/stages.js';
 import { decideVerdict } from '../send-and-receive/verdict.js';
 import type { Verdict } from '../send-and-receive/verdict.js';
-import { checkNotificationAgainstEvent } from './stages.js';
+import { checkLoop, checkNotificationAgainstEvent, checkWebhook } from './stages.js';
 import type { NotificationState } from './stages.js';
 
 const CHANNELS: readonly NotificationChannel[] = ['webhook', 'loop'];
@@ -132,6 +132,22 @@ function summarize(state: ScenarioState, finalArrivals: Arrivals): RunNotificati
 }
 
 /**
+ * Runs the checks of the stage on a channel that came after the stage had stopped waiting.
+ * @param notification Arrivals of the stage and after cleanup.
+ * @param title Title that was sent.
+ * @param projectId Project of the monitor.
+ * @returns The first difference, webhook before loop, or undefined.
+ */
+function lateMismatch(notification: NotificationState, title: string, projectId: string): CheckError | undefined {
+  const { arrivals, finalArrivals } = notification;
+  const [webhook] = arrivals?.webhook.length === 0 ? finalArrivals?.webhook ?? [] : [];
+  const [loop] = arrivals?.loop.length === 0 ? finalArrivals?.loop ?? [] : [];
+
+  return (webhook === undefined ? undefined : checkWebhook(webhook, title, projectId))
+    ?? (loop === undefined ? undefined : checkLoop(loop, title));
+}
+
+/**
  * Decides the outcome of a `check-notification` run on top of the F1 verdict.
  * A notification proves the collector took the event, so it keeps the blame off the collector.
  * @param stages Recorded stages, cleanup last.
@@ -164,7 +180,7 @@ export function decideNotificationVerdict(stages: readonly StageResult[], state:
   }
 
   const { finalArrivals } = notification;
-  const mismatch = state.event === undefined ? undefined : checkNotificationAgainstEvent(finalArrivals, state.event, projectId);
+  const mismatch = state.event === undefined ? undefined : lateMismatch(notification, state.event.title, projectId) ?? checkNotificationAgainstEvent(finalArrivals, state.event, projectId);
 
   if (mismatch) {
     return { verdict: { status: 'failed',

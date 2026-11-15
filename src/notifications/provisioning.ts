@@ -210,6 +210,11 @@ export function createProvisioner(deps: ProvisionerDeps): Provisioner {
   let lastMatchChangeAtMs: number | undefined;
   let previousMatchChanged = false;
 
+  // Set before the request goes out: an update that fails halfway may still have changed the rule.
+  const markMatchChange = (): void => {
+    lastMatchChangeAtMs = clock.monotonicMs();
+  };
+
   const isOurs = (rule: NotificationRule): boolean => rule.including.length === 1 && rule.including[0] === `[e2e:${deps.instanceId}]`;
   const ownRules = async (signal: AbortSignal): Promise<NotificationRule[]> => (await api.notificationRules(projectId, signal)).filter(isOurs);
 
@@ -238,6 +243,8 @@ export function createProvisioner(deps: ProvisionerDeps): Provisioner {
       let outcome: Outcome;
 
       if (first === undefined) {
+        markMatchChange();
+
         try {
           const ruleId = await mutate(async () => api.createNotificationRule(wanted, signal));
 
@@ -260,6 +267,10 @@ export function createProvisioner(deps: ProvisionerDeps): Provisioner {
           ruleId: first.id,
           matchChanged: false };
       } else {
+        if (matchDifference(first, wanted) !== undefined) {
+          markMatchChange();
+        }
+
         const updated = await mutate(async () => api.updateNotificationRule({ ...wanted,
           ruleId: first.id }, signal));
 
@@ -304,7 +315,7 @@ export function createProvisioner(deps: ProvisionerDeps): Provisioner {
       const { difference, ...result } = await decide(address, signal);
 
       if (result.matchChanged) {
-        lastMatchChangeAtMs = clock.monotonicMs();
+        markMatchChange();
       }
 
       const repeated = result.matchChanged && previousMatchChanged;

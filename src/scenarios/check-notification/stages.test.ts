@@ -100,6 +100,8 @@ interface WebhookOverrides {
   title?: string;
   /** Event id. */
   eventId?: string;
+  /** Type of the notification. */
+  type?: string;
 }
 
 /** A tiny server that answers probes by a script. */
@@ -136,7 +138,7 @@ interface FormedRun {
  * @returns JSON text.
  */
 function webhookBody(parts: NotificationTestScenario, overrides: WebhookOverrides = {}): string {
-  return JSON.stringify({ type: 'event',
+  return JSON.stringify({ type: overrides.type ?? 'event',
     payload: { project: { id: overrides.projectId ?? parts.deps.config.hawk.projectId },
       events: [{ event: { id: overrides.eventId ?? 'event-1',
         title: overrides.title ?? parts.plan.title } }] } });
@@ -503,6 +505,13 @@ describe('notificationFormedStage', () => {
 
       expect(result.message).toContain('webhook.project.id');
       expect(result.message).toContain('other');
+    });
+
+    it('names webhook.type when the type is not event', async () => {
+      const { result } = await formedWith({ body: parts => webhookBody(parts, { type: 'other' }) }, goodLoop);
+
+      expect(result.errorClass).toBe('notification_mismatch');
+      expect(result.message).toContain('webhook.type');
     });
 
     it('names webhook.title when the title differs but the run id is right', async () => {
