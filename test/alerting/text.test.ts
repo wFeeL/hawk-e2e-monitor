@@ -4,7 +4,7 @@ import type { RunResult } from '../../src/engine/result.js';
 import { runResultFixture, stageFixture } from '../support/run-result.js';
 import type { AlertStateRow } from '../../src/storage/history.js';
 import type { RunRow } from '../../src/storage/types.js';
-import { ALERT_TEXT_LIMIT, alertText, escapeHtml } from '../../src/alerting/text.js';
+import { ALERT_TEXT_LIMIT, alertText, escapeHtml, plainAlertText, storageFailingText } from '../../src/alerting/text.js';
 import type { AlertTextInput } from '../../src/alerting/text.js';
 
 const NOW = '2026-03-10T13:05:03.000Z';
@@ -28,7 +28,7 @@ function failedRow(overrides: Partial<RunRow> = {}): RunRow {
     failedStage: 'event_visible',
     errorClass: 'event_not_found',
     culprit: 'hawk',
-    message: 'Event did not appear within 120000 ms',
+    message: 'Event did not appear within 2m 0s: API answered 20 times, failed 3 times',
     eventLatencyMs: 2100,
     degraded: [],
     stages: [{ name: 'collector_availability',
@@ -112,37 +112,182 @@ describe('escapeHtml', () => {
   });
 });
 
-describe('alertText', () => {
-  it('FAILED has every line of the format', () => {
-    expect(lines(alertText(input(), IDENTITY))).toEqual([
-      '<b>FAILED</b> send-and-receive-event [e2e:prod] | outage',
-      'stage: event_visible | class: event_not_found | culprit: hawk',
-      'Event did not appear within 120000 ms',
-      'run: raaaaaaaaaaaaaaaa #12 | 2026-03-10T12:00:00.000Z',
-      'stages: collector_availability 120 ms ok, api_availability 340 ms ok, collector_accept 80 ms ok, event_visible 120000 ms failed, cleanup 900 ms ok',
-      'event latency: 2100 ms',
-    ]);
+describe('alertText: the layout of every kind', () => {
+  it('FAILED', () => {
+    expect(alertText(input(), IDENTITY)).toBe([
+      '🔴 <b>FAILED</b> send-and-receive-event',
+      'instance prod | outage',
+      '',
+      '<b>event_visible</b> failed after 2m 0s',
+      'class event_not_found | culprit hawk',
+      'Event did not appear within 2m 0s: API answered 20 times, failed 3 times',
+      '',
+      'run #12 raaaaaaaaaaaaaaaa',
+      'started 2026-03-10 12:00:00 UTC',
+      '',
+      'event latency 2.1 s',
+      'before: collector_availability 120 ms, api_availability 340 ms, collector_accept 80 ms',
+    ].join('\n'));
   });
 
+  it('STILL FAILING', () => {
+    expect(alertText(input({ kind: 'still_failing',
+      row: failedRow({ eventLatencyMs: undefined,
+        failedStage: 'collector_availability',
+        errorClass: 'collector_unavailable',
+        message: 'Collector http://collector:3000/health did not respond: TIMEOUT, waited 10.0 s',
+        stages: [{ name: 'collector_availability',
+          status: 'failed',
+          durationMs: 10_001 },
+        { name: 'api_availability',
+          status: 'skipped',
+          durationMs: 0 },
+        { name: 'cleanup',
+          status: 'skipped',
+          durationMs: 0 }] }) }), IDENTITY)).toBe([
+      '🟠 <b>STILL FAILING</b> send-and-receive-event',
+      'instance prod | outage',
+      '',
+      '<b>collector_availability</b> failed after 10.0 s',
+      'class collector_unavailable | culprit hawk',
+      'Collector http://collector:3000/health did not respond: TIMEOUT, waited 10.0 s',
+      '',
+      'run #12 raaaaaaaaaaaaaaaa',
+      'started 2026-03-10 12:00:00 UTC',
+    ].join('\n'));
+  });
+
+  it('RECOVERED', () => {
+    expect(alertText(input({ kind: 'recovered',
+      now: '2026-03-10T12:04:15.000Z',
+      row: failedRow({ status: 'ok',
+        sequence: 13,
+        runId: 'rqzpwmahxkvtnbcd',
+        errorClass: undefined,
+        culprit: undefined,
+        failedStage: undefined,
+        message: undefined,
+        eventLatencyMs: 21,
+        stages: [{ name: 'collector_availability',
+          status: 'ok',
+          durationMs: 5 },
+        { name: 'api_availability',
+          status: 'ok',
+          durationMs: 16 },
+        { name: 'collector_accept',
+          status: 'ok',
+          durationMs: 3 },
+        { name: 'event_visible',
+          status: 'ok',
+          durationMs: 25 },
+        { name: 'cleanup',
+          status: 'ok',
+          durationMs: 5000 }] }),
+      state: stateRow({ state: 'ok',
+        episodeFailures: 1 }) }), IDENTITY)).toBe([
+      '🟢 <b>RECOVERED</b> send-and-receive-event',
+      'instance prod',
+      '',
+      'after 1 failed run, down 4m 15s',
+      '(since 2026-03-10 12:00:00 UTC)',
+      '',
+      'run #13 rqzpwmahxkvtnbcd',
+      'started 2026-03-10 12:00:00 UTC',
+      '',
+      'event latency 21 ms',
+      'stages: collector_availability 5 ms, api_availability 16 ms, collector_accept 3 ms, event_visible 25 ms, cleanup 5.0 s',
+    ].join('\n'));
+  });
+
+  it('RECOVERED, degraded', () => {
+    expect(alertText(input({ kind: 'recovered_degraded',
+      row: failedRow({ status: 'ok',
+        errorClass: undefined,
+        eventLatencyMs: undefined,
+        stages: [{ name: 'cleanup',
+          status: 'ok',
+          durationMs: 900 }] }),
+      state: stateRow({ state: 'degraded',
+        degraded: ['single_channel'] }),
+      result: notificationResult({ warnings: ['Only the webhook notification arrived'] }) }), IDENTITY)).toBe([
+      '🟢 <b>RECOVERED, degraded</b> send-and-receive-event',
+      'instance prod',
+      '',
+      'after 3 failed runs, down 1h 5m 3s',
+      '(since 2026-03-10 12:00:00 UTC)',
+      '',
+      'degraded: single_channel',
+      'Only the webhook notification arrived',
+      '',
+      'run #12 raaaaaaaaaaaaaaaa',
+      'started 2026-03-10 12:00:00 UTC',
+      '',
+      'webhook 3.4 s | loop 3.6 s',
+      'stages: cleanup 900 ms',
+    ].join('\n'));
+  });
+
+  it('DEGRADED', () => {
+    expect(alertText(input({ kind: 'degraded',
+      row: failedRow({ status: 'ok',
+        errorClass: undefined,
+        eventLatencyMs: undefined,
+        degraded: ['quota_projection'],
+        stages: [{ name: 'cleanup',
+          status: 'ok',
+          durationMs: 900 }] }),
+      state: stateRow({ state: 'degraded',
+        degraded: ['quota_projection'] }),
+      result: runResultFixture({ warnings: ['Event quota is almost used: 9/10'] }) }), IDENTITY)).toBe([
+      '🟡 <b>DEGRADED</b> send-and-receive-event',
+      'instance prod | warning',
+      '',
+      'degraded: quota_projection',
+      'Event quota is almost used: 9/10',
+      '',
+      'run #12 raaaaaaaaaaaaaaaa',
+      'started 2026-03-10 12:00:00 UTC',
+      '',
+      'stages: cleanup 900 ms',
+    ].join('\n'));
+  });
+
+  it('STORAGE FAILING', () => {
+    expect(storageFailingText('prod', 'disk full', IDENTITY)).toBe([
+      '⚠️ <b>STORAGE FAILING</b>',
+      'instance prod',
+      '',
+      'disk full',
+    ].join('\n'));
+  });
+
+  it('a plain alert for a text that could not be built', () => {
+    expect(plainAlertText('failed', 'check-notification', 'prod')).toBe([
+      '🔴 <b>FAILED</b> check-notification',
+      'instance prod',
+      '',
+      'The alert text could not be built, see the monitor log.',
+    ].join('\n'));
+  });
+});
+
+describe('alertText', () => {
   it('adds the notification latencies from the result', () => {
     const text = alertText(input({ result: notificationResult() }), IDENTITY);
 
-    expect(lines(text).at(-1)).toBe('event latency: 2100 ms | webhook 3400 ms | loop 3600 ms');
+    expect(lines(text)).toContain('event latency 2.1 s | webhook 3.4 s | loop 3.6 s');
   });
 
-  it('rounds stage durations and latencies to whole milliseconds', () => {
+  it('writes durations for people: milliseconds below a second, one decimal below a minute', () => {
     const row = failedRow({ eventLatencyMs: 2100.6,
       stages: [{ name: 'collector_availability',
         status: 'failed',
-        durationMs: 710.652_002 }] });
-    const result = notificationResult({ notification: { webhook: { latencyMs: 3400.49 },
-      loop: { latencyMs: 3600.5 },
-      unmatched: 0 } });
-    const text = lines(alertText(input({ row,
-      result }), IDENTITY));
+        durationMs: 710.652_002 }],
+      failedStage: 'collector_availability' });
+    const text = lines(alertText(input({ row }), IDENTITY));
 
-    expect(text).toContain('stages: collector_availability 711 ms failed');
-    expect(text.at(-1)).toBe('event latency: 2101 ms | webhook 3400 ms | loop 3601 ms');
+    expect(text).toContain('<b>collector_availability</b> failed after 711 ms');
+    expect(text).toContain('event latency 2.1 s');
   });
 
   it('leaves the latency line out when there is no data', () => {
@@ -151,46 +296,39 @@ describe('alertText', () => {
     expect(text).not.toContain('latency');
   });
 
-  it('STILL FAILING has its own header and the same body', () => {
-    const text = alertText(input({ kind: 'still_failing' }), IDENTITY);
+  it('leaves out the before line when no stage ran before the failed one', () => {
+    const text = alertText(input({ row: failedRow({ eventLatencyMs: undefined,
+      failedStage: 'collector_availability',
+      stages: [{ name: 'collector_availability',
+        status: 'failed',
+        durationMs: 5 }] }) }), IDENTITY);
 
-    expect(lines(text)[0]).toBe('<b>STILL FAILING, now</b> send-and-receive-event [e2e:prod] | outage');
-    expect(lines(text)[1]).toContain('class: event_not_found');
+    expect(text).not.toContain('before');
   });
 
   it('quota_exhausted and rate_limited are warnings', () => {
     for (const errorClass of ['quota_exhausted', 'rate_limited'] as const) {
-      expect(lines(alertText(input({ row: failedRow({ errorClass }) }), IDENTITY))[0]).toMatch(/\| warning$/u);
+      expect(lines(alertText(input({ row: failedRow({ errorClass }) }), IDENTITY))[1]).toBe('instance prod | warning');
     }
   });
 
-  it('a run without a failed stage prints a dash', () => {
+  it('a run without a failed stage says the run failed', () => {
     const text = alertText(input({ row: failedRow({ status: 'aborted',
       errorClass: 'run_hung',
       culprit: 'monitor',
       failedStage: undefined }) }), IDENTITY);
 
-    expect(lines(text)[1]).toBe('stage: - | class: run_hung | culprit: monitor');
+    expect(lines(text)).toContain('<b>run</b> failed');
+    expect(lines(text)).toContain('class run_hung | culprit monitor');
   });
 
-  it('RECOVERED names the failed runs and the length of the episode', () => {
-    const text = alertText(input({ kind: 'recovered',
-      row: failedRow({ status: 'ok',
-        errorClass: undefined }),
-      state: stateRow({ state: 'ok' }) }), IDENTITY);
-
-    expect(lines(text)[0]).toBe('<b>RECOVERED</b> send-and-receive-event [e2e:prod]');
-    expect(text).toContain('after 3 failed runs, 1h 5m 3s (since 2026-03-10T12:00:00.000Z)');
-    expect(text).toContain('run: raaaaaaaaaaaaaaaa #12');
-  });
-
-  it('RECOVERED with one failed run is singular and short episodes print seconds', () => {
+  it('RECOVERED singular and a short episode in seconds', () => {
     const text = alertText(input({ kind: 'recovered',
       now: '2026-03-10T12:00:42.000Z',
       state: stateRow({ state: 'ok',
         episodeFailures: 1 }) }), IDENTITY);
 
-    expect(text).toContain('after 1 failed run, 42s (since');
+    expect(text).toContain('after 1 failed run, down 42.0 s');
   });
 
   it('RECOVERED from a degraded state has no episode line', () => {
@@ -200,32 +338,6 @@ describe('alertText', () => {
         episodeFailures: 0 }) }), IDENTITY);
 
     expect(text).not.toContain('after');
-  });
-
-  it('RECOVERED, degraded adds the codes and the warnings', () => {
-    const text = alertText(input({ kind: 'recovered_degraded',
-      state: stateRow({ state: 'degraded',
-        degraded: ['single_channel'] }),
-      result: notificationResult({ warnings: ['Only the webhook notification arrived'] }) }), IDENTITY);
-
-    expect(lines(text)[0]).toBe('<b>RECOVERED, degraded</b> send-and-receive-event [e2e:prod]');
-    expect(text).toContain('after 3 failed runs');
-    expect(text).toContain('degraded: single_channel');
-    expect(text).toContain('Only the webhook notification arrived');
-  });
-
-  it('DEGRADED has a warning level, the codes and the warnings', () => {
-    const text = alertText(input({ kind: 'degraded',
-      row: failedRow({ status: 'ok',
-        errorClass: undefined,
-        degraded: ['quota_projection'] }),
-      state: stateRow({ state: 'degraded',
-        degraded: ['quota_projection'] }),
-      result: runResultFixture({ warnings: ['Event quota is almost used: 9/10'] }) }), IDENTITY);
-
-    expect(lines(text)[0]).toBe('<b>DEGRADED</b> send-and-receive-event [e2e:prod] | warning');
-    expect(text).toContain('degraded: quota_projection');
-    expect(text).toContain('Event quota is almost used: 9/10');
   });
 
   it.each(['degraded', 'recovered_degraded'] as const)('cuts long warnings of a %s alert to the limit and keeps the codes and the run line', (kind) => {
@@ -239,15 +351,15 @@ describe('alertText', () => {
 
     expect(text.length).toBeLessThanOrEqual(ALERT_TEXT_LIMIT);
     expect(text).toContain('degraded: quota_projection');
-    expect(text).toContain('run: raaaaaaaaaaaaaaaa #12');
+    expect(text).toContain('run #12 raaaaaaaaaaaaaaaa');
     expect(text).toContain('warning 0');
   });
 
-  it('escapes < and & in the instance, the message and the stage line, not the markup', () => {
+  it('escapes < and & in the instance, the message and the stages, not the markup', () => {
     const text = alertText(input({ instanceId: 'a<b&c',
       row: failedRow({ message: 'Title <script> & "x"' }) }), IDENTITY);
 
-    expect(lines(text)[0]).toBe('<b>FAILED</b> send-and-receive-event [e2e:a&lt;b&amp;c] | outage');
+    expect(lines(text)[1]).toBe('instance a&lt;b&amp;c | outage');
     expect(text).toContain('Title &lt;script&gt; &amp; "x"');
     expect(text).not.toContain('<script>');
   });
@@ -260,19 +372,26 @@ describe('alertText', () => {
     expect(text).toContain('token *** rejected');
   });
 
+  it('masks the instance and the text of a storage alert', () => {
+    const redact = createRedactor(['hunter2-secret']);
+
+    expect(storageFailingText('hunter2-secret', 'locked by hunter2-secret', redact)).not.toContain('hunter2-secret');
+  });
+
   it('cuts a long message so that the escaped text fits the limit and ends with an ellipsis', () => {
     const text = alertText(input({ row: failedRow({ message: 'x'.repeat(10_000) }) }), IDENTITY);
 
     expect(text.length).toBeLessThanOrEqual(ALERT_TEXT_LIMIT);
     expect(text.length).toBeGreaterThan(ALERT_TEXT_LIMIT - 5);
     expect(text).toContain('x…\n');
-    expect(text).toContain('stages: collector_availability 120 ms ok');
+    expect(text).toContain('before: collector_availability 120 ms');
+    expect(text).toContain('<b>event_visible</b> failed after 2m 0s');
   });
 
   it('never cuts an entity: a message of ampersands ends in a whole &amp;', () => {
     for (const extra of [0, 1, 2, 3, 4]) {
       const text = alertText(input({ row: failedRow({ message: '&'.repeat(5000 + extra) }) }), IDENTITY);
-      const message = lines(text)[2] ?? '';
+      const message = lines(text).find(line => line.startsWith('&amp;')) ?? '';
 
       expect(text.length).toBeLessThanOrEqual(ALERT_TEXT_LIMIT);
       expect(message.endsWith('&amp;…')).toBe(true);
@@ -280,16 +399,20 @@ describe('alertText', () => {
     }
   });
 
-  it('cuts the stage line once the message is down to an ellipsis', () => {
+  it('cuts the stages line once the message is down to an ellipsis, and never the header or the failed stage', () => {
     const stages = Array.from({ length: 400 }, (_, index) => ({ name: 'cleanup' as const,
       status: 'ok' as const,
       durationMs: index }));
     const text = alertText(input({ row: failedRow({ message: 'short',
-      stages }) }), IDENTITY);
+      stages: [...stages, { name: 'event_visible',
+        status: 'failed',
+        durationMs: 5 }] }) }), IDENTITY);
 
     expect(text.length).toBeLessThanOrEqual(ALERT_TEXT_LIMIT);
-    expect(lines(text)[2]).toBe('…');
-    expect(lines(text).find(line => line.startsWith('stages:'))
+    expect(lines(text)[0]).toBe('🔴 <b>FAILED</b> send-and-receive-event');
+    expect(lines(text)).toContain('<b>event_visible</b> failed after 5 ms');
+    expect(lines(text)).toContain('…');
+    expect(lines(text).find(line => line.startsWith('before:'))
       ?.endsWith('…')).toBe(true);
   });
 

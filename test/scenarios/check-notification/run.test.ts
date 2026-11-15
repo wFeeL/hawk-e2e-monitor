@@ -265,7 +265,7 @@ describe('one channel', () => {
 
     expect(result.status).toBe('ok');
     expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0]).toMatch(/^The loop notification arrived after the pair wait, \d+ ms after the send$/u);
+    expect(result.warnings[0]).toMatch(/^The loop notification arrived after the pair wait, \d+(\.\d)? (ms|s) after the send$/u);
     expect(result.notification?.loop?.latencyMs).toBeGreaterThan(500);
   });
 

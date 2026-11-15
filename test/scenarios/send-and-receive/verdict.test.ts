@@ -98,7 +98,7 @@ describe('decideVerdict', () => {
     expect(verdict.failedStage).toBe('collector_accept');
     expect(verdict.error?.errorClass).toBe('collector_unavailable');
     expect(verdict.error?.culprit).toBe('hawk');
-    expect(verdict.error?.message).toBe('Collector did not confirm the event (Collector http://x/ did not respond: HTTP 503); the event did not appear within 1234 ms');
+    expect(verdict.error?.message).toBe('Collector did not confirm the event (Collector http://x/ did not respond: HTTP 503); the event did not appear within 1.2 s');
   });
 
   it('uncertain accept plus an API failure keeps the API class and says the collector did not confirm either', () => {

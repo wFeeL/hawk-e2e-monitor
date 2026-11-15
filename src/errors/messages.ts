@@ -1,3 +1,4 @@
+import { formatDuration } from '../time/format.js';
 import type { ErrorClass, MessageFacts } from './taxonomy.js';
 
 /**
@@ -61,7 +62,7 @@ function withDetail(base: string, detail: string | undefined): string {
  * @returns English text.
  */
 function notificationTimeoutText(facts: MessageFacts): string {
-  const within = ifSet(facts.waitedMs, ms => ` within ${String(ms)} ms`) ?? '';
+  const within = ifSet(facts.waitedMs, ms => ` within ${formatDuration(ms)}`) ?? '';
 
   return facts.detail === 'webhook_only'
     ? `The webhook did not arrive${within}; with the loop channel off the notifier and the sender cannot be told apart`
@@ -77,7 +78,7 @@ function notificationTimeoutText(facts: MessageFacts): string {
 export function describeError(errorClass: ErrorClass, facts: MessageFacts): string {
   const where = facts.url === undefined ? 'Collector' : `Collector ${facts.url}`;
   const what = codeOrStatus(facts);
-  const waited = ifSet(facts.waitedMs, ms => `waited ${String(ms)} ms`);
+  const waited = ifSet(facts.waitedMs, ms => `waited ${formatDuration(ms)}`);
 
   switch (errorClass) {
     case 'collector_unavailable':
@@ -126,8 +127,8 @@ export function describeError(errorClass: ErrorClass, facts: MessageFacts): stri
     case 'api_error':
       return withDetail('API returned an error', facts.detail);
     case 'event_not_found': {
-      const start = ifSet(facts.waitedMs, ms => `Event did not appear within ${String(ms)} ms`) ?? 'Event did not appear';
-      const lastAnswer = facts.successes === 0 ? undefined : ifSet(facts.lastSuccessAgoMs, ms => `last answer ${String(ms)} ms ago`);
+      const start = ifSet(facts.waitedMs, ms => `Event did not appear within ${formatDuration(ms)}`) ?? 'Event did not appear';
+      const lastAnswer = facts.successes === 0 ? undefined : ifSet(facts.lastSuccessAgoMs, ms => `last answer ${formatDuration(ms)} ago`);
 
       return join(start,
         [': ', ifSet(facts.successes, count => `API answered ${String(count)} times`)],
@@ -140,7 +141,7 @@ export function describeError(errorClass: ErrorClass, facts: MessageFacts): stri
     case 'duplicate_event':
       return join('Event was counted more than once', [': ', ifSet(facts.count, count => `${String(count)} times`)]);
     case 'repeat_not_counted':
-      return join('The repeated event was not counted', [': totalCount is ', ifSet(facts.count, String)], [' after ', ifSet(facts.waitedMs, ms => `${String(ms)} ms`)]);
+      return join('The repeated event was not counted', [': totalCount is ', ifSet(facts.count, String)], [' after ', ifSet(facts.waitedMs, formatDuration)]);
     case 'cleanup_failed':
       return withDetail('The test event was not removed', facts.detail);
     case 'cleanup_refused':
@@ -150,7 +151,7 @@ export function describeError(errorClass: ErrorClass, facts: MessageFacts): stri
     case 'run_timeout':
       return facts.detail === 'cancelled'
         ? 'The run was cancelled'
-        : join('The run did not finish', [' within ', ifSet(facts.waitedMs, ms => `${String(ms)} ms`)]);
+        : join('The run did not finish', [' within ', ifSet(facts.waitedMs, formatDuration)]);
     case 'tunnel_unavailable':
       return withDetail('Tunnel gave no working public address', facts.detail);
     case 'receiver_unreachable':
@@ -170,7 +171,7 @@ export function describeError(errorClass: ErrorClass, facts: MessageFacts): stri
       return join(ifSet(facts.channel, name => `The ${name} notification arrived`) ?? 'The notification arrived',
         [' ', ifSet(facts.count, count => `${String(count)} times`) ?? 'more than once']);
     case 'run_hung':
-      return join('The run did not finish', [' within ', ifSet(facts.waitedMs, ms => `${String(ms)} ms`)], [' and was abandoned', '']);
+      return join('The run did not finish', [' within ', ifSet(facts.waitedMs, formatDuration)], [' and was abandoned', '']);
     case 'monitor_restarted':
       return 'The monitor restarted while the run was in progress';
     case 'monitor_stopped':

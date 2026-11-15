@@ -48,6 +48,15 @@ describe('describeError', () => {
     expect(describeError('run_timeout', {})).toBe('The run did not finish');
   });
 
+  it('prints durations for people, not raw milliseconds', () => {
+    expect(describeError('collector_unavailable', { url: 'http://c/',
+      code: 'TIMEOUT',
+      waitedMs: 10_001 })).toBe('Collector http://c/ did not respond: TIMEOUT, waited 10.0 s');
+    expect(describeError('collector_unavailable', { url: 'http://c/',
+      code: 'TIMEOUT',
+      waitedMs: 340 })).toBe('Collector http://c/ did not respond: TIMEOUT, waited 340 ms');
+  });
+
   it('collector_unavailable text', () => {
     expect(describeError('collector_unavailable', { url: 'http://c/',
       code: 'ECONNREFUSED',
@@ -76,12 +85,12 @@ describe('describeError', () => {
       successes: 20,
       errors: 3,
       lastSuccessAgoMs: 500 }))
-      .toBe('Event did not appear within 120000 ms: API answered 20 times, failed 3 times, last answer 500 ms ago');
+      .toBe('Event did not appear within 2m 0s: API answered 20 times, failed 3 times, last answer 500 ms ago');
     expect(describeError('event_not_found', { waitedMs: 1000,
       successes: 0,
       errors: 5,
       lastSuccessAgoMs: 500 }))
-      .toBe('Event did not appear within 1000 ms: API answered 0 times, failed 5 times');
+      .toBe('Event did not appear within 1.0 s: API answered 0 times, failed 5 times');
   });
 
   it('tunnel_unavailable names the reason', () => {
@@ -106,9 +115,9 @@ describe('describeError', () => {
 
   it('notification_timeout tells the two conclusions apart', () => {
     expect(describeError('notification_timeout', { detail: 'both',
-      waitedMs: 120_000 })).toBe('Neither channel arrived within 120000 ms: the notifier or its queue did not hand the notification to a sender');
+      waitedMs: 120_000 })).toBe('Neither channel arrived within 2m 0s: the notifier or its queue did not hand the notification to a sender');
     expect(describeError('notification_timeout', { detail: 'webhook_only',
-      waitedMs: 120_000 })).toBe('The webhook did not arrive within 120000 ms; with the loop channel off the notifier and the sender cannot be told apart');
+      waitedMs: 120_000 })).toBe('The webhook did not arrive within 2m 0s; with the loop channel off the notifier and the sender cannot be told apart');
     expect(describeError('notification_timeout', {})).toBe('Neither channel arrived: the notifier or its queue did not hand the notification to a sender');
   });
 
@@ -125,7 +134,7 @@ describe('describeError', () => {
   });
 
   it('names the classes of the monitor itself', () => {
-    expect(describeError('run_hung', { waitedMs: 540_000 })).toBe('The run did not finish within 540000 ms and was abandoned');
+    expect(describeError('run_hung', { waitedMs: 540_000 })).toBe('The run did not finish within 9m 0s and was abandoned');
     expect(describeError('monitor_restarted', {})).toBe('The monitor restarted while the run was in progress');
     expect(describeError('monitor_stopped', {})).toBe('The monitor stopped while the run was in progress');
     expect(describeError('alert_rejected', { status: 404,
