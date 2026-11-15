@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import type { FakeStore, StoredEvent } from './store.js';
+import type { FakeProjects } from './projects.js';
 import { decodeTokenKey } from './token.js';
 import { PLAIN_TYPE } from './content-types.js';
 
@@ -105,6 +106,8 @@ export interface FakeCollectorOptions {
   validTokenKey: string;
   /** Answers 402 when it returns true. */
   blocked?: () => boolean;
+  /** Projects whose tokens the collector knows besides the valid one; their events go to their own project. */
+  projects?: FakeProjects;
   /** Port to listen on, to come back at the address of a collector that was closed; random by default. */
   port?: number;
 }
@@ -175,16 +178,17 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
     timers.add(timer);
   };
 
-  const ingest = (catcherType: string, payload: Record<string, unknown>): StoredEvent => store.ingest(projectId, catcherType, payload);
+  const ingest = (target: string, catcherType: string, payload: Record<string, unknown>): StoredEvent => store.ingest(target, catcherType, payload);
 
   /**
    * Stores the event.
    * @param submission Number of the submission.
+   * @param target Project the event goes to.
    * @param catcherType Catcher type of the message.
    * @param payload Event payload.
    * @returns The stored event once stored, `'dropped'` when the knob drops it, undefined when the ingest is delayed and nobody holds the answer.
    */
-  const accept = async (submission: number, catcherType: string, payload: Record<string, unknown>): Promise<StoredEvent | 'dropped' | undefined> => {
+  const accept = async (submission: number, target: string, catcherType: string, payload: Record<string, unknown>): Promise<StoredEvent | 'dropped' | undefined> => {
     const drop = typeof knobs.dropEvents === 'function' ? knobs.dropEvents(submission) : knobs.dropEvents === true;
 
     if (drop) {
@@ -197,7 +201,7 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
       let last: StoredEvent | undefined;
 
       for (let copy = 0; copy < copies; copy += 1) {
-        last = ingest(catcherType, structuredClone(stored));
+        last = ingest(target, catcherType, structuredClone(stored));
       }
 
       return last;
@@ -268,7 +272,9 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
       return jsonAnswer(400, 'Token decoding error');
     }
 
-    if (key !== validTokenKey) {
+    const target = key === validTokenKey ? projectId : options.projects?.byTokenKey(key)?.id;
+
+    if (target === undefined) {
       return jsonAnswer(400, `Integration token invalid: ${key}`);
     }
 
@@ -282,7 +288,7 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
       return jsonAnswer(400, 'Invalid payload JSON format');
     }
 
-    const stored = await accept(submission, catcherType, payload as Record<string, unknown>);
+    const stored = await accept(submission, target, catcherType, payload as Record<string, unknown>);
 
     if (stored !== 'dropped' && knobs.holdReply) {
       await knobs.holdReply(stored);

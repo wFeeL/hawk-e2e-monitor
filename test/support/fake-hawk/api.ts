@@ -3,6 +3,8 @@ import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { createFakeProjects } from './projects.js';
+import type { FakeProjects } from './projects.js';
 import type { FakeRules } from './rules.js';
 import { createFakeRules, defaultRule } from './rules.js';
 import type { FakeStore, StoredEvent } from './store.js';
@@ -16,7 +18,7 @@ const UNAUTHENTICATED_MESSAGE = 'You must be signed in to view this resource.';
 const PAGE_LIMIT = 50;
 const RULE_MUTATIONS = new Set(['CreateNotificationRule', 'UpdateNotificationRule', 'DeleteNotificationRule']);
 const PROJECT_OPERATIONS = new Set(['ProjectToken', 'ProjectDailyEvents', 'Event', 'RemoveEvent', 'NotificationRules', ...RULE_MUTATIONS]);
-const OPERATIONS = new Set(['Login', 'RefreshTokens', 'ProjectToken', 'WorkspaceQuota', 'ProjectDailyEvents', 'Event', 'RemoveEvent', 'NotificationRules', ...RULE_MUTATIONS]);
+const OPERATIONS = new Set(['Login', 'RefreshTokens', 'ProjectToken', 'WorkspaceQuota', 'ProjectDailyEvents', 'Event', 'RemoveEvent', 'NotificationRules', 'CreateProject', 'RemoveProject', 'WorkspaceProjects', ...RULE_MUTATIONS]);
 const ANONYMOUS_OPERATIONS = new Set(['Login', 'RefreshTokens']);
 
 /** A GraphQL error the fake can be told to return. */
@@ -55,6 +57,8 @@ export interface FakeApiKnobs {
   expireAccessOnce?: boolean;
   /** How `RemoveEvent` fails. */
   rejectRemove?: 'false' | 'error' | 'remove_then_timeout';
+  /** Creating a project is refused as the account were not an admin of the workspace. */
+  notAdmin?: boolean;
   /** Replaces `project.token`. */
   projectToken?: string;
   /** Event grouping patterns of the project. */
@@ -83,6 +87,8 @@ export interface FakeApi {
   readonly removeCalls: number;
   /** Notification rules of the project, with the default rule already in. */
   readonly rules: FakeRules;
+  /** Workspaces and projects the API knows. */
+  readonly projects: FakeProjects;
   /**
    * Stops the server and drops connections, including hanging ones.
    * @returns Resolves when the port is released.
@@ -102,6 +108,8 @@ export interface FakeApiOptions {
   password: string;
   /** Integration token returned as `project.token`. */
   token: string;
+  /** Workspaces and projects; the API makes its own with the project in `fake-workspace` next to a `foreign-workspace`. */
+  projects?: FakeProjects;
   /** Rule store to use, shared with a notifier; the API makes its own when absent. The default rule of the account is put into it at start. */
   rules?: FakeRules;
 }
@@ -192,6 +200,17 @@ function eventView(event: StoredEvent, eventId: string): Record<string, unknown>
 export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
   const { store, projectId } = options;
   const knobs: FakeApiKnobs = {};
+  const projects = options.projects ?? createFakeProjects();
+
+  if (!projects.has(projectId)) {
+    projects.addWorkspace('foreign-workspace');
+    projects.addWorkspace('fake-workspace');
+    projects.add({ id: projectId,
+      name: 'fake-project',
+      workspaceId: 'fake-workspace',
+      token: options.token });
+  }
+
   const rules = options.rules ?? createFakeRules({ allowPrivateWebhook: () => knobs.allowPrivateWebhook ?? true,
     resolves: host => knobs.unresolvableHosts?.includes(host) !== true });
 
@@ -249,28 +268,29 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
   };
 
   const workspaceQuota = (id: string): Outcome => {
-    const workspace = knobs.workspace ?? { isBlocked: false,
+    const main = knobs.workspace ?? { isBlocked: false,
       eventsLimit: DEFAULT_EVENTS_LIMIT,
       billingPeriodEventsCount: 0 };
-    const plan = workspace.plan === null ? null : { eventsLimit: workspace.eventsLimit };
 
     return success({
-      workspaces: [
-        { id: 'foreign-workspace',
-          isBlocked: false,
-          billingPeriodEventsCount: 0,
-          plan: { eventsLimit: DEFAULT_EVENTS_LIMIT },
-          projects: [] },
-        { id: 'fake-workspace',
-          isBlocked: workspace.isBlocked,
-          billingPeriodEventsCount: workspace.billingPeriodEventsCount,
-          plan,
-          projects: id === projectId ? [{ id }] : [] },
-      ],
+      workspaces: projects.workspaces().map((workspaceId) => {
+        const limits = workspaceId === 'fake-workspace'
+          ? main
+          : { isBlocked: false,
+              eventsLimit: DEFAULT_EVENTS_LIMIT,
+              billingPeriodEventsCount: 0 };
+
+        return { id: workspaceId,
+          isBlocked: limits.isBlocked,
+          billingPeriodEventsCount: limits.billingPeriodEventsCount,
+          plan: 'plan' in limits && limits.plan === null ? null : { eventsLimit: limits.eventsLimit },
+          projects: projects.inWorkspace(workspaceId).filter(project => project.id === id)
+            .map(project => ({ id: project.id })) };
+      }),
     });
   };
 
-  const findEvents = (search: string): Outcome => {
+  const findEvents = (target: string, search: string): Outcome => {
     // Hawk compiles the raw search as a regex and rejects what does not parse.
     try {
       new RegExp(search);
@@ -278,7 +298,7 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
       return failure('Invalid regular expression pattern', 'INTERNAL_SERVER_ERROR');
     }
 
-    const rows: unknown[] = store.search(projectId, search).slice(0, PAGE_LIMIT)
+    const rows: unknown[] = store.search(target, search).slice(0, PAGE_LIMIT)
       .map(event => ({
         id: event.id,
         count: event.totalCount,
@@ -302,7 +322,7 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
     return success({ project: { dailyEventsPortion: { dailyEvents: rows } } });
   };
 
-  const removeEvent = (eventId: string): Outcome | 'hang' => {
+  const removeEvent = (target: string, eventId: string): Outcome | 'hang' => {
     removeCalls += 1;
 
     if (knobs.rejectRemove === 'false') {
@@ -313,7 +333,7 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
       return failure('Simulated remove failure', 'INTERNAL_SERVER_ERROR');
     }
 
-    const removed = store.remove(projectId, eventId);
+    const removed = store.remove(target, eventId);
 
     if (knobs.rejectRemove === 'remove_then_timeout' && !removeTimeoutUsed) {
       removeTimeoutUsed = true;
@@ -326,9 +346,9 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
       : failure(`Event not found for eventId: ${eventId}`, 'INTERNAL_SERVER_ERROR');
   };
 
-  const notificationRules = (): Outcome => success({
-    project: { id: projectId,
-      notifications: rules.list(projectId).map(rule => ({ ...rule,
+  const notificationRules = (target: string): Outcome => success({
+    project: { id: target,
+      notifications: rules.list(target).map(rule => ({ ...rule,
         threshold: rule.threshold ?? null,
         thresholdPeriod: rule.thresholdPeriod ?? null })) },
   });
@@ -339,8 +359,8 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
     return typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
   };
 
-  const createRule = (variables: Record<string, unknown>): Outcome | 'hang' => {
-    const created = rules.create(projectId, inputOf(variables));
+  const createRule = (target: string, variables: Record<string, unknown>): Outcome | 'hang' => {
+    const created = rules.create(target, inputOf(variables));
 
     if ('code' in created) {
       return failure(created.message, created.code);
@@ -355,8 +375,8 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
     return success({ createProjectNotificationsRule: { id: created.id } });
   };
 
-  const updateRule = (variables: Record<string, unknown>): Outcome => {
-    const updated = rules.update(projectId, inputOf(variables));
+  const updateRule = (target: string, variables: Record<string, unknown>): Outcome => {
+    const updated = rules.update(target, inputOf(variables));
 
     if (updated !== null && 'code' in updated) {
       return failure(updated.message, updated.code);
@@ -365,7 +385,51 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
     return success({ updateProjectNotificationsRule: updated === null ? null : { id: updated.id } });
   };
 
-  const run = (name: string, variables: Record<string, unknown>): Outcome | 'hang' => {
+  const listedProjects = (ids: readonly string[]): Outcome => success({
+    workspaces: projects.workspaces().map(workspaceId => ({ id: workspaceId,
+      projects: projects.inWorkspace(workspaceId)
+        .filter(project => ids.length === 0 || ids.includes(project.id))
+        .map(project => ({ id: project.id,
+          name: project.name,
+          creationDate: new Date(project.creationDate).toISOString() })) })),
+  });
+
+  const createProject = (variables: Record<string, unknown>): Outcome => {
+    if (knobs.notAdmin === true) {
+      return failure('Not enough permissions', 'FORBIDDEN');
+    }
+
+    const created = projects.create(variable(variables, 'workspaceId'), variable(variables, 'name'));
+
+    if (created === undefined) {
+      return failure('No such workspace', 'BAD_USER_INPUT');
+    }
+
+    rules.seed(created.id, defaultRule(options.email));
+
+    return success({ createProject: { id: created.id,
+      name: created.name,
+      token: created.token } });
+  };
+
+  // Hawk checks no rights here: the directive looks at `workspaceId` and `input.projectId`, which this mutation has neither of.
+  const removeProject = (id: string): Outcome => {
+    if (!projects.remove(id)) {
+      return failure('There is no project with that id', 'INTERNAL_SERVER_ERROR');
+    }
+
+    for (const event of store.all(id)) {
+      store.remove(id, event.id);
+    }
+
+    for (const rule of rules.list(id)) {
+      rules.remove(id, rule.id);
+    }
+
+    return success({ removeProject: true });
+  };
+
+  const run = (name: string, variables: Record<string, unknown>, target: string): Outcome | 'hang' => {
     switch (name) {
       case 'Login':
         return variable(variables, 'email') === options.email && variable(variables, 'password') === options.password
@@ -381,29 +445,38 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
         return issueTokens('refreshTokens');
       }
       case 'ProjectToken':
-        return success({ project: { token: knobs.projectToken ?? options.token,
+        return success({ project: { token: (target === projectId ? knobs.projectToken : undefined) ?? projects.get(target)?.token ?? options.token,
           eventGroupingPatterns: (knobs.groupingPatterns ?? []).map(pattern => ({ pattern })) } });
       case 'WorkspaceQuota':
         return workspaceQuota(variable(variables, 'projectId'));
       case 'ProjectDailyEvents':
-        return findEvents(variable(variables, 'search'));
+        return findEvents(target, variable(variables, 'search'));
       case 'Event': {
-        const event = store.get(projectId, variable(variables, 'eventId'));
+        const event = store.get(target, variable(variables, 'eventId'));
 
         return success({ project: { event: event ? eventView(event, event.id) : null } });
       }
       case 'NotificationRules':
-        return notificationRules();
+        return notificationRules(target);
       case 'CreateNotificationRule':
-        return createRule(variables);
+        return createRule(target, variables);
       case 'UpdateNotificationRule':
-        return updateRule(variables);
+        return updateRule(target, variables);
       case 'DeleteNotificationRule':
-        rules.remove(projectId, typeof inputOf(variables).ruleId === 'string' ? inputOf(variables).ruleId as string : '');
+        rules.remove(target, typeof inputOf(variables).ruleId === 'string' ? inputOf(variables).ruleId as string : '');
 
         return success({ deleteProjectNotificationsRule: null });
+      case 'CreateProject':
+        return createProject(variables);
+      case 'RemoveProject':
+        return removeProject(variable(variables, 'projectId'));
+      case 'WorkspaceProjects': {
+        const { ids } = variables;
+
+        return listedProjects(Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : []);
+      }
       default:
-        return removeEvent(variable(variables, 'eventId'));
+        return removeEvent(target, variable(variables, 'eventId'));
     }
   };
 
@@ -432,11 +505,11 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
     // The rule mutations carry the project in `input`, the other operations at the top.
     const requested = RULE_MUTATIONS.has(name) ? variable(inputOf(variables), 'projectId') : variable(variables, 'projectId');
 
-    if (PROJECT_OPERATIONS.has(name) && requested !== projectId) {
+    if (PROJECT_OPERATIONS.has(name) && !projects.has(requested)) {
       return failure('You have no access to this workspace', 'FORBIDDEN');
     }
 
-    return run(name, variables);
+    return run(name, variables, requested);
   };
 
   const respond = (response: ServerResponse, status: number, type: string, body: string): void => {
@@ -516,6 +589,7 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
       return removeCalls;
     },
     rules,
+    projects,
     async close() {
       server.closeAllConnections();
       await new Promise<void>((resolve) => {
