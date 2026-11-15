@@ -70,6 +70,12 @@ describe('classifyNetworkError', () => {
         beforeSend: false });
   });
 
+  it('the heartbeat target is a network error like the bot, never Hawk', () => {
+    expect(classifyNetworkError(fetchFailed('ECONNREFUSED'), 'heartbeat').errorClass).toBe('network_error');
+    expect(classifyNetworkError(fetchFailed('ETIMEDOUT'), 'heartbeat').errorClass).toBe('network_error');
+    expect(classifyNetworkError(fetchFailed('ENOTFOUND'), 'heartbeat').errorClass).toBe('dns_error');
+  });
+
   it('the notify target never blames Hawk: a refused or silent bot is a network error', () => {
     expect(classifyNetworkError(fetchFailed('ECONNREFUSED'), 'notify').errorClass).toBe('network_error');
     expect(classifyNetworkError(fetchFailed('ETIMEDOUT'), 'notify').errorClass).toBe('network_error');

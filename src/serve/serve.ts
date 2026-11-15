@@ -1,6 +1,6 @@
 import { hostname as osHostname } from 'node:os';
 import process from 'node:process';
-import { createAlerter } from '../alerting/alerter.js';
+import { ALERT_BACKLOG_LIMIT_MS, createAlerter } from '../alerting/alerter.js';
 import { createSweeper } from '../cleanup/sweep.js';
 import type { sendNotify } from '../alerting/notify.js';
 import { startApp, StartupError } from '../app.js';
@@ -34,7 +34,6 @@ import type { Closer, RunnerOverrides } from './scenario-setup.js';
 import { every } from '../time/every.js';
 import { MS_PER_DAY, MS_PER_SECOND } from '../time/units.js';
 
-const ALERT_BACKLOG_LIMIT_MS = 1_800_000;
 const ALERT_BACKLOG_METRIC_MS = 15_000;
 
 /** Test hooks and replacements for the parts of `serve` that talk to the outside. */
