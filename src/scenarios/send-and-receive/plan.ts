@@ -15,7 +15,7 @@ export const SCENARIO_NAMES = ['send-and-receive-event', 'check-notification'] a
 /** Name of a scenario in titles and results. */
 export type ScenarioName = typeof SCENARIO_NAMES[number];
 
-/** Name of the first scenario, which F1 runs. */
+/** Name of the scenario that sends an event and waits for it in Hawk. */
 export const SCENARIO_NAME: ScenarioName = 'send-and-receive-event';
 
 /** What the event carries in its `context`, so a mangled title can still be recognized. */

@@ -157,7 +157,7 @@ describe('decideNotificationVerdict', () => {
       message: 'Event not found',
       details: { waitedMs: 500 } });
 
-    it('goes to the collector without a notification, as in F1', () => {
+    it('goes to the collector without a notification, as in send-and-receive-event', () => {
       const result = decideNotificationVerdict(stages(uncertain, notFound), { ...STATE,
         event: undefined }, notification(arrivals([], []), arrivals([], [])), PROJECT);
 
@@ -194,7 +194,7 @@ describe('decideNotificationVerdict', () => {
     expect(result.verdict.error?.errorClass).toBe('notification_timeout');
   });
 
-  it('fails with duplicate_event of F1 before it looks at the notifications', () => {
+  it('fails with duplicate_event of send-and-receive-event before it looks at the notifications', () => {
     const late = stage('cleanup', 'ok', { details: { lateTotalCount: 2 } });
     const twice = arrivals([arrival('webhook', 1300), arrival('webhook', 1400)], [arrival('loop', 1500)]);
     const result = decideNotificationVerdict(stages(late), STATE, notification(BOTH, twice), PROJECT);

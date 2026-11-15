@@ -122,7 +122,7 @@ afterEach(async () => {
 });
 
 describe('desiredRule', () => {
-  it('has the fields of the spec and no secret outside the endpoints', () => {
+  it('has the expected fields and no secret outside the endpoints', () => {
     const rule = desiredRule(depsOf(), address());
 
     expect(rule).toMatchObject({ projectId: hawk.projectId,

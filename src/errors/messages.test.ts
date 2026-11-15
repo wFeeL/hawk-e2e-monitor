@@ -117,7 +117,7 @@ describe('describeError', () => {
     expect(describeError('duplicate_notification', { count: 2 })).toBe('The notification arrived 2 times');
   });
 
-  it('names the monitor classes of F3', () => {
+  it('names the classes of the monitor itself', () => {
     expect(describeError('run_hung', { waitedMs: 540_000 })).toBe('The run did not finish within 540000 ms and was abandoned');
     expect(describeError('monitor_restarted', {})).toBe('The monitor restarted while the run was in progress');
     expect(describeError('monitor_stopped', {})).toBe('The monitor stopped while the run was in progress');

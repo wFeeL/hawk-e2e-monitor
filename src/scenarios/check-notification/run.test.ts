@@ -580,7 +580,7 @@ describe('cancelling from outside', () => {
 });
 
 describe('send-and-receive-event', () => {
-  it('runs as in F1 without any notification setting and sends the backtrace frame', async () => {
+  it('runs as send-and-receive-event without any notification setting and sends the backtrace frame', async () => {
     const { deps } = createTestDeps(hawk);
     const result = await runSendAndReceive(deps, { sequence: 1 });
 

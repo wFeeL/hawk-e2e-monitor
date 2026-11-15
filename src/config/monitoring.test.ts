@@ -20,7 +20,7 @@ function messagesOf(overrides: Record<string, string | undefined>, variable: str
 }
 
 describe('monitoring configuration', () => {
-  it('uses the defaults of the spec', () => {
+  it('uses the default monitoring settings', () => {
     const { monitoring } = expectOk(loadConfig(validEnv())).config;
 
     expect(monitoring).toEqual({

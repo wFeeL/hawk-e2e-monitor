@@ -26,7 +26,7 @@ const EXPECTED_CULPRITS: readonly (readonly [ErrorClass, Culprit])[] = [
 ];
 
 describe('taxonomy', () => {
-  it('culprit table covers every class and matches the spec', () => {
+  it('culprit table covers every class', () => {
     expect(ERROR_CLASSES).toHaveLength(42);
 
     for (const errorClass of ERROR_CLASSES) {

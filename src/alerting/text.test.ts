@@ -11,7 +11,7 @@ const NOW = '2026-03-10T13:05:03.000Z';
 const IDENTITY = (text: string): string => text;
 
 /**
- * Builds a failed run row with the stages of the spec example.
+ * Builds a run row that failed in `event_visible`.
  * @param overrides Fields that replace the defaults.
  * @returns Run row.
  */

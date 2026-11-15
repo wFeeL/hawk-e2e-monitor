@@ -190,9 +190,9 @@ export interface NotificationTestOptions extends TestScenarioOptions {
   resolveAddress?: (signal: AbortSignal) => Promise<PublicAddress>;
 }
 
-/** The parts a notification scenario needs besides the F1 dependencies. */
+/** The parts a notification scenario needs besides the `send-and-receive-event` dependencies. */
 export interface NotificationTestDeps {
-  /** F1 dependencies; their redactor learns the values that `addSecret` gets. */
+  /** Dependencies of `send-and-receive-event`; their redactor learns the values that `addSecret` gets. */
   deps: ScenarioDeps;
   /** Everything `runCheckNotification` takes. */
   notificationDeps: NotificationDeps;
@@ -219,7 +219,7 @@ export interface NotificationTestDeps {
  * Notification waits are 800 ms with a pair wait of 200 ms unless the environment says otherwise.
  * @param hawk Running fake Hawk.
  * @param options Environment overrides, clock, provisioner and address lookup.
- * @returns F1 dependencies and the notification parts.
+ * @returns Dependencies of `send-and-receive-event` and the notification parts.
  */
 export async function createNotificationTestDeps(hawk: FakeHawk, options: NotificationTestOptions = {}): Promise<NotificationTestDeps> {
   const { deps, logger } = createTestDeps(hawk, { ...options,

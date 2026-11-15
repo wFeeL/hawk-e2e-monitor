@@ -249,7 +249,7 @@ describe('loadConfig', () => {
   });
 
   it('RUN_TIMEOUT_MS must cover stages 1-5, cleanup not counted', () => {
-    // The F2 formula is the larger one, so 315000 satisfies both.
+    // The check-notification sum is the larger one, so 315000 satisfies both.
     expectOk(loadConfig(validEnv({ RUN_TIMEOUT_MS: '315000',
       CLEANUP_TIMEOUT_MS: '99999999',
       CHECK_INTERVAL_MS: '200000000',

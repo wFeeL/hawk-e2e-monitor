@@ -31,7 +31,7 @@ function thrownBy(config: Config): unknown {
   throw new Error('Expected notificationSettings to throw');
 }
 
-describe('F2 variables', () => {
+describe('check-notification variables', () => {
   it('maps every variable', () => {
     const { notifications } = load({
       RECEIVER_HOST: '0.0.0.0',
@@ -129,26 +129,26 @@ describe('F2 variables', () => {
   });
 });
 
-describe('F2 combinations', () => {
+describe('check-notification combinations', () => {
   it('the default timeouts pass both timeout formulas', () => {
-    // F2: 15000 + 15000 + 30000 + 10000 + max(120000, 125000) + 120000 = 315000; F1 is 280000.
+    // check-notification: 15000 + 15000 + 30000 + 10000 + max(120000, 125000) + 120000 = 315000; send-and-receive-event: 280000.
     expectOk(loadConfig(validEnv()));
   });
 
-  it('RUN_TIMEOUT_MS must cover the F2 stages', () => {
+  it('RUN_TIMEOUT_MS must cover the check-notification stages', () => {
     expectOk(loadConfig(validEnv({ RUN_TIMEOUT_MS: '315000' })));
     expect(expectErrors(loadConfig(validEnv({ RUN_TIMEOUT_MS: '314999' })))).toEqual([{ variable: 'RUN_TIMEOUT_MS',
       message: 'must be at least the sum of the timeouts of the check-notification stages (315000 ms)' }]);
   });
 
-  it('a long NOTIFICATION_TIMEOUT_MS raises the F2 sum', () => {
+  it('a long NOTIFICATION_TIMEOUT_MS raises the check-notification sum', () => {
     expect(expectErrors(loadConfig(validEnv({ RUN_TIMEOUT_MS: '350000',
       NOTIFICATION_TIMEOUT_MS: '200000',
       NOTIFICATION_PAIR_WAIT_MS: '1000' })))).toEqual([{ variable: 'RUN_TIMEOUT_MS',
       message: 'must be at least the sum of the timeouts of the check-notification stages (395000 ms)' }]);
   });
 
-  it('the F1 formula still applies', () => {
+  it('the send-and-receive-event sum still applies', () => {
     expect(expectErrors(loadConfig(validEnv({ RUN_TIMEOUT_MS: '279999' }))).map(error => error.message))
       .toContain('must be at least the sum of the timeouts of stages 1-5 (280000 ms)');
   });
