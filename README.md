@@ -106,6 +106,34 @@ of the project that would catch the monitor's titles is reported as degraded
   are removed by the sweep. The sweep only removes projects that the monitor
   recorded in its history, that carry its name pattern, sit in the same
   workspace and are older than `SWEEP_MIN_AGE_MS`.
+- **telegram-delivery**, hourly (`TELEGRAM_DELIVERY_INTERVAL_MS`), off by
+  default. Checks that a Hawk notification reaches a Telegram chat. The monitor
+  keeps a third notification rule with two channels: Telegram, through the
+  @codex_bot address of a test group, and a webhook to its receiver. After the
+  event is sent, a bot of yours reads the group and waits for the message of
+  @codex_bot that starts with the run's title (`TELEGRAM_DELIVERY_TIMEOUT_MS`).
+  If the webhook arrived but the message did not, the monitor posts a probe
+  through @codex_bot itself. When the probe arrives, Hawk's Telegram worker is
+  at fault (`telegram_not_delivered`). When the probe does not arrive either,
+  @codex_bot or Telegram is (`telegram_bot_unavailable`).
+
+  Setup:
+  1. Create a bot with @BotFather (`/newbot`). In its settings, enable
+     Bot-to-Bot Communication Mode and turn Group Privacy off (`/setprivacy`,
+     Disable). Without both, the bot does not see messages of @codex_bot.
+  2. Create a group for these checks only and add @codex_bot and your bot. Make
+     your bot an administrator.
+  3. Send `/notify_start` in the group. Put the address @codex_bot answers with
+     into `TELEGRAM_NOTIFY_URL`, and the bot token into `TELEGRAM_BOT_TOKEN`.
+     `TELEGRAM_CHAT_ID` pins the group when the bot is in several chats.
+
+  One process at a time may read a bot token (Telegram answers 409 to a second
+  reader), so do not share the bot between a stand and production. The
+  scenario needs `RECEIVER_SECRET` and a public address, as check-notification
+  does. When the scenario is first added, the other two rules change their
+  excluding list, so check-notification skips its notification stage once for
+  the rule cache warmup. A build older than this scenario deletes the telegram
+  rule as an extra rule when it provisions.
 
 Without `SCENARIOS`, `serve` runs send-and-receive-event, check-notification,
 sourcemaps and sentry-envelope. check-notification then needs
@@ -319,8 +347,11 @@ This repository is a test assignment for CodeX.
   failure to its own error tracking: up to one error per missing channel in
   slow or failed runs. A notification that arrives after its run has finished
   finds no waiting run; the receiver answers it and the monitor only logs it.
-- Telegram delivery is not checked yet. Alerts are sent to @codex_bot; the
-  monitor sees that the bot accepted a message, not that it reached the chat.
+- Alerts of the monitor itself go through @codex_bot. The monitor sees that the
+  bot accepted an alert, not that it reached the chat. Delivery of Hawk's own
+  notifications to Telegram is checked by telegram-delivery.
+- telegram-delivery depends on Bot-to-Bot Communication Mode (Telegram Bot API
+  10.0): without it a bot cannot read messages of another bot.
 - Docker Compose was run with podman 5.7 (`podman compose`), not with Docker.
 - Check timeouts are fixed values from the configuration. The service does not
   compute degradation thresholds from collected data.
