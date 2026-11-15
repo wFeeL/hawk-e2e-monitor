@@ -6,8 +6,9 @@ interface and checks that it passes the whole pipeline: accepted by the
 collector, processed by the workers, visible through the API, and turned into
 a notification.
 
-Two checks exist: send-and-receive-event and check-notification. Each runs as
-a one-off command, and `serve` runs them on a schedule, keeps the history of
+Three checks exist: send-and-receive-event, check-notification and
+endpoints-probe (the collector, the API and Garage without events). Each runs
+as a one-off command, and `serve` runs them on a schedule, keeps the history of
 every run and sends alerts to Telegram through @codex_bot. It also exposes
 Prometheus metrics, ships a Grafana dashboard and pings an external heartbeat.
 
@@ -153,6 +154,11 @@ With `ALERT_NOTIFY_URL` empty, alerts go to the log only.
   notifications through it in the same run.
 - The volume is created owned by the `node` user (uid 1000) of the image. A
   bind mount or a volume created another way needs `chown 1000:1000`.
+- `endpoints-probe` has its own run limit: the sum of its stage timeouts plus
+  10 seconds.
+- With podman, containers restart after a host reboot only when the user
+  services do: `loginctl enable-linger` and `systemctl --user enable
+  podman-restart.service`.
 - Test events left behind by failed or interrupted runs are removed once an
   hour (`SWEEP_INTERVAL_MS`) when they are older than `SWEEP_MIN_AGE_MS`.
 
@@ -190,10 +196,15 @@ files under `deploy/` must stay readable by the containers (755 for
 directories, 644 for files).
 
 With `HEARTBEAT_URL` set (for example a healthchecks.io check), the monitor
-pings it every `HEARTBEAT_INTERVAL_MS` while its scheduler and history work,
-no scenario is stuck, every scenario has finished a run within its interval
-plus its run limit, and alerts are delivered. A missing ping means the monitor
-itself is in trouble.
+pings it every `HEARTBEAT_INTERVAL_MS` while its scheduler and history work, no
+scenario is stuck, alerts are delivered, and every scenario except
+`endpoints-probe` has ended a run with a verdict (passed or failed; an aborted
+run does not count) within its interval plus its run limit (run, cleanup and
+grace time). Configure the check with a period of 1 minute and a grace time of
+15 minutes; the defaults of healthchecks.io (1 day, 1 hour) would report a dead
+monitor a day late. The heartbeat also stops when alerts cannot reach codex.bot
+for more than 30 minutes, so healthchecks reports the monitor as silent in that
+case too.
 
 ### Running a check by hand
 
