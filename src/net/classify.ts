@@ -5,7 +5,23 @@ const TLS_CODE = /^(ERR_TLS_|ERR_SSL_|CERT_|UNABLE_TO_|DEPTH_ZERO_SELF_SIGNED_CE
 const ABORT_NAMES = new Set(['AbortError', 'TimeoutError']);
 
 /** Which side a request goes to. */
-export type NetTarget = 'collector' | 'api';
+export type NetTarget = 'api' | 'collector' | 'notify';
+
+/**
+ * Names the class of a request that got no usable answer.
+ * @param target Which side was called.
+ * @returns The `unavailable` class of Hawk's sides; a bot that is down is a network problem, not Hawk's.
+ */
+export function unavailableClass(target: NetTarget): ErrorClass {
+  switch (target) {
+    case 'collector':
+      return 'collector_unavailable';
+    case 'api':
+      return 'api_unavailable';
+    case 'notify':
+      return 'network_error';
+  }
+}
 
 /** A network failure laid out for the taxonomy. */
 export interface NetworkFailure {
@@ -66,7 +82,7 @@ function firstCode(chain: readonly unknown[]): string | undefined {
  * @returns Class, code and whether the request was certainly not sent.
  */
 export function classifyNetworkError(error: unknown, target: NetTarget): NetworkFailure {
-  const unavailable: ErrorClass = target === 'collector' ? 'collector_unavailable' : 'api_unavailable';
+  const unavailable = unavailableClass(target);
   const chain = chainOf(error);
   const code = firstCode(chain);
 

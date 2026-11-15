@@ -60,4 +60,10 @@ describe('classifyNetworkError', () => {
         code: 'UNKNOWN',
         beforeSend: false });
   });
+
+  it('the notify target never blames Hawk: a refused or silent bot is a network error', () => {
+    expect(classifyNetworkError(fetchFailed('ECONNREFUSED'), 'notify').errorClass).toBe('network_error');
+    expect(classifyNetworkError(fetchFailed('ETIMEDOUT'), 'notify').errorClass).toBe('network_error');
+    expect(classifyNetworkError(fetchFailed('ENOTFOUND'), 'notify').errorClass).toBe('dns_error');
+  });
 });

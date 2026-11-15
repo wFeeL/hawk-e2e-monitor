@@ -1,7 +1,7 @@
 import { CheckError } from '../errors/taxonomy.js';
 import type { MessageFacts } from '../errors/taxonomy.js';
 import type { Clock } from '../time/clock.js';
-import { classifyNetworkError } from './classify.js';
+import { classifyNetworkError, unavailableClass } from './classify.js';
 import type { NetTarget, NetworkFailure } from './classify.js';
 import { withRetry } from './retry.js';
 
@@ -118,7 +118,7 @@ export async function httpRequest(request: HttpRequest, target: NetTarget): Prom
   } catch (error) {
     // An abort reason may be any value, so an aborted signal always means a timeout.
     const failure: NetworkFailure = request.signal.aborted
-      ? { errorClass: target === 'collector' ? 'collector_unavailable' : 'api_unavailable',
+      ? { errorClass: unavailableClass(target),
           code: 'TIMEOUT',
           beforeSend: false }
       : classifyNetworkError(error, target);
