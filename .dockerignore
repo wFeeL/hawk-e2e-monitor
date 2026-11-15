@@ -12,6 +12,5 @@ data
 .github
 .vscode
 .idea
-docs
 *.md
 coverage

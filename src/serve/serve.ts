@@ -362,7 +362,7 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
   const masking = createMasking(config);
   const logger = maskedLogger(deps.logger, masking);
   const exit = deps.exit ?? ((code: number): void => {
-    // eslint-disable-next-line n/no-process-exit -- fatal error policy, see docs/architecture.md
+    // eslint-disable-next-line n/no-process-exit -- a stuck scheduler cannot recover in place, so end the process and let the container restart it
     process.exit(code);
   });
   const background = new AbortController();
