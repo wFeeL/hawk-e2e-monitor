@@ -14,6 +14,14 @@ import { MS_PER_SECOND } from '../time/units.js';
 const REJECTED_LIMIT = 3;
 const LAST_OK_STATUS = 299;
 
+/** Why the monitor does not ping. */
+export interface SkipReason {
+  /** Text that stays the same while the cause stays the same; a change of it is logged. */
+  reason: string;
+  /** Seconds a scenario has been silent; goes to the log next to the reason, not into it. */
+  silentSeconds?: number;
+}
+
 /** What `createHeartbeat` needs. */
 export interface HeartbeatDeps {
   /** Address to ping. */
@@ -29,7 +37,7 @@ export interface HeartbeatDeps {
   /** Time between pings. */
   intervalMs: number;
   /** Tells why the monitor should not ping now; undefined when it is healthy. */
-  reasonToSkip: () => string | undefined;
+  reasonToSkip: () => SkipReason | undefined;
   /** Called when a ping did not reach the service. */
   onFailure?: () => void;
 }
@@ -72,35 +80,36 @@ export interface HeartbeatInput {
 /**
  * Tells why the monitor should not ping the heartbeat service, if it should not.
  * @param input Health of the scheduler and the alerts, and the age of the verdicts.
- * @returns The reason as text, or undefined when the monitor is healthy.
+ * @returns The reason, or undefined when the monitor is healthy.
  */
-export function heartbeatReason(input: HeartbeatInput): string | undefined {
+export function heartbeatReason(input: HeartbeatInput): SkipReason | undefined {
   const { scheduler, alerts } = input;
 
   if (!scheduler.scheduler) {
-    return 'scheduler unhealthy';
+    return { reason: 'scheduler unhealthy' };
   }
 
   if (!scheduler.storage || alerts.storageFailing) {
-    return 'history writes fail';
+    return { reason: 'history writes fail' };
   }
 
   const [stuck] = scheduler.stuck;
 
   if (stuck !== undefined) {
-    return `${stuck} is stuck`;
+    return { reason: `${stuck} is stuck` };
   }
 
   for (const scenario of input.scenarios.filter(name => SCENARIO_TRAITS[name].inHeartbeat)) {
     const ageMs = input.nowWallMs - (input.lastVerdictAt(scenario) ?? input.startedWallMs);
 
     if (ageMs > input.freshnessMs(scenario)) {
-      return `${scenario} has no verdict for ${String(Math.round(ageMs / MS_PER_SECOND))} s`;
+      return { reason: `${scenario} has no verdict`,
+        silentSeconds: Math.round(ageMs / MS_PER_SECOND) };
     }
   }
 
   if ((alerts.backlogAgeMs ?? 0) > ALERT_BACKLOG_LIMIT_MS || alerts.rejectedInRow >= REJECTED_LIMIT) {
-    return 'alerts are not delivered';
+    return { reason: 'alerts are not delivered' };
   }
 
   return undefined;
@@ -149,14 +158,14 @@ export function createHeartbeat(deps: HeartbeatDeps): Heartbeat {
   };
 
   const beatOnce: Heartbeat['beatOnce'] = async (signal) => {
-    const reason = deps.reasonToSkip();
+    const skip = deps.reasonToSkip();
 
-    if (reason !== undefined) {
-      if (reason !== skipped) {
-        logger.warn(`heartbeat is not sent: ${reason}`);
+    if (skip !== undefined) {
+      if (skip.reason !== skipped) {
+        logger.warn(`heartbeat is not sent: ${skip.reason}`, skip.silentSeconds === undefined ? undefined : { silentSeconds: skip.silentSeconds });
       }
 
-      skipped = reason;
+      skipped = skip.reason;
 
       return 'skipped';
     }

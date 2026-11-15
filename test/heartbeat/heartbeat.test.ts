@@ -49,56 +49,66 @@ function healthy(overrides: Partial<HeartbeatInput> = {}): HeartbeatInput {
     ...overrides };
 }
 
+/**
+ * Gives the reason text of `heartbeatReason`.
+ * @param input What the heartbeat judges.
+ * @returns The reason, or undefined when the monitor is healthy.
+ */
+function reasonOf(input: HeartbeatInput): string | undefined {
+  return heartbeatReason(input)?.reason;
+}
+
 describe('heartbeatReason', () => {
   it('is undefined for a healthy monitor', () => {
-    expect(heartbeatReason(healthy())).toBeUndefined();
+    expect(reasonOf(healthy())).toBeUndefined();
   });
 
   it('is undefined when the last run failed, because a verdict is a verdict', () => {
-    expect(heartbeatReason(healthy({ lastVerdictAt: () => NOW - 1000 }))).toBeUndefined();
+    expect(reasonOf(healthy({ lastVerdictAt: () => NOW - 1000 }))).toBeUndefined();
   });
 
   it('names an unhealthy scheduler and failing history writes', () => {
-    expect(heartbeatReason(healthy({ scheduler: { scheduler: false,
+    expect(reasonOf(healthy({ scheduler: { scheduler: false,
       storage: true,
       stuck: [] } }))).toBe('scheduler unhealthy');
-    expect(heartbeatReason(healthy({ scheduler: { scheduler: true,
+    expect(reasonOf(healthy({ scheduler: { scheduler: true,
       storage: false,
       stuck: [] } }))).toBe('history writes fail');
-    expect(heartbeatReason(healthy({ alerts: { backlogAgeMs: null,
+    expect(reasonOf(healthy({ alerts: { backlogAgeMs: null,
       rejectedInRow: 0,
       storageFailing: true } }))).toBe('history writes fail');
   });
 
   it('names a scenario that stays busy', () => {
-    expect(heartbeatReason(healthy({ scheduler: { scheduler: true,
+    expect(reasonOf(healthy({ scheduler: { scheduler: true,
       storage: true,
       stuck: [NOTIFY] } }))).toBe(`${NOTIFY} is stuck`);
   });
 
   it('names a scenario without a fresh verdict and the seconds it has been silent', () => {
-    const reason = heartbeatReason(healthy({ lastVerdictAt: scenario => scenario === SEND ? NOW - FRESH_MS - 1000 : NOW }));
+    const skip = heartbeatReason(healthy({ lastVerdictAt: scenario => scenario === SEND ? NOW - FRESH_MS - 1000 : NOW }));
 
-    expect(reason).toBe(`${SEND} has no verdict for ${String(FRESH_MS / 1000 + 1)} s`);
+    expect(skip).toEqual({ reason: `${SEND} has no verdict`,
+      silentSeconds: FRESH_MS / 1000 + 1 });
   });
 
   it('allows exactly the freshness limit', () => {
-    expect(heartbeatReason(healthy({ lastVerdictAt: () => NOW - FRESH_MS }))).toBeUndefined();
+    expect(reasonOf(healthy({ lastVerdictAt: () => NOW - FRESH_MS }))).toBeUndefined();
   });
 
   it('counts a scenario with no verdict at all from the start of the process', () => {
-    expect(heartbeatReason(healthy({ lastVerdictAt: () => undefined,
+    expect(reasonOf(healthy({ lastVerdictAt: () => undefined,
       startedWallMs: NOW - MINUTE_MS }))).toBeUndefined();
-    expect(heartbeatReason(healthy({ lastVerdictAt: () => undefined,
-      startedWallMs: NOW - FRESH_MS - MINUTE_MS }))).toBe(`${SEND} has no verdict for ${String((FRESH_MS + MINUTE_MS) / 1000)} s`);
+    expect(reasonOf(healthy({ lastVerdictAt: () => undefined,
+      startedWallMs: NOW - FRESH_MS - MINUTE_MS }))).toBe(`${SEND} has no verdict`);
   });
 
   it('judges only the scenarios it is given, each by its own freshness', () => {
     const input = healthy({ scenarios: [NOTIFY],
       lastVerdictAt: scenario => scenario === SEND ? NOW - 1_000_000 : NOW });
 
-    expect(heartbeatReason(input)).toBeUndefined();
-    expect(heartbeatReason(healthy({ freshnessMs: scenario => scenario === NOTIFY ? 1000 : FRESH_MS,
+    expect(reasonOf(input)).toBeUndefined();
+    expect(reasonOf(healthy({ freshnessMs: scenario => scenario === NOTIFY ? 1000 : FRESH_MS,
       lastVerdictAt: () => NOW - MINUTE_MS }))).toContain(NOTIFY);
   });
 
@@ -107,22 +117,22 @@ describe('heartbeatReason', () => {
       lastVerdictAt: scenario => scenario === 'endpoints-probe' ? undefined : NOW,
       startedWallMs: NOW - 1000 * MINUTE_MS });
 
-    expect(heartbeatReason(input)).toBeUndefined();
+    expect(reasonOf(input)).toBeUndefined();
   });
 
   it('names alerts that are not delivered: a backlog over 30 minutes or 3 rejections in a row', () => {
     const limit = 30 * MINUTE_MS;
 
-    expect(heartbeatReason(healthy({ alerts: { backlogAgeMs: limit,
+    expect(reasonOf(healthy({ alerts: { backlogAgeMs: limit,
       rejectedInRow: 0,
       storageFailing: false } }))).toBeUndefined();
-    expect(heartbeatReason(healthy({ alerts: { backlogAgeMs: limit + MINUTE_MS,
+    expect(reasonOf(healthy({ alerts: { backlogAgeMs: limit + MINUTE_MS,
       rejectedInRow: 0,
       storageFailing: false } }))).toBe('alerts are not delivered');
-    expect(heartbeatReason(healthy({ alerts: { backlogAgeMs: null,
+    expect(reasonOf(healthy({ alerts: { backlogAgeMs: null,
       rejectedInRow: 2,
       storageFailing: false } }))).toBeUndefined();
-    expect(heartbeatReason(healthy({ alerts: { backlogAgeMs: null,
+    expect(reasonOf(healthy({ alerts: { backlogAgeMs: null,
       rejectedInRow: 3,
       storageFailing: false } }))).toBe('alerts are not delivered');
   });
@@ -132,6 +142,8 @@ describe('heartbeatReason', () => {
 interface SkipState {
   /** Why not to ping; undefined means healthy. */
   reason: string | undefined;
+  /** Seconds a scenario has been silent, which a reason may carry. */
+  silentSeconds?: number;
 }
 
 /** A heartbeat on a fake clock and a fake service, with what the tests read. */
@@ -168,7 +180,10 @@ async function rig(url?: string): Promise<Rig> {
     redact: createRedactor([target, new URL(target).pathname]),
     httpTimeoutMs: 1000,
     intervalMs: INTERVAL_MS,
-    reasonToSkip: () => state.reason,
+    reasonToSkip: () => state.reason === undefined
+      ? undefined
+      : { reason: state.reason,
+          ...state.silentSeconds === undefined ? {} : { silentSeconds: state.silentSeconds } },
     onFailure: failures });
 
   cleanups.push(async () => {
@@ -212,6 +227,24 @@ describe('beatOnce', () => {
     state.reason = 'scheduler unhealthy';
     await heartbeat.beatOnce(signal);
     expect(logger.lines.filter(line => line.level === 'warn')).toHaveLength(3);
+  });
+
+  it('logs a reason once while only the silent seconds in it grow, and puts them in a field', async () => {
+    const { heartbeat, logger, state } = await rig();
+    const signal = new AbortController().signal;
+
+    state.reason = `${SEND} has no verdict`;
+
+    for (const seconds of [601, 611, 621]) {
+      state.silentSeconds = seconds;
+      expect(await heartbeat.beatOnce(signal)).toBe('skipped');
+    }
+
+    const warnings = logger.lines.filter(line => line.level === 'warn');
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({ msg: `heartbeat is not sent: ${SEND} has no verdict`,
+      silentSeconds: 601 });
   });
 
   it('fails on an answer other than 2xx, calls onFailure and tries again the next time', async () => {

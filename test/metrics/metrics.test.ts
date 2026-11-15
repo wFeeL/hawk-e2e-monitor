@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import perfHooks from 'node:perf_hooks';
+import { describe, expect, it, vi } from 'vitest';
 import { createMetrics } from '../../src/metrics/metrics.js';
 import type { MonitorMetrics } from '../../src/metrics/metrics.js';
 import { TRANSPORTS } from '../../src/clients/collector.js';
@@ -430,5 +431,78 @@ describe('initialize', () => {
     expect(await read('hawk_e2e_runs_total', { scenario: SEND,
       status: 'ok',
       trigger: 'schedule' })).toBe(0);
+  });
+});
+
+/** An observer that can be disconnected. */
+interface Disconnectable {
+  /** Stops the observer. */
+  disconnect: () => void;
+}
+
+/** A monitor that can be disabled. */
+interface Disablable {
+  /** Stops the monitor. */
+  disable: () => boolean;
+}
+
+/** Options of `monitorEventLoopDelay`. */
+type MonitorOptions = Parameters<typeof perfHooks.monitorEventLoopDelay>[0];
+
+describe('stop', () => {
+  it('disconnects the observers and disables the monitors the default metrics start, and may be called twice', () => {
+    const real = { observer: perfHooks.PerformanceObserver,
+      monitor: perfHooks.monitorEventLoopDelay };
+    const observers: Disconnectable[] = [];
+    const monitors: Disablable[] = [];
+
+    Reflect.set(perfHooks, 'PerformanceObserver', class extends real.observer {
+      /**
+       * Creates the observer and keeps it for the test.
+       * @param callback Receives the entries.
+       */
+      constructor(callback: ConstructorParameters<typeof real.observer>[0]) {
+        super(callback);
+        observers.push(this);
+      }
+    });
+    Reflect.set(perfHooks, 'monitorEventLoopDelay', (options?: MonitorOptions) => {
+      const monitor = real.monitor(options);
+
+      monitors.push(monitor);
+
+      return monitor;
+    });
+
+    let metrics: MonitorMetrics;
+
+    try {
+      metrics = createMetrics({ version: '1',
+        logger: memoryLogger() });
+    } finally {
+      Reflect.set(perfHooks, 'PerformanceObserver', real.observer);
+      Reflect.set(perfHooks, 'monitorEventLoopDelay', real.monitor);
+    }
+
+    expect(observers.length).toBeGreaterThan(0);
+    expect(monitors.length).toBeGreaterThan(0);
+
+    const disconnect = observers.map(observer => vi.spyOn(observer, 'disconnect'));
+    const disable = monitors.map(monitor => vi.spyOn(monitor, 'disable'));
+
+    metrics.stop();
+    metrics.stop();
+
+    for (const spy of [...disconnect, ...disable]) {
+      expect(spy).toHaveBeenCalled();
+    }
+  });
+
+  it('is harmless without the default metrics', () => {
+    const { metrics } = fixture();
+
+    expect(() => {
+      metrics.stop();
+    }).not.toThrow();
   });
 });

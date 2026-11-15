@@ -1,3 +1,4 @@
+import perfHooks from 'node:perf_hooks';
 import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
 import { TRANSPORTS } from '../clients/collector.js';
 import { STAGE_NAMES, STAGE_STATUSES } from '../engine/result.js';
@@ -67,6 +68,8 @@ export interface MonitorMetrics {
   setAlertBacklog(seconds: number): void;
   /** Counts a ping that did not reach the heartbeat service. */
   heartbeatFailed(): void;
+  /** Stops the observers and monitors the default metrics started; safe to call again. */
+  stop(): void;
 }
 
 /**
@@ -112,6 +115,49 @@ function statusValue(row: RunRow): number {
  */
 function timestampOf(row: RunRow): number {
   return Date.parse(row.finishedAt ?? row.startedAt) / MS_PER_SECOND;
+}
+
+/**
+ * Registers the default process metrics and returns what stops what they start.
+ * The library keeps its garbage collection observer and its event loop monitor to itself, so the two constructors are wrapped for the moment of the call to catch them.
+ * @param registry Registry that gets the metrics.
+ * @returns Functions that disconnect the observers and disable the monitors.
+ */
+function collectWithStoppers(registry: Registry): Array<() => void> {
+  const stoppers: Array<() => void> = [];
+  const { PerformanceObserver, monitorEventLoopDelay } = perfHooks;
+
+  Reflect.set(perfHooks, 'PerformanceObserver', class extends PerformanceObserver {
+    /**
+     * Creates the observer and remembers how to stop it.
+     * @param callback Receives the entries.
+     */
+    constructor(callback: ConstructorParameters<typeof PerformanceObserver>[0]) {
+      super(callback);
+      stoppers.push(() => {
+        this.disconnect();
+      });
+    }
+  });
+  Reflect.set(perfHooks, 'monitorEventLoopDelay', (options?: Parameters<typeof monitorEventLoopDelay>[0]) => {
+    const monitor = monitorEventLoopDelay(options);
+
+    stoppers.push(() => {
+      monitor.disable();
+    });
+
+    return monitor;
+  });
+
+  try {
+    collectDefaultMetrics({ register: registry,
+      prefix: PREFIX });
+  } finally {
+    Reflect.set(perfHooks, 'PerformanceObserver', PerformanceObserver);
+    Reflect.set(perfHooks, 'monitorEventLoopDelay', monitorEventLoopDelay);
+  }
+
+  return stoppers;
 }
 
 /**
@@ -181,9 +227,10 @@ export function createMetrics(options: MetricsOptions): MonitorMetrics {
   buildInfo.set({ version: options.version }, 1);
   backlog.set(0);
 
+  const stoppers: Array<() => void> = [];
+
   if (options.collectDefault !== false) {
-    collectDefaultMetrics({ register: registry,
-      prefix: PREFIX });
+    stoppers.push(...collectWithStoppers(registry));
   }
 
   const skip = (what: string, row: RunRow): void => {
@@ -329,11 +376,18 @@ export function createMetrics(options: MetricsOptions): MonitorMetrics {
     heartbeatFailures.inc();
   };
 
+  const stop: MonitorMetrics['stop'] = () => {
+    for (const stopper of stoppers.splice(0)) {
+      stopper();
+    }
+  };
+
   return {
     registry,
     onRunFinished,
     initialize,
     setAlertBacklog,
     heartbeatFailed,
+    stop,
   };
 }

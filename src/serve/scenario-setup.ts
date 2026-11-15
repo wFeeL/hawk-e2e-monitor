@@ -6,6 +6,7 @@ import type { Check } from '../http/internal-server.js';
 import type { Logger } from '../log/logger.js';
 import type { PublicAddress } from '../notifications/address.js';
 import type { resolvePublicAddress } from '../notifications/address.js';
+import type { ScenarioName } from '../scenarios/names.js';
 import type { ScenarioRunner } from '../scheduler/scheduler.js';
 import type { History } from '../storage/history.js';
 import type { Clock } from '../time/clock.js';
@@ -15,6 +16,8 @@ export type Closer = () => Promise<void> | void;
 
 /** Test replacements for the parts of a scenario that talk to the outside. */
 export interface RunnerOverrides {
+  /** Replaces the runner of a scenario, for tests of a run that does not end. */
+  runners?: Partial<Record<ScenarioName, ScenarioRunner>>;
   /** Replaces the lookup of the public address. */
   resolveAddress?: typeof resolvePublicAddress;
   /** Poll schedule of the search for the event, short in tests. */
