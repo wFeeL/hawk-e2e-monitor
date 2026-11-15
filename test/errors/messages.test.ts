@@ -30,6 +30,26 @@ describe('blocked port', () => {
   });
 });
 
+describe('collector panic and websocket timeout texts', () => {
+  it('a plain-text 400 says the handler failed and leaves out the URL hint', () => {
+    expect(describeError('collector_unexpected_response', { url: 'http://c:6000/',
+      status: 400,
+      detail: 'Bad request (plain text instead of JSON)' })).toBe('Collector handler failed: HTTP 400 Bad request (plain text instead of JSON)');
+  });
+
+  it('other unexpected responses keep the URL hint', () => {
+    expect(describeError('collector_unexpected_response', { url: 'http://c:6000/',
+      status: 404,
+      detail: 'Not found' })).toBe('Collector http://c:6000/ gave an unexpected response: HTTP 404 (Not found); check HAWK_COLLECTOR_URL');
+  });
+
+  it('a websocket that did not open names the code and the wait', () => {
+    expect(describeError('ws_handshake_failed', { url: 'ws://c:6000/ws',
+      code: 'TIMEOUT',
+      waitedMs: 10_001 })).toBe('WebSocket ws://c:6000/ws did not open: TIMEOUT, waited 10.0 s');
+  });
+});
+
 describe('api_unexpected_response', () => {
   it('names the address and points at HAWK_API_URL', () => {
     expect(describeError('api_unexpected_response', { url: 'https://api.example/graphql',

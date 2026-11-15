@@ -426,7 +426,10 @@ describe('eventVisibleStage on a fake clock', () => {
     const running = runStage(eventVisibleStage(STAGE_MS), fake, { clock,
       runSignal: new AbortController().signal });
 
-    await clock.advance(STAGE_MS + 2000);
+    // Small steps, so a sleep that a loaded machine registers late is still reached.
+    for (let elapsed = 0; elapsed < STAGE_MS + 2000; elapsed += 100) {
+      await clock.advance(100);
+    }
 
     return { result: await running,
       context: fake };

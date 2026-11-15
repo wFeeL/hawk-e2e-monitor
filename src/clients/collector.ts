@@ -223,7 +223,8 @@ export function classifyCollectorReply(status: number, body: string): ReplyVerdi
 
   switch (status) {
     case HttpStatus.badRequest:
-      return reject('bad_request', snippet(status, body));
+      // A panic inside the collector answers plain-text 400; handler answers are always JSON.
+      return reject('collector_unexpected_response', `${body.trim().slice(0, SNIPPET_LENGTH)} (plain text instead of JSON)`);
     case HttpStatus.payloadTooLarge:
       return reject('payload_too_large', snippet(status, body));
     case HttpStatus.tooManyRequests:
@@ -284,10 +285,15 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
   /**
    * Builds the error of a WebSocket that never opened or never started.
    * @param outcome Outcome with its detail.
+   * @param startedMs Start of the exchange on the monotonic clock.
    * @returns `ws_handshake_failed` error.
    */
-  const handshakeError = (outcome: WsOutcome): CheckError => new CheckError('ws_handshake_failed', { url: endpoints.wsUrl,
-    ...outcome.kind === 'handshake_failed' ? { detail: outcome.detail } : {} });
+  const handshakeError = (outcome: WsOutcome, startedMs: number): CheckError => new CheckError('ws_handshake_failed', { url: endpoints.wsUrl,
+    ...outcome.kind === 'handshake_failed' ? { detail: outcome.detail } : {},
+    ...outcome.kind === 'timeout'
+      ? { code: 'TIMEOUT',
+          waitedMs: Math.round(clock.monotonicMs() - startedMs) }
+      : {} });
 
   /**
    * Builds the error for a WebSocket that closed or timed out.
@@ -375,7 +381,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
     }
 
     if (outcome.kind === 'handshake_failed') {
-      throw handshakeError(outcome);
+      throw handshakeError(outcome, startedMs);
     }
 
     throw wsUnavailable(outcome, startedMs);
@@ -441,7 +447,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
 
     if (outcome.kind === 'handshake_failed') {
       return { kind: 'rejected',
-        error: handshakeError(outcome),
+        error: handshakeError(outcome, startedMs),
         attempts };
     }
 
@@ -451,7 +457,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
             cause: wsUnavailable(outcome, startedMs),
             attempts }
         : { kind: 'rejected',
-            error: handshakeError(outcome),
+            error: handshakeError(outcome, startedMs),
             attempts };
     }
 

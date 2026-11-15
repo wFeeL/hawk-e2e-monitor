@@ -1,6 +1,8 @@
 import { formatDuration } from '../time/format.js';
 import type { ErrorClass, MessageFacts } from './taxonomy.js';
 
+const HTTP_BAD_REQUEST = 400;
+
 /**
  * Names a failure by its code or, failing that, its HTTP status.
  * @param facts Facts of the message.
@@ -94,10 +96,15 @@ export function describeError(errorClass: ErrorClass, facts: MessageFacts): stri
     case 'collector_dependency_error':
       return withDetail('Collector reports a broken dependency (Redis or Mongo)', facts.detail);
     case 'collector_unexpected_response':
+      // A plain-text 400 is a panic in the collector, not a wrong address, so no URL hint.
+      if (facts.status === HTTP_BAD_REQUEST) {
+        return join('Collector handler failed', [': ', what], [' ', facts.detail]);
+      }
+
       return join(`${where} gave an unexpected response`, [': ', what], [' (', ifSet(facts.detail, text => `${text})`)],
         ['; check HAWK_COLLECTOR_URL', '']);
     case 'ws_handshake_failed':
-      return join(`WebSocket ${facts.url ?? 'of the collector'} did not open`, [': ', facts.detail]);
+      return join(`WebSocket ${facts.url ?? 'of the collector'} did not open`, [': ', what], [', ', waited], ['; ', facts.detail]);
     case 'auth_invalid_token':
       return withDetail('Collector rejected the integration token', facts.detail);
     case 'bad_request':
