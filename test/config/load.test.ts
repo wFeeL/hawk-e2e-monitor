@@ -121,6 +121,11 @@ describe('loadConfig', () => {
         sourcemaps: { intervalMs: 3_600_000,
           releaseSaveTimeoutMs: 60_000 },
         sentryEnvelope: { intervalMs: 3_600_000 },
+        telegramDelivery: { intervalMs: 3_600_000,
+          senderUsername: 'codex_bot',
+          apiUrl: 'https://api.telegram.org',
+          deliveryTimeoutMs: 120_000,
+          probeTimeoutMs: 30_000 },
       },
     });
   });

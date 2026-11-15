@@ -80,6 +80,11 @@ describe('monitoring configuration', () => {
       sourcemaps: { intervalMs: 3_600_000,
         releaseSaveTimeoutMs: 60_000 },
       sentryEnvelope: { intervalMs: 3_600_000 },
+      telegramDelivery: { intervalMs: 3_600_000,
+        senderUsername: 'codex_bot',
+        apiUrl: 'https://api.telegram.org',
+        deliveryTimeoutMs: 120_000,
+        probeTimeoutMs: 30_000 },
     });
   });
 
@@ -94,7 +99,12 @@ describe('monitoring configuration', () => {
       tokenTimeoutMs: 1000 },
     sourcemaps: { intervalMs: 4_000_000,
       releaseSaveTimeoutMs: 2000 },
-    sentryEnvelope: { intervalMs: 5_000_000 } });
+    sentryEnvelope: { intervalMs: 5_000_000 },
+    telegramDelivery: { intervalMs: 3_600_000,
+      senderUsername: 'codex_bot',
+      apiUrl: 'https://api.telegram.org',
+      deliveryTimeoutMs: 120_000,
+      probeTimeoutMs: 30_000 } });
   });
 
   it('rejects zero and text in the variables of the scenarios', () => {

@@ -62,6 +62,16 @@ export interface WatchdogParts {
   newProjectToken: number;
   /** Stage `release_saved`. */
   releaseSave: number;
+  /** One HTTP request. */
+  http: number;
+  /** Stage `notification_setup`. */
+  notificationSetup: number;
+  /** Wait for the notification of a rule. */
+  notificationTimeout: number;
+  /** Wait for the Telegram message of a run. */
+  telegramDelivery: number;
+  /** Wait for the probe message. */
+  telegramProbe: number;
 }
 
 /**
@@ -76,7 +86,6 @@ export function watchdogOf(scenario: ScenarioWithEvent, parts: WatchdogParts): n
   switch (scenario) {
     case SEND_AND_RECEIVE_EVENT:
     case CHECK_NOTIFICATION:
-    case TELEGRAM_DELIVERY:
       return parts.run + tail;
     case NEW_PROJECT:
       return parts.apiAvailability * 2 + parts.newProjectToken + parts.eventVisible + tail;
@@ -84,6 +93,11 @@ export function watchdogOf(scenario: ScenarioWithEvent, parts: WatchdogParts): n
       return parts.collectorAvailability + parts.apiAvailability + parts.collectorAccept * 2 + parts.releaseSave + parts.eventVisible + tail;
     case SENTRY_ENVELOPE:
       return parts.collectorAvailability + parts.apiAvailability + parts.collectorAccept + parts.eventVisible + tail;
+    case TELEGRAM_DELIVERY:
+      // The API stage and `telegram_ready` share one limit; the group waits for the longest of its three stages, then the probe.
+      return parts.collectorAvailability + parts.apiAvailability * 2 + parts.notificationSetup + parts.collectorAccept
+        + Math.max(parts.eventVisible, parts.notificationTimeout + parts.http, parts.telegramDelivery + 2 * parts.http)
+        + parts.http + parts.telegramProbe + 2 * parts.http + tail;
   }
 }
 
@@ -104,7 +118,7 @@ function intervalOf(config: Config, scenario: ScenarioWithEvent): number {
     case SENTRY_ENVELOPE:
       return scenarios.sentryEnvelope.intervalMs;
     case TELEGRAM_DELIVERY:
-      return monitoring.intervalMs;
+      return scenarios.telegramDelivery.intervalMs;
     case SEND_AND_RECEIVE_EVENT:
     case CHECK_NOTIFICATION:
       return monitoring.intervalMs;
@@ -129,7 +143,12 @@ export function scenarioSettings(config: Config, scenario: ScenarioName): Scenar
     watchdogMs: watchdogOf(scenario, { ...timeouts,
       graceMs: monitoring.watchdogGraceMs,
       newProjectToken: scenarios.newProject.tokenTimeoutMs,
-      releaseSave: scenarios.sourcemaps.releaseSaveTimeoutMs }),
+      releaseSave: scenarios.sourcemaps.releaseSaveTimeoutMs,
+      http: config.httpTimeoutMs,
+      notificationSetup: config.notifications.setupTimeoutMs,
+      notificationTimeout: config.notifications.timeoutMs,
+      telegramDelivery: scenarios.telegramDelivery.deliveryTimeoutMs,
+      telegramProbe: scenarios.telegramDelivery.probeTimeoutMs }),
     cleanupMs: timeouts.cleanup,
     alertAfterFailures: scenario === NEW_PROJECT ? NEW_PROJECT_ALERT_AFTER_FAILURES : monitoring.alertAfterFailures,
     retentionDays: monitoring.retentionDays,

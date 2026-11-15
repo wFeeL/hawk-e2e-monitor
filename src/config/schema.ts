@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { decodeIntegrationToken } from '../hawk/token.js';
 import { blockedPortOf } from '../net/blocked-ports.js';
-import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, NEW_PROJECT, SCENARIO_NAMES, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS } from '../scenarios/names.js';
+import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, NEW_PROJECT, SCENARIO_NAMES, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS, TELEGRAM_DELIVERY } from '../scenarios/names.js';
 import { MAX_DURATION_MS, boundedDurationMs, durationMs } from './duration.js';
 import { PROBE_WATCHDOG_MARGIN_MS, watchdogOf } from './scenario.js';
 
@@ -32,6 +32,10 @@ const DEFAULT_NEW_PROJECT_INTERVAL_MS = 86_400_000;
 const DEFAULT_HOURLY_INTERVAL_MS = 3_600_000;
 const DEFAULT_NEW_PROJECT_TOKEN_TIMEOUT_MS = 180_000;
 const DEFAULT_RELEASE_SAVE_TIMEOUT_MS = 60_000;
+const DEFAULT_TELEGRAM_DELIVERY_TIMEOUT_MS = 120_000;
+const DEFAULT_TELEGRAM_PROBE_TIMEOUT_MS = 30_000;
+const DEFAULT_TELEGRAM_API_URL = 'https://api.telegram.org';
+const DEFAULT_TELEGRAM_SENDER = 'codex_bot';
 const DEFAULT_SCENARIOS = [SEND_AND_RECEIVE_EVENT, CHECK_NOTIFICATION, SOURCEMAPS, SENTRY_ENVELOPE].join(',');
 const DEFAULT_STAGGER_MS = 30_000;
 const DEFAULT_TUNNEL_READY_TIMEOUT_MS = 120_000;
@@ -323,6 +327,17 @@ export const ENV_SHAPE = {
   PROBE_RETENTION_DAYS: pub(intRange(DEFAULT_PROBE_RETENTION_DAYS, 1, MAX_RETENTION_DAYS)),
   GARAGE_URL: pub(httpOrigin().optional()),
   GARAGE_TIMEOUT_MS: pub(durationMs(DEFAULT_GARAGE_TIMEOUT_MS)),
+  TELEGRAM_DELIVERY_INTERVAL_MS: pub(durationMs(DEFAULT_HOURLY_INTERVAL_MS)),
+  // The token and the notify URL are secrets and are checked when the scenario starts, so only a chosen scenario needs them valid.
+  TELEGRAM_BOT_TOKEN: z.string().optional(),
+  TELEGRAM_NOTIFY_URL: z.string().optional(),
+  TELEGRAM_CHAT_ID: pub(z.string().regex(/^-?\d+$/, 'must be a whole number, negative for a group')
+    .optional()),
+  TELEGRAM_SENDER_USERNAME: pub(z.string().regex(/^\w+$/, 'must be a Telegram username: letters, digits and _')
+    .default(DEFAULT_TELEGRAM_SENDER)),
+  TELEGRAM_API_URL: pub(httpOrigin().default(DEFAULT_TELEGRAM_API_URL)),
+  TELEGRAM_DELIVERY_TIMEOUT_MS: pub(durationMs(DEFAULT_TELEGRAM_DELIVERY_TIMEOUT_MS)),
+  TELEGRAM_PROBE_TIMEOUT_MS: pub(durationMs(DEFAULT_TELEGRAM_PROBE_TIMEOUT_MS)),
 };
 
 /**
@@ -399,6 +414,7 @@ function checkScenarioIntervals(env: z.output<typeof baseSchema>, ctx: z.Refinem
     [NEW_PROJECT, 'NEW_PROJECT_INTERVAL_MS'],
     [SOURCEMAPS, 'SOURCEMAPS_INTERVAL_MS'],
     [SENTRY_ENVELOPE, 'SENTRY_ENVELOPE_INTERVAL_MS'],
+    [TELEGRAM_DELIVERY, 'TELEGRAM_DELIVERY_INTERVAL_MS'],
   ] as const;
 
   if (!Array.isArray(env.SCENARIOS)) {
@@ -418,7 +434,12 @@ function checkScenarioIntervals(env: z.output<typeof baseSchema>, ctx: z.Refinem
       run: env.RUN_TIMEOUT_MS,
       graceMs: env.WATCHDOG_GRACE_MS,
       newProjectToken: env.NEW_PROJECT_TOKEN_TIMEOUT_MS,
-      releaseSave: env.RELEASE_SAVE_TIMEOUT_MS });
+      releaseSave: env.RELEASE_SAVE_TIMEOUT_MS,
+      http: env.HTTP_TIMEOUT_MS,
+      notificationSetup: env.NOTIFICATION_SETUP_TIMEOUT_MS,
+      notificationTimeout: env.NOTIFICATION_TIMEOUT_MS,
+      telegramDelivery: env.TELEGRAM_DELIVERY_TIMEOUT_MS,
+      telegramProbe: env.TELEGRAM_PROBE_TIMEOUT_MS });
 
     if (env[name] <= watchdog) {
       ctx.addIssue({ code: 'custom',
@@ -515,7 +536,8 @@ function checkCombinations(env: z.output<typeof baseSchema>, ctx: z.RefinementCt
     'NOTIFICATION_TIMEOUT_MS', 'NOTIFICATION_PAIR_WAIT_MS', 'NOTIFICATION_SETUP_TIMEOUT_MS',
     'CHECK_INTERVAL_MS', 'RULE_CACHE_WARMUP_MS', 'NEW_PROJECT_INTERVAL_MS', 'SOURCEMAPS_INTERVAL_MS', 'SENTRY_ENVELOPE_INTERVAL_MS',
     'NEW_PROJECT_TOKEN_TIMEOUT_MS', 'RELEASE_SAVE_TIMEOUT_MS', 'WATCHDOG_GRACE_MS', 'SCENARIO_STAGGER_MS', 'SWEEP_MIN_AGE_MS', 'RETRY_ATTEMPTS',
-    'PROBE_INTERVAL_MS', 'PROBE_RETENTION_DAYS', 'HISTORY_RETENTION_DAYS', 'GARAGE_TIMEOUT_MS'] as const;
+    'PROBE_INTERVAL_MS', 'PROBE_RETENTION_DAYS', 'HISTORY_RETENTION_DAYS', 'GARAGE_TIMEOUT_MS',
+    'TELEGRAM_DELIVERY_INTERVAL_MS', 'TELEGRAM_DELIVERY_TIMEOUT_MS', 'TELEGRAM_PROBE_TIMEOUT_MS'] as const;
 
   if (!URL.canParse(env.HAWK_API_URL) || numbers.some(name => typeof env[name] !== 'number') || !Array.isArray(env.RETRY_DELAYS_MS)) {
     return;

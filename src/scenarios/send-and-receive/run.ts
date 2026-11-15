@@ -50,6 +50,17 @@ export function scenarioSecrets(config: Config): string[] {
     secrets.push(token.secret, tokenKey(token));
   }
 
+  const { botToken, notifyUrl } = config.scenarios.telegramDelivery;
+
+  if (botToken !== undefined) {
+    secrets.push(botToken);
+  }
+
+  if (notifyUrl !== undefined) {
+    // The path token is masked on its own: Hawk and codex.bot may print it without the rest of the address.
+    secrets.push(notifyUrl, ...URL.canParse(notifyUrl) ? [new URL(notifyUrl).pathname.split('/').at(-1) ?? ''] : []);
+  }
+
   return secrets;
 }
 
