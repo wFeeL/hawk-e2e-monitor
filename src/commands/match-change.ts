@@ -1,6 +1,6 @@
 import type { Config } from '../config/load.js';
 import { existsSync } from 'node:fs';
-import { openDatabase } from '../storage/database.js';
+import { EmptyDatabaseError, openDatabase } from '../storage/database.js';
 import { createHistory } from '../storage/history.js';
 import { MATCH_CHANGED_KEY } from '../storage/keys.js';
 import type { CheckIo } from './check.js';
@@ -39,6 +39,11 @@ export function readMatchChange(config: Config, io: CheckIo): number | undefined
       history.close();
     }
   } catch (error) {
+    // A file with no tables yet holds no time; it is not worth a line.
+    if (error instanceof EmptyDatabaseError) {
+      return undefined;
+    }
+
     io.stderr(`could not read the rule change time from ${databasePath}: ${messageOf(error)}\n`);
 
     return undefined;

@@ -21,6 +21,7 @@ import { openDatabase } from '../../src/storage/database.js';
 import { createHistory } from '../../src/storage/history.js';
 import { MATCH_CHANGED_KEY } from '../../src/storage/keys.js';
 import { existsSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { systemClock } from '../../src/time/clock.js';
 
 const COMMAND: CheckCommand = { kind: 'check',
@@ -407,6 +408,15 @@ describe('runCheckCommand with check-notification', () => {
       expect(stdout).toBe('');
       expect(stderr).toContain('serve is running for');
       expect(hawk.collector.posts).toBe(0);
+    });
+
+    it('an empty database file gives no time and no complaint', async () => {
+      await writeFile(database.path, '');
+
+      const { stderr } = await runNotification({ preProvision: false,
+        env: { RULE_CACHE_WARMUP_MS: '300' } });
+
+      expect(stderr).not.toContain('could not read the rule change time');
     });
 
     it('a check that changes nothing does not create the database', async () => {

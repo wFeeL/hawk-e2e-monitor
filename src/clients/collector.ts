@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { COLLECTOR_PANIC_DETAIL } from '../errors/messages.js';
 import { CheckError } from '../errors/taxonomy.js';
 import type { ErrorClass, MessageFacts } from '../errors/taxonomy.js';
 import { stripTokenSecret } from '../errors/redact.js';
@@ -191,6 +192,17 @@ function snippet(status: number, body: string): string {
 }
 
 /**
+ * Tells the answer of the collector's panic recovery from the 400 page of a proxy.
+ * @param status HTTP status.
+ * @param body Body text.
+ * @returns True for a 400 whose body is exactly `Bad request`.
+ */
+function isHandlerPanic(status: number, body: string): boolean {
+  // A panic inside the collector answers plain-text 400; handler answers are always JSON.
+  return status === HttpStatus.badRequest && body.trim() === 'Bad request';
+}
+
+/**
  * Sorts an answer of the collector (HTTP body or WebSocket frame) into accepted or a class.
  * Statuses 5xx are for the caller to judge.
  * @param status HTTP status, or the `code` of a WebSocket answer.
@@ -239,8 +251,7 @@ export function classifyCollectorReply(status: number, body: string): ReplyVerdi
 
   switch (status) {
     case HttpStatus.badRequest:
-      // A panic inside the collector answers plain-text 400; handler answers are always JSON.
-      return reject('collector_unexpected_response', `${flatSnippet(body)} (plain text instead of JSON)`);
+      return reject('collector_unexpected_response', isHandlerPanic(status, body) ? COLLECTOR_PANIC_DETAIL : snippet(status, body));
     case HttpStatus.payloadTooLarge:
       return reject('payload_too_large', snippet(status, body));
     case HttpStatus.tooManyRequests:
@@ -377,7 +388,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
 
     throw new CheckError('collector_unexpected_response', { ...facts(),
       status,
-      detail: flatSnippet(text) });
+      detail: isHandlerPanic(status, text) ? COLLECTOR_PANIC_DETAIL : flatSnippet(text) });
   };
 
   const probeInvalidToken = async (signal: AbortSignal): Promise<void> => {

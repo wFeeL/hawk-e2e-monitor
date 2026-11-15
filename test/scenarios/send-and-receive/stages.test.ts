@@ -435,7 +435,7 @@ describe('eventVisibleStage on a fake clock', () => {
       context: fake };
   }
 
-  it('a card read at the end of the stage still has an HTTP timeout', async () => {
+  it('an event found at the end of the search gets its card read before the deadline', async () => {
     const { result } = await runOnFakeClock(7500, HTTP_MS - 1);
 
     expect(result.status).toBe('ok');

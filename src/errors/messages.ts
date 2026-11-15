@@ -3,6 +3,9 @@ import type { ErrorClass, MessageFacts } from './taxonomy.js';
 
 const HTTP_BAD_REQUEST = 400;
 
+/** Detail of the collector's plain-text 400, which its panic recovery sends. */
+export const COLLECTOR_PANIC_DETAIL = 'Bad request (plain text instead of JSON)';
+
 /** Plain words for codes that Node reports as bare identifiers. */
 const CODE_WORDS: Readonly<Record<string, string>> = {
   UND_ERR_SOCKET: 'connection closed by the other side',
@@ -120,8 +123,8 @@ export function describeError(errorClass: ErrorClass, facts: MessageFacts): stri
     case 'collector_dependency_error':
       return withDetail('Collector reports a broken dependency (Redis or Mongo)', facts.detail);
     case 'collector_unexpected_response':
-      // A plain-text 400 is a panic in the collector, not a wrong address, so no URL hint.
-      if (facts.status === HTTP_BAD_REQUEST) {
+      // The plain-text 400 of the panic recovery is a failure inside the collector, not a wrong address, so no URL hint.
+      if (facts.status === HTTP_BAD_REQUEST && facts.detail === COLLECTOR_PANIC_DETAIL) {
         return join('Collector handler failed', [': ', what], [' ', facts.detail]);
       }
 
