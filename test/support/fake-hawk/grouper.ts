@@ -1,3 +1,6 @@
+import { SourceMapConsumer } from 'source-map-js';
+import type { FakeRelease } from './releases.js';
+
 const MAX_TITLE = 400;
 const MAX_STRING = 200;
 const MAX_KEYS = 20;
@@ -6,6 +9,7 @@ const MAX_DEPTH = 5;
 const MAX_FRAMES = 20;
 const MAX_SOURCE_LINES = 21;
 const MAX_SOURCE_LINE = 140;
+const MARGIN = 5;
 const FILTERED = '[filtered]';
 const SENSITIVE_KEYS = new Set([
   'auth', 'authorization', 'access_token', 'accesstoken', 'token', 'jwt', 'session', 'sessionid', 'session_id',
@@ -24,6 +28,8 @@ export interface GrouperKnobs {
   unmasked?: boolean;
   /** The JavaScript worker does not run: no `beautifiedUserAgent`. */
   noJsWorker?: boolean;
+  /** The JavaScript worker does not apply source maps. */
+  noSourceMaps?: boolean;
 }
 
 type Json = Record<string, unknown>;
@@ -107,27 +113,73 @@ function beautify(userAgent: string): Record<string, string> {
 }
 
 /**
+ * Maps one frame with the source maps of a release, as `consumeBacktraceFrame` of the JavaScript worker does.
+ * @param frame Frame of the event.
+ * @param release Saved release with its maps.
+ * @returns The frame at its original place with the lines around it, or the frame itself when no map fits.
+ */
+function mapFrame(frame: Json, release: FakeRelease): Json {
+  const file = typeof frame.file === 'string' ? frame.file : '';
+  const saved = release.files.find(candidate => file.includes(candidate.originFileName));
+
+  if (saved === undefined || typeof frame.line !== 'number') {
+    return frame;
+  }
+
+  try {
+    const raw = JSON.parse(saved.content) as Record<string, unknown>;
+    const consumer = new SourceMapConsumer({ ...raw,
+      version: String(raw.version) } as never);
+    const original = consumer.originalPositionFor({ line: frame.line,
+      column: typeof frame.column === 'number' ? frame.column : 0,
+      bias: SourceMapConsumer.LEAST_UPPER_BOUND });
+
+    if (original.source === null || original.line === null) {
+      return frame;
+    }
+
+    const lines = (consumer.sourceContentFor(original.source, true) ?? '').split(/(?:\r\n|\r|\n)/gu);
+
+    return { ...frame,
+      file: original.source,
+      line: original.line,
+      column: original.column,
+      sourceCode: lines.slice(original.line - MARGIN - 1, original.line + MARGIN).map((content, index) => ({ line: Math.max(original.line - MARGIN + index, 1),
+        content })) };
+  } catch {
+    return frame;
+  }
+}
+
+/**
  * Does to a payload what the JavaScript worker and the grouper of Hawk do before it is stored.
  * @param catcherType Catcher type of the message.
  * @param payload Payload as the collector got it.
  * @param knobs Switches that turn a transformation off.
+ * @param releaseOf Finds a saved release of the project by its name, for the source maps.
  * @returns Transformed copy.
  */
-export function groom(catcherType: string, payload: Readonly<Json>, knobs: GrouperKnobs = {}): Json {
+export function groom(catcherType: string, payload: Readonly<Json>, knobs: GrouperKnobs = {}, releaseOf?: (name: string) => FakeRelease | undefined): Json {
   const result = structuredClone(payload) as Json;
-  const { addons, backtrace, title } = result;
+  const { addons, title } = result;
 
   if (catcherType === 'errors/javascript' && knobs.noJsWorker !== true && typeof addons === 'object' && addons !== null
     && typeof (addons as Json).userAgent === 'string') {
     (addons as Json).beautifiedUserAgent = beautify((addons as Json).userAgent as string);
   }
 
+  const release = typeof result.release === 'string' ? releaseOf?.(result.release) : undefined;
+
+  if (catcherType === 'errors/javascript' && knobs.noSourceMaps !== true && release !== undefined && Array.isArray(result.backtrace)) {
+    result.backtrace = result.backtrace.map((frame: Json) => mapFrame(frame, release));
+  }
+
   if (typeof title === 'string') {
     result.title = rightTrim(title, MAX_TITLE);
   }
 
-  if (Array.isArray(backtrace)) {
-    result.backtrace = backtrace.slice(0, MAX_FRAMES).map((frame: Json) => {
+  if (Array.isArray(result.backtrace)) {
+    result.backtrace = result.backtrace.slice(0, MAX_FRAMES).map((frame: Json) => {
       const { sourceCode } = frame;
 
       return Array.isArray(sourceCode)

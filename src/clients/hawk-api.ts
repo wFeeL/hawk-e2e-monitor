@@ -5,7 +5,7 @@ import type { Clock } from '../time/clock.js';
 import { ACCESS_EXPIRED, GraphqlFailure, UNAUTHENTICATED } from './graphql.js';
 import type { GraphqlOperation, GraphqlTransport } from './graphql.js';
 import type { ChannelSettings, NotificationRule, NotificationRuleInput, NotificationRuleUpdate } from '../notifications/types.js';
-import { CREATE_NOTIFICATION_RULE, CREATE_PROJECT, DELETE_NOTIFICATION_RULE, EVENT, PROJECT_DAILY_EVENTS, LOGIN, NOTIFICATION_RULES, PROJECT_TOKEN, REFRESH_TOKENS, REMOVE_EVENT, REMOVE_PROJECT, UPDATE_NOTIFICATION_RULE, WORKSPACE_PROJECTS, WORKSPACE_QUOTA } from './operations.js';
+import { CREATE_NOTIFICATION_RULE, CREATE_PROJECT, DELETE_NOTIFICATION_RULE, EVENT, PROJECT_DAILY_EVENTS, LOGIN, NOTIFICATION_RULES, PROJECT_TOKEN, REFRESH_TOKENS, RELEASE_DETAILS, REMOVE_EVENT, REMOVE_PROJECT, UPDATE_NOTIFICATION_RULE, WORKSPACE_PROJECTS, WORKSPACE_QUOTA } from './operations.js';
 import { MS_PER_SECOND } from '../time/units.js';
 
 const NOT_FOUND_PREFIX = 'Event not found for eventId';
@@ -97,6 +97,22 @@ export interface WorkspaceProjects {
   projects: WorkspaceProject[];
 }
 
+/** A map file of a release. */
+export interface ReleaseFileInfo {
+  /** Name the map was uploaded under. */
+  mapFileName: string;
+  /** Name of the bundle the map describes. */
+  originFileName: string;
+}
+
+/** A release as Hawk shows it. */
+export interface ReleaseDetails {
+  /** Release name. */
+  release: string;
+  /** Map files saved for it. */
+  files: ReleaseFileInfo[];
+}
+
 /** Accounts and waits the client needs. */
 export interface HawkApiOptions {
   /** Sends GraphQL operations. */
@@ -182,6 +198,14 @@ export interface HawkApi {
    * @throws CheckError `api_error` when a creation time cannot be read.
    */
   workspaceProjects(ids: readonly string[], signal: AbortSignal): Promise<WorkspaceProjects[]>;
+  /**
+   * Reads a release of a project.
+   * @param projectId 24-character hex id of the project.
+   * @param release Release name.
+   * @param signal Deadline of the caller.
+   * @returns The release, or null while Hawk answers that it is not found, which is what a release that was just uploaded does.
+   */
+  releaseDetails(projectId: string, release: string, signal: AbortSignal): Promise<ReleaseDetails | null>;
   /**
    * Removes an event; an attempt that removed it but timed out counts as done.
    * @param projectId 24-character hex id of the project.
@@ -415,6 +439,26 @@ interface RawListedProject {
   name: string;
   /** Creation time as text or a number of seconds or milliseconds. */
   creationDate: string | number;
+}
+
+/** Answer of the ReleaseDetails query. */
+interface ReleaseDetailsData {
+  /** Null when the project is not visible. */
+  project: RawReleaseProject | null;
+}
+
+/** The project part of the ReleaseDetails answer. */
+interface RawReleaseProject {
+  /** The release. */
+  releaseDetails: RawRelease;
+}
+
+/** A release in a raw answer. */
+interface RawRelease {
+  /** Release name. */
+  release: string;
+  /** Map files, null when there are none. */
+  files: ReleaseFileInfo[] | null;
 }
 
 /** Answer of the WorkspaceQuota query. */
@@ -751,6 +795,29 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
                 createdAtMs: creationTime(project.creationDate) }]) }]);
   };
 
+  const releaseDetails: HawkApi['releaseDetails'] = async (projectId, release, signal) => {
+    let data: ReleaseDetailsData;
+
+    try {
+      data = await authorized<ReleaseDetailsData>(RELEASE_DETAILS, { projectId,
+        release }, signal);
+    } catch (error) {
+      if (isCheckError(error) && error.errorClass === 'api_query_rejected' && (error.facts.detail ?? '').includes('not found')) {
+        return null;
+      }
+
+      throw error;
+    }
+
+    if (!data.project) {
+      throw new CheckError('api_error', { detail: 'project not found' });
+    }
+
+    return { release: data.project.releaseDetails.release,
+      files: (data.project.releaseDetails.files ?? []).map(file => ({ mapFileName: file.mapFileName,
+        originFileName: file.originFileName })) };
+  };
+
   const removeEvent: HawkApi['removeEvent'] = async (projectId, eventId, signal) => {
     let failedBefore = false;
 
@@ -799,5 +866,6 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
     createProject,
     removeProject,
     workspaceProjects,
+    releaseDetails,
   };
 }

@@ -17,8 +17,8 @@ export interface HttpRequest {
   method: 'GET' | 'POST';
   /** Extra headers. */
   headers?: Readonly<Record<string, string>>;
-  /** Body of a POST. */
-  body?: string;
+  /** Body of a POST; a form is sent as multipart with its own content type. */
+  body?: FormData | string;
   /** Deadline of the whole request, body included. */
   timeoutMs: number;
   /** Reads at most this many bytes of the body and cancels the rest; the whole body when absent. */

@@ -155,3 +155,46 @@ describe('workspaceProjects', () => {
     await expect(api.workspaceProjects([], signal)).rejects.toMatchObject({ errorClass: 'api_error' });
   });
 });
+
+describe('releaseDetails', () => {
+  it('sends the project and the release and returns the saved map files', async () => {
+    const { api, seen } = stub('ReleaseDetails', { project: { releaseDetails: { release: 'rel-1',
+      filesCount: 1,
+      files: [{ mapFileName: 'a.min.js.map',
+        originFileName: 'a.min.js' }] } } });
+
+    expect(await api.releaseDetails('p'.repeat(24), 'rel-1', signal)).toEqual({ release: 'rel-1',
+      files: [{ mapFileName: 'a.min.js.map',
+        originFileName: 'a.min.js' }] });
+    expect(seen).toEqual([{ name: 'ReleaseDetails',
+      variables: { projectId: 'p'.repeat(24),
+        release: 'rel-1' } }]);
+  });
+
+  it('a release with no files is a release with an empty list', async () => {
+    const { api } = stub('ReleaseDetails', { project: { releaseDetails: { release: 'rel-1',
+      filesCount: 0,
+      files: null } } });
+
+    expect(await api.releaseDetails('p', 'rel-1', signal)).toEqual({ release: 'rel-1',
+      files: [] });
+  });
+
+  it('"not found" from Hawk means the release is not there yet', async () => {
+    const { api } = stub('ReleaseDetails', new CheckError('api_query_rejected', { detail: 'Release "rel-1" not found for project (id: p)' }));
+
+    expect(await api.releaseDetails('p', 'rel-1', signal)).toBeNull();
+  });
+
+  it('any other refusal of the query stays an error', async () => {
+    const { api } = stub('ReleaseDetails', new CheckError('api_query_rejected', { detail: 'Cannot query field "x"' }));
+
+    await expect(api.releaseDetails('p', 'rel-1', signal)).rejects.toMatchObject({ errorClass: 'api_query_rejected' });
+  });
+
+  it('a project that Hawk does not show is api_error', async () => {
+    const { api } = stub('ReleaseDetails', { project: null });
+
+    await expect(api.releaseDetails('p', 'rel-1', signal)).rejects.toMatchObject({ errorClass: 'api_error' });
+  });
+});

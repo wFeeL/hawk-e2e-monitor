@@ -47,11 +47,15 @@ describe('integration token', () => {
       postUrl: 'http://localhost:3000/',
       healthUrl: 'http://localhost:3000/health',
       wsUrl: 'ws://localhost:3000/ws',
+      releaseUrl: 'http://localhost:3000/release',
+      envelopeUrl: 'http://localhost:3000/api/0/envelope/',
     });
     expect(collectorEndpoints(token, 'https://host.test/prefix/')).toEqual({
       postUrl: 'https://host.test/prefix/',
       healthUrl: 'https://host.test/prefix/health',
       wsUrl: 'wss://host.test/ws',
+      releaseUrl: 'https://host.test/release',
+      envelopeUrl: 'https://host.test/api/0/envelope/',
     });
   });
 
@@ -61,6 +65,8 @@ describe('integration token', () => {
       postUrl: 'https://abc.k1.hawk.so/',
       healthUrl: 'https://abc.k1.hawk.so/health',
       wsUrl: 'wss://abc.k1.hawk.so/ws',
+      releaseUrl: 'https://abc.k1.hawk.so/release',
+      envelopeUrl: 'https://abc.k1.hawk.so/api/0/envelope/',
     });
   });
 

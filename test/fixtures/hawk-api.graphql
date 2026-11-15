@@ -29,6 +29,7 @@ scalar Upload
 #   projectEventGroupingPattern.ts  ProjectEventGroupingPattern; project.ts Project.eventGroupingPatterns
 #   project.ts    Project.name, Project.creationDate, Mutation.createProject, Mutation.removeProject
 #   typeDefs/index.ts  scalar Upload
+#   project.ts    Project.releaseDetails, ProjectReleaseDetails, SourceMapDataExtended
 # The fragment of the Garage event documents (hawk.garage, src/api/fragments.ts) needs more:
 #   event.ts      SourceCodeLine, Commit, Release, EventBacktraceFrame, EventUser,
 #                 Breadcrumb, EventMarks, the full Event and EventPayload
@@ -186,6 +187,22 @@ type DailyEventsPortion {
   dailyEvents: [DailyEvent]
 }
 
+type SourceMapDataExtended {
+  mapFileName: String!
+  originFileName: String!
+  length: Int
+  uploadDate: DateTime
+}
+
+type ProjectReleaseDetails {
+  release: String!
+  commitsCount: Int!
+  filesCount: Int!
+  timestamp: Float!
+  commits: [Commit!]
+  files: [SourceMapDataExtended!]
+}
+
 type ProjectEventGroupingPattern {
   id: ID!
   pattern: String!
@@ -197,6 +214,7 @@ type Project {
   name: String!
   creationDate: DateTime!
   eventGroupingPatterns: [ProjectEventGroupingPattern]
+  releaseDetails(release: String!): ProjectReleaseDetails!
   notifications: [ProjectNotificationsRule]
   event(eventId: ID!, originalEventId: ID!): Event
   dailyEventsPortion(

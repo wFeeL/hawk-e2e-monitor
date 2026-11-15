@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { buildSourceMap, expectedSourceCode } from '../../../src/scenarios/sourcemaps/map.js';
 import { groom } from './grouper.js';
+import type { FakeRelease } from './releases.js';
 
 /** A frame of a groomed payload. */
 interface Frame {
@@ -91,5 +93,52 @@ describe('groom', () => {
 
     groom('errors/nodejs', payload);
     expect(payload.context.password).toBe('x');
+  });
+
+  describe('source maps', () => {
+    const built = buildSourceMap('rabcdefghijklmno');
+    const release: FakeRelease = { release: 'rel-1',
+      files: [{ mapFileName: `${built.fileName}.map`,
+        originFileName: built.fileName,
+        content: JSON.stringify(built.map) }] };
+    const frame = { file: `https://e2e.invalid/${built.fileName}`,
+      line: 1,
+      column: 0 };
+    const payload = { title: 't',
+      release: 'rel-1',
+      backtrace: [frame] };
+    const found = (name: string): FakeRelease | undefined => name === 'rel-1' ? release : undefined;
+
+    it('maps the frame of a JavaScript event of a saved release to the original place with its lines', () => {
+      const [mapped] = groom('errors/javascript', payload, {}, found).backtrace as Array<Record<string, unknown>>;
+
+      expect(mapped).toMatchObject({ file: 'e2e-source.js',
+        line: 6,
+        column: 0 });
+      expect(mapped?.sourceCode).toEqual(expectedSourceCode(built.sourceLines, 6));
+    });
+
+    it('leaves the frame as it was when nothing can be applied', () => {
+      const same = [frame];
+
+      expect(groom('errors/nodejs', payload, {}, found).backtrace).toEqual(same);
+      expect(groom('errors/javascript', { ...payload,
+        release: 'other' }, {}, found).backtrace).toEqual(same);
+      expect(groom('errors/javascript', payload, { noSourceMaps: true }, found).backtrace).toEqual(same);
+      expect(groom('errors/javascript', payload, {}).backtrace).toEqual(same);
+      expect(groom('errors/javascript', { ...payload,
+        backtrace: [{ ...frame,
+          file: 'https://e2e.invalid/other.min.js' }] }, {}, found).backtrace).toEqual([{ ...frame,
+        file: 'https://e2e.invalid/other.min.js' }]);
+    });
+
+    it('survives a map that is not JSON', () => {
+      const broken: FakeRelease = { release: 'rel-1',
+        files: [{ mapFileName: 'x.map',
+          originFileName: built.fileName,
+          content: '{nope' }] };
+
+      expect(groom('errors/javascript', payload, {}, () => broken).backtrace).toEqual([frame]);
+    });
   });
 });

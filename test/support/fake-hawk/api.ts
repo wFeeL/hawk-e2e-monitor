@@ -17,8 +17,8 @@ const UNAUTHENTICATED_MESSAGE = 'You must be signed in to view this resource.';
 // The ProjectDailyEvents query asks for 50 rows.
 const PAGE_LIMIT = 50;
 const RULE_MUTATIONS = new Set(['CreateNotificationRule', 'UpdateNotificationRule', 'DeleteNotificationRule']);
-const PROJECT_OPERATIONS = new Set(['ProjectToken', 'ProjectDailyEvents', 'Event', 'RemoveEvent', 'NotificationRules', ...RULE_MUTATIONS]);
-const OPERATIONS = new Set(['Login', 'RefreshTokens', 'ProjectToken', 'WorkspaceQuota', 'ProjectDailyEvents', 'Event', 'RemoveEvent', 'NotificationRules', 'CreateProject', 'RemoveProject', 'WorkspaceProjects', ...RULE_MUTATIONS]);
+const PROJECT_OPERATIONS = new Set(['ProjectToken', 'ProjectDailyEvents', 'Event', 'RemoveEvent', 'NotificationRules', 'ReleaseDetails', ...RULE_MUTATIONS]);
+const OPERATIONS = new Set(['Login', 'RefreshTokens', 'ProjectToken', 'WorkspaceQuota', 'ProjectDailyEvents', 'Event', 'RemoveEvent', 'NotificationRules', 'CreateProject', 'RemoveProject', 'WorkspaceProjects', 'ReleaseDetails', ...RULE_MUTATIONS]);
 const ANONYMOUS_OPERATIONS = new Set(['Login', 'RefreshTokens']);
 
 /** A GraphQL error the fake can be told to return. */
@@ -429,6 +429,17 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
     return success({ removeProject: true });
   };
 
+  const releaseDetails = (target: string, release: string): Outcome => {
+    const found = store.releases.find(target, release);
+
+    return found === undefined
+      ? failure(`Release "${release}" not found for project (id: ${target})`, 'BAD_USER_INPUT')
+      : success({ project: { releaseDetails: { release: found.release,
+          filesCount: found.files.length,
+          files: found.files.map(file => ({ mapFileName: file.mapFileName,
+            originFileName: file.originFileName })) } } });
+  };
+
   const run = (name: string, variables: Record<string, unknown>, target: string): Outcome | 'hang' => {
     switch (name) {
       case 'Login':
@@ -466,6 +477,8 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
         rules.remove(target, typeof inputOf(variables).ruleId === 'string' ? inputOf(variables).ruleId as string : '');
 
         return success({ deleteProjectNotificationsRule: null });
+      case 'ReleaseDetails':
+        return releaseDetails(target, variable(variables, 'release'));
       case 'CreateProject':
         return createProject(variables);
       case 'RemoveProject':

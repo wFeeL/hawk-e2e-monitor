@@ -250,5 +250,12 @@ export const WORKSPACE_PROJECTS: GraphqlOperation = {
   idempotent: true,
 };
 
+/** Release of a project with the source map files saved for it; Hawk answers an error while the release is unknown. */
+export const RELEASE_DETAILS: GraphqlOperation = {
+  name: 'ReleaseDetails',
+  document: 'query ReleaseDetails($projectId: ID!, $release: String!) { project(projectId: $projectId) { releaseDetails(release: $release) { release filesCount files { mapFileName originFileName } } } }',
+  idempotent: true,
+};
+
 /** Every operation the monitor sends. */
-export const ALL_OPERATIONS: readonly GraphqlOperation[] = [LOGIN, REFRESH_TOKENS, PROJECT_TOKEN, WORKSPACE_QUOTA, PROJECT_DAILY_EVENTS, EVENT, REMOVE_EVENT, NOTIFICATION_RULES, CREATE_NOTIFICATION_RULE, UPDATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE, CREATE_PROJECT, REMOVE_PROJECT, WORKSPACE_PROJECTS];
+export const ALL_OPERATIONS: readonly GraphqlOperation[] = [LOGIN, REFRESH_TOKENS, PROJECT_TOKEN, WORKSPACE_QUOTA, PROJECT_DAILY_EVENTS, EVENT, REMOVE_EVENT, NOTIFICATION_RULES, CREATE_NOTIFICATION_RULE, UPDATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE, CREATE_PROJECT, REMOVE_PROJECT, WORKSPACE_PROJECTS, RELEASE_DETAILS];

@@ -6,10 +6,13 @@ import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import type { FakeStore, StoredEvent } from './store.js';
 import type { FakeProjects } from './projects.js';
+import type { FakeReleaseFile } from './releases.js';
 import { decodeTokenKey } from './token.js';
 import { PLAIN_TYPE } from './content-types.js';
 
 const MAX_BODY_BYTES = 1_000_000;
+// The `Bearer ` prefix of the Authorization header.
+const BEARER_LENGTH = 7;
 const JSON_TYPE = 'text/json; charset=utf8';
 
 /** A canned collector answer. */
@@ -63,6 +66,12 @@ export interface FakeCollectorKnobs {
   duplicateOnAccept?: boolean;
   /** Delay before the event reaches the store (real timers). */
   processingDelayMs?: number;
+  /** Replaces the answer of `/release`; the release is NOT taken. */
+  releaseReply?: CollectorReplyOverride;
+  /** Time the release worker takes to save a release after the collector said 200, ms (real timers). */
+  releaseSaveDelayMs?: number;
+  /** The collector says 200 to a release and the worker never saves it. */
+  dropReleases?: boolean;
   /** Rewrites the payload before it is stored. */
   mutatePayload?: (payload: Record<string, unknown>) => Record<string, unknown>;
   /**
@@ -84,6 +93,8 @@ export interface FakeCollector {
   readonly posts: number;
   /** Number of WebSocket messages received. */
   readonly wsMessages: number;
+  /** Number of `POST /release` requests of any outcome. */
+  readonly releasePosts: number;
   /**
    * Counts open WebSocket connections.
    * @returns Size of the server's client set.
@@ -140,6 +151,22 @@ function jsonAnswer(code: number, message: string): Answer {
 }
 
 /**
+ * Finds the bundle a map describes, as the release worker does.
+ * @param mapName Name of the map file.
+ * @param content Text of the map.
+ * @returns The `file` of the map, or the map name without `.map`.
+ */
+function originOf(mapName: string, content: string): string {
+  try {
+    const { file } = JSON.parse(content) as Record<string, unknown>;
+
+    return typeof file === 'string' ? file : mapName.replace(/\.map$/u, '');
+  } catch {
+    return mapName.replace(/\.map$/u, '');
+  }
+}
+
+/**
  * Reads a string field that must be a string when present.
  * @param record Parsed body.
  * @param key Field name.
@@ -167,6 +194,7 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
   const wss = new WebSocketServer({ noServer: true });
   let posts = 0;
   let wsMessages = 0;
+  let releasePosts = 0;
   let submissions = 0;
 
   const later = (action: () => void, delayMs: number): void => {
@@ -341,6 +369,79 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
       delayMs: 0 });
   };
 
+  /**
+   * Answers a release upload the way the release handler of the collector does, then saves it as the release worker would.
+   * @param raw Request body.
+   * @param headers Request headers.
+   * @returns Answer to send.
+   */
+  const handleRelease = async (raw: Buffer, headers: IncomingMessage['headers']): Promise<Answer> => {
+    const auth = headers.authorization ?? '';
+
+    if (auth.length < BEARER_LENGTH) {
+      return jsonAnswer(400, 'Provide Authorization header');
+    }
+
+    let form: FormData;
+
+    try {
+      form = await new Response(new Uint8Array(raw), { headers: new Headers([['content-type', headers['content-type'] ?? '']]) }).formData();
+    } catch {
+      return jsonAnswer(400, 'Multipart form is not provided');
+    }
+
+    const key = decodeTokenKey(auth.slice(BEARER_LENGTH));
+
+    if (key === undefined) {
+      return jsonAnswer(400, 'Token decoding error');
+    }
+
+    const releases = form.getAll('release');
+
+    if (releases.length !== 1 || typeof releases[0] !== 'string') {
+      return jsonAnswer(400, releases.length === 0 ? 'provide `release` form value' : 'provide single `release` form value');
+    }
+
+    const target = key === validTokenKey ? projectId : options.projects?.byTokenKey(key)?.id;
+
+    if (target === undefined) {
+      return jsonAnswer(400, `Integration token invalid: ${key}`);
+    }
+
+    if (options.blocked?.() === true) {
+      return jsonAnswer(402, 'Project has exceeded the events limit');
+    }
+
+    const files: FakeReleaseFile[] = [];
+
+    for (const [, value] of form.entries()) {
+      if (typeof value !== 'string') {
+        const content = await value.text();
+
+        if (content.trim() !== '') {
+          files.push({ mapFileName: value.name,
+            originFileName: originOf(value.name, content),
+            content });
+        }
+      }
+    }
+
+    if (knobs.dropReleases !== true) {
+      const save = (): void => {
+        store.releases.save(target, releases[0] as string, files);
+      };
+
+      if (knobs.releaseSaveDelayMs === undefined || knobs.releaseSaveDelayMs <= 0) {
+        save();
+      } else {
+        later(save, knobs.releaseSaveDelayMs);
+      }
+    }
+
+    return { ...jsonAnswer(200, 'OK'),
+      delayMs: knobs.replyDelayMs ?? 0 };
+  };
+
   const notFound = (response: ServerResponse): void => {
     send(response, { status: 404,
       body: 'Not found',
@@ -362,6 +463,37 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
 
     if (pathname === '/health') {
       health(response);
+
+      return;
+    }
+
+    if (pathname === '/release' && request.method === 'POST') {
+      releasePosts += 1;
+
+      const parts: Buffer[] = [];
+
+      request.on('data', (chunk: Buffer) => parts.push(chunk));
+      request.on('end', () => {
+        const override = knobs.releaseReply;
+
+        if (override) {
+          send(response, { status: override.status,
+            body: override.body,
+            contentType: override.contentType ?? JSON_TYPE,
+            delayMs: 0 });
+
+          return;
+        }
+
+        handleRelease(Buffer.concat(parts), request.headers).then((answer) => {
+          send(response, answer);
+        }, () => {
+          send(response, { status: 500,
+            body: 'Internal error',
+            contentType: PLAIN_TYPE,
+            delayMs: 0 });
+        });
+      });
 
       return;
     }
@@ -470,6 +602,9 @@ export async function startFakeCollector(options: FakeCollectorOptions): Promise
     },
     get wsMessages() {
       return wsMessages;
+    },
+    get releasePosts() {
+      return releasePosts;
     },
     wsClients: () => wss.clients.size,
     async close() {

@@ -86,6 +86,24 @@ export interface CollectorClient {
    * @returns Whether the collector took the event.
    */
   send(message: CollectorMessage, transport: Transport, signal: AbortSignal): Promise<SendOutcome>;
+  /**
+   * Uploads a release with one source map file.
+   * A 200 only means the collector published it; the file shows up in Hawk later.
+   * @param token Integration token of the project, sent as a bearer.
+   * @param release Release name.
+   * @param file Source map file.
+   * @param signal Aborts the upload.
+   * @returns Whether the collector took the release; a refusal that is not a known class is `release_rejected`.
+   */
+  uploadRelease(token: string, release: string, file: ReleaseFile, signal: AbortSignal): Promise<SendOutcome>;
+}
+
+/** A source map file to upload with a release. */
+export interface ReleaseFile {
+  /** Name of the file, such as `bundle.js.map`. */
+  name: string;
+  /** Text of the file. */
+  content: string;
 }
 
 /** Inputs of the collector client. */
@@ -475,7 +493,76 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
           attempts };
   };
 
+  const uploadRelease: CollectorClient['uploadRelease'] = async (token, release, file, signal) => {
+    const startedMs = clock.monotonicMs();
+    const facts = (): MessageFacts => ({ url: endpoints.releaseUrl,
+      waitedMs: Math.round(clock.monotonicMs() - startedMs) });
+    const form = new FormData();
+
+    form.append('release', release);
+    form.append('file', new Blob([file.content], { type: 'application/json' }), file.name);
+
+    let result;
+
+    try {
+      result = await requestWithRetry({ url: endpoints.releaseUrl,
+        method: 'POST',
+        headers: Object.fromEntries([['authorization', `Bearer ${token}`]]),
+        body: form,
+        timeoutMs: httpTimeoutMs,
+        signal }, 'collector', { attempts: maxAttempts,
+        delaysMs,
+        clock,
+        retryStatus: () => false,
+        retryNetwork: failure => failure.beforeSend });
+    } catch (error) {
+      if (!(error instanceof NetworkError)) {
+        throw error;
+      }
+
+      const checkError = networkFailureToCheckError(error, facts());
+
+      return error.failure.beforeSend
+        ? { kind: 'rejected',
+            error: checkError,
+            attempts: error.attempts }
+        : { kind: 'uncertain',
+            cause: checkError,
+            attempts: error.attempts };
+    }
+
+    const { response, attempts } = result;
+
+    if (response.status >= HttpStatus.internalServerError) {
+      return { kind: 'uncertain',
+        cause: new CheckError('collector_unavailable', { ...facts(),
+          status: response.status }),
+        attempts };
+    }
+
+    const verdict = classifyCollectorReply(response.status, response.text);
+
+    if (verdict.kind === 'accepted') {
+      return { kind: 'accepted',
+        attempts };
+    }
+
+    // The classes of an event refusal that mean the same for a release stay; the rest says only that the upload was refused.
+    const keeps: readonly ErrorClass[] = ['auth_invalid_token', 'quota_exhausted', 'rate_limited', 'unknown_402', 'collector_dependency_error', 'ip_blacklisted'];
+
+    return { kind: 'rejected',
+      error: keeps.includes(verdict.errorClass)
+        ? new CheckError(verdict.errorClass, { url: endpoints.releaseUrl,
+          status: response.status,
+          detail: verdict.message })
+        : new CheckError('release_rejected', { url: endpoints.releaseUrl,
+          status: response.status,
+          detail: verdict.message }),
+      attempts };
+  };
+
   return { health,
     probeInvalidToken,
+    uploadRelease,
     send: async (message, transport, signal) => transport === 'http' ? sendHttp(message, signal) : sendWs(message, signal) };
 }

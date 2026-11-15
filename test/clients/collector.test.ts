@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CheckError } from '../../src/errors/taxonomy.js';
 import type { ErrorClass } from '../../src/errors/taxonomy.js';
 import { collectorEndpoints, decodeIntegrationToken } from '../../src/hawk/token.js';
@@ -409,5 +409,86 @@ describe('probeInvalidToken', () => {
 
     expect(error.errorClass).toBe('collector_unavailable');
     expect(error.facts.code).toBe('TIMEOUT');
+  });
+});
+
+const MAP_FILE = { name: 'e2e-rabc.min.js.map',
+  content: JSON.stringify({ version: 3,
+    file: 'e2e-rabc.min.js',
+    sources: ['e2e-source.js'],
+    sourcesContent: ['x'],
+    names: [],
+    mappings: 'AAKA' }) };
+
+describe('uploadRelease', () => {
+  it('sends the release and the file with the token as a bearer, and the collector keeps them', async () => {
+    const outcome = accepted(await clientFor().uploadRelease(VALID_TOKEN, 'rel-1', MAP_FILE, signal));
+
+    expect(outcome.attempts).toBe(1);
+    expect(collector.releasePosts).toBe(1);
+    await vi.waitFor(() => {
+      expect(store.releases.find(PROJECT_ID, 'rel-1')?.files.map(file => file.mapFileName)).toEqual(['e2e-rabc.min.js.map']);
+    });
+    expect(store.releases.find(PROJECT_ID, 'rel-1')?.files[0]?.originFileName).toBe('e2e-rabc.min.js');
+  });
+
+  it('posts to the release path of the root, not to the event path', async () => {
+    await clientFor().uploadRelease(VALID_TOKEN, 'rel-1', MAP_FILE, signal);
+
+    expect(collector.posts).toBe(0);
+    expect(collector.releasePosts).toBe(1);
+  });
+
+  it('an unknown token is auth_invalid_token', async () => {
+    const other = encodeToken(randomUUID(), randomUUID());
+    const outcome = rejected(await clientFor().uploadRelease(other, 'rel-1', MAP_FILE, signal));
+
+    expect(outcome.error.errorClass).toBe('auth_invalid_token');
+    expect(outcome.error.message).not.toContain(decodeTokenKey(other) ?? 'unreachable');
+  });
+
+  it.each([
+    ['a refusal of the release', 400, '{"code":400,"error":true,"message":"provide `release` form value"}', 'release_rejected'],
+    ['a plain 400', 400, 'Bad request', 'release_rejected'],
+    ['the event limit', 402, '{"code":402,"error":true,"message":"Project has exceeded the events limit"}', 'quota_exhausted'],
+    ['an unexpected status', 404, 'Not found', 'release_rejected'],
+    ['an answer of 200 that says error', 200, '{"code":200,"error":true,"message":"x"}', 'release_rejected'],
+  ] as const)('%s is %s', async (_name, status, body, expected) => {
+    collector.knobs.releaseReply = { status,
+      body };
+
+    const outcome = rejected(await clientFor().uploadRelease(VALID_TOKEN, 'rel-1', MAP_FILE, signal));
+
+    expect(outcome.error.errorClass).toBe(expected);
+
+    if (expected === 'release_rejected') {
+      expect(outcome.error.facts.status).toBe(status);
+    }
+  });
+
+  it('a 5xx answer is uncertain, because the release may have been published', async () => {
+    collector.knobs.releaseReply = { status: 503,
+      body: 'down' };
+
+    const outcome = uncertain(await clientFor().uploadRelease(VALID_TOKEN, 'rel-1', MAP_FILE, signal));
+
+    expect(outcome.cause.errorClass).toBe('collector_unavailable');
+    expect(collector.releasePosts).toBe(1);
+  });
+
+  it('a collector that is not there is rejected before the send, after the attempts', async () => {
+    const url = await closeCollector();
+    const outcome = rejected(await clientFor(1000, url).uploadRelease(VALID_TOKEN, 'rel-1', MAP_FILE, signal));
+
+    expect(outcome.error.errorClass).toBe('collector_unavailable');
+    expect(outcome.attempts).toBe(3);
+  });
+
+  it('a request that times out after the send is uncertain and not repeated', async () => {
+    collector.knobs.replyDelayMs = 400;
+
+    const outcome = uncertain(await clientFor(100).uploadRelease(VALID_TOKEN, 'rel-1', MAP_FILE, signal));
+
+    expect(outcome.attempts).toBe(1);
   });
 });

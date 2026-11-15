@@ -9,10 +9,10 @@ import type { FakeApiError, FakeHawk } from '../support/fake-hawk/index.js';
 import { systemClock } from '../../src/time/clock.js';
 import { GraphqlFailure, createGraphqlTransport } from '../../src/clients/graphql.js';
 import type { GraphqlOperation, GraphqlTransport } from '../../src/clients/graphql.js';
-import { ALL_OPERATIONS, CREATE_NOTIFICATION_RULE, CREATE_PROJECT, REMOVE_PROJECT, WORKSPACE_PROJECTS, DELETE_NOTIFICATION_RULE, EVENT, PROJECT_DAILY_EVENTS, LOGIN, NOTIFICATION_RULES, PROJECT_TOKEN, REFRESH_TOKENS, REMOVE_EVENT, UPDATE_NOTIFICATION_RULE, WORKSPACE_QUOTA } from '../../src/clients/operations.js';
+import { ALL_OPERATIONS, CREATE_NOTIFICATION_RULE, CREATE_PROJECT, RELEASE_DETAILS, REMOVE_PROJECT, WORKSPACE_PROJECTS, DELETE_NOTIFICATION_RULE, EVENT, PROJECT_DAILY_EVENTS, LOGIN, NOTIFICATION_RULES, PROJECT_TOKEN, REFRESH_TOKENS, REMOVE_EVENT, UPDATE_NOTIFICATION_RULE, WORKSPACE_QUOTA } from '../../src/clients/operations.js';
 
 const FIXTURE = new URL('../fixtures/hawk-api.graphql', import.meta.url);
-const OPERATION_COUNT = 14;
+const OPERATION_COUNT = 15;
 
 /** What the Login mutation returns inside `data`. */
 interface LoginData {
@@ -124,7 +124,7 @@ describe('operations', () => {
 
   it('lists all the operations', () => {
     expect(ALL_OPERATIONS).toHaveLength(OPERATION_COUNT);
-    expect(ALL_OPERATIONS).toEqual([LOGIN, REFRESH_TOKENS, PROJECT_TOKEN, WORKSPACE_QUOTA, PROJECT_DAILY_EVENTS, EVENT, REMOVE_EVENT, NOTIFICATION_RULES, CREATE_NOTIFICATION_RULE, UPDATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE, CREATE_PROJECT, REMOVE_PROJECT, WORKSPACE_PROJECTS]);
+    expect(ALL_OPERATIONS).toEqual([LOGIN, REFRESH_TOKENS, PROJECT_TOKEN, WORKSPACE_QUOTA, PROJECT_DAILY_EVENTS, EVENT, REMOVE_EVENT, NOTIFICATION_RULES, CREATE_NOTIFICATION_RULE, UPDATE_NOTIFICATION_RULE, DELETE_NOTIFICATION_RULE, CREATE_PROJECT, REMOVE_PROJECT, WORKSPACE_PROJECTS, RELEASE_DETAILS]);
   });
 
   it.each(ALL_OPERATIONS.map(operation => [operation.name, operation] as const))(
@@ -164,6 +164,7 @@ describe('operations', () => {
     expect(ALL_OPERATIONS.filter(operation => !operation.idempotent).map(operation => operation.name))
       .toEqual(['RefreshTokens', 'RemoveEvent', 'CreateNotificationRule', 'CreateProject', 'RemoveProject']);
     expect(WORKSPACE_PROJECTS.idempotent).toBe(true);
+    expect(RELEASE_DETAILS.idempotent).toBe(true);
   });
 
   it('CreateNotificationRule is not idempotent', () => {
