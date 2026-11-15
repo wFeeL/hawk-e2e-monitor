@@ -103,6 +103,7 @@ export async function startFakeHawk(): Promise<FakeHawk> {
 export function fakeHawkEnv(hawk: FakeHawk): Record<string, string> {
   return {
     INSTANCE_ID: 'fake',
+    SCENARIOS: 'send-and-receive-event',
     HAWK_API_URL: hawk.api.url,
     HAWK_COLLECTOR_URL: hawk.collector.url,
     HAWK_INTEGRATION_TOKEN: hawk.token,

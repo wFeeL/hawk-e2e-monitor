@@ -27,6 +27,8 @@ export function validEnv(overrides: Record<string, string | undefined> = {}): Re
     HAWK_EMAIL: 'monitor@example.com',
     HAWK_PASSWORD: 'test-password',
     RECEIVER_SECRET: TEST_RECEIVER_SECRET,
+    // The default list holds scenarios that need a receiver address, so tests name one scenario unless they say otherwise.
+    SCENARIOS: 'send-and-receive-event',
     ...overrides,
   };
 }

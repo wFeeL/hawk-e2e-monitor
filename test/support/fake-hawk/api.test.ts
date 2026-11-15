@@ -662,6 +662,7 @@ describe('fake hawk', () => {
       expect(hawk.projectId).toMatch(/^[0-9a-f]{24}$/u);
       expect(fakeHawkEnv(hawk)).toEqual({
         INSTANCE_ID: 'fake',
+        SCENARIOS: 'send-and-receive-event',
         HAWK_API_URL: hawk.api.url,
         HAWK_COLLECTOR_URL: hawk.collector.url,
         HAWK_INTEGRATION_TOKEN: hawk.token,

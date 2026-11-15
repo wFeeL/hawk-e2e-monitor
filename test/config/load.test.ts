@@ -108,6 +108,13 @@ describe('loadConfig', () => {
         sweepIntervalMs: 3_600_000,
         sweepMinAgeMs: 900_000,
       },
+      scenarios: {
+        newProject: { intervalMs: 86_400_000,
+          tokenTimeoutMs: 180_000 },
+        sourcemaps: { intervalMs: 3_600_000,
+          releaseSaveTimeoutMs: 60_000 },
+        sentryEnvelope: { intervalMs: 3_600_000 },
+      },
     });
   });
 

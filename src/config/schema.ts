@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import { decodeIntegrationToken } from '../hawk/token.js';
 import { blockedPortOf } from '../net/blocked-ports.js';
-import { CHECK_NOTIFICATION, SCENARIO_NAMES, SEND_AND_RECEIVE_EVENT } from '../scenarios/names.js';
+import { CHECK_NOTIFICATION, NEW_PROJECT, SCENARIO_NAMES, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS } from '../scenarios/names.js';
 import { boundedDurationMs, durationMs } from './duration.js';
+import { watchdogOf } from './scenario.js';
 
 const DEFAULT_INTERNAL_PORT = 8090;
 const MAX_PORT = 65_535;
@@ -24,6 +25,11 @@ const DEFAULT_CHECK_INTERVAL_MS = 600_000;
 const DEFAULT_WATCHDOG_GRACE_MS = 30_000;
 const MIN_WATCHDOG_GRACE_MS = 1000;
 const MAX_WATCHDOG_GRACE_MS = 600_000;
+const DEFAULT_NEW_PROJECT_INTERVAL_MS = 86_400_000;
+const DEFAULT_HOURLY_INTERVAL_MS = 3_600_000;
+const DEFAULT_NEW_PROJECT_TOKEN_TIMEOUT_MS = 180_000;
+const DEFAULT_RELEASE_SAVE_TIMEOUT_MS = 60_000;
+const DEFAULT_SCENARIOS = [SEND_AND_RECEIVE_EVENT, CHECK_NOTIFICATION, SOURCEMAPS, SENTRY_ENVELOPE].join(',');
 const DEFAULT_STAGGER_MS = 30_000;
 const DEFAULT_TUNNEL_READY_TIMEOUT_MS = 120_000;
 const MAX_TUNNEL_READY_TIMEOUT_MS = 600_000;
@@ -173,7 +179,7 @@ function scenarioList(): z.ZodType<Array<(typeof SCENARIO_NAMES)[number]>> {
   const names = SCENARIO_NAMES.join(', ');
 
   return z.string()
-    .default(SEND_AND_RECEIVE_EVENT)
+    .default(DEFAULT_SCENARIOS)
     .transform(value => value.split(',').map(name => name.trim()))
     .pipe(z.array(z.enum(SCENARIO_NAMES, { message: `must be a comma-separated list of: ${names}` }))
       .refine(list => new Set(list).size === list.length, 'must not repeat a scenario'));
@@ -253,6 +259,11 @@ export const ENV_SHAPE = {
   RULE_CACHE_WARMUP_MS: pub(durationMs(DEFAULT_RULE_CACHE_WARMUP_MS)),
   SCENARIOS: pub(scenarioList()),
   CHECK_INTERVAL_MS: pub(durationMs(DEFAULT_CHECK_INTERVAL_MS)),
+  NEW_PROJECT_INTERVAL_MS: pub(durationMs(DEFAULT_NEW_PROJECT_INTERVAL_MS)),
+  SOURCEMAPS_INTERVAL_MS: pub(durationMs(DEFAULT_HOURLY_INTERVAL_MS)),
+  SENTRY_ENVELOPE_INTERVAL_MS: pub(durationMs(DEFAULT_HOURLY_INTERVAL_MS)),
+  NEW_PROJECT_TOKEN_TIMEOUT_MS: pub(durationMs(DEFAULT_NEW_PROJECT_TOKEN_TIMEOUT_MS)),
+  RELEASE_SAVE_TIMEOUT_MS: pub(durationMs(DEFAULT_RELEASE_SAVE_TIMEOUT_MS)),
   WATCHDOG_GRACE_MS: pub(boundedDurationMs(DEFAULT_WATCHDOG_GRACE_MS, MIN_WATCHDOG_GRACE_MS, MAX_WATCHDOG_GRACE_MS)),
   SCENARIO_STAGGER_MS: pub(durationMs(DEFAULT_STAGGER_MS, { allowZero: true })),
   TUNNEL_READY_TIMEOUT_MS: pub(boundedDurationMs(DEFAULT_TUNNEL_READY_TIMEOUT_MS, 0, MAX_TUNNEL_READY_TIMEOUT_MS)),
@@ -331,6 +342,45 @@ function checkRetry(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx): voi
 }
 
 /**
+ * Checks that each chosen scenario with its own interval waits longer than its watchdog.
+ * @param env Parsed variables with usable numbers.
+ * @param ctx Collects the issues.
+ */
+function checkScenarioIntervals(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx): void {
+  const own = [
+    [NEW_PROJECT, 'NEW_PROJECT_INTERVAL_MS'],
+    [SOURCEMAPS, 'SOURCEMAPS_INTERVAL_MS'],
+    [SENTRY_ENVELOPE, 'SENTRY_ENVELOPE_INTERVAL_MS'],
+  ] as const;
+
+  if (!Array.isArray(env.SCENARIOS)) {
+    return;
+  }
+
+  for (const [scenario, name] of own) {
+    if (!env.SCENARIOS.includes(scenario)) {
+      continue;
+    }
+
+    const watchdog = watchdogOf(scenario, { collectorAvailability: env.COLLECTOR_AVAILABILITY_TIMEOUT_MS,
+      apiAvailability: env.API_AVAILABILITY_TIMEOUT_MS,
+      collectorAccept: env.COLLECTOR_ACCEPT_TIMEOUT_MS,
+      eventVisible: env.EVENT_VISIBLE_TIMEOUT_MS,
+      cleanup: env.CLEANUP_TIMEOUT_MS,
+      run: env.RUN_TIMEOUT_MS,
+      graceMs: env.WATCHDOG_GRACE_MS,
+      newProjectToken: env.NEW_PROJECT_TOKEN_TIMEOUT_MS,
+      releaseSave: env.RELEASE_SAVE_TIMEOUT_MS });
+
+    if (env[name] <= watchdog) {
+      ctx.addIssue({ code: 'custom',
+        path: [name],
+        message: `must be greater than the sum of the stage timeouts of ${scenario}, its cleanup and WATCHDOG_GRACE_MS (${String(watchdog)} ms)` });
+    }
+  }
+}
+
+/**
  * Checks the scheduling variables of the continuous monitoring against each other.
  * @param env Parsed variables with usable numbers.
  * @param ctx Collects the issues.
@@ -356,6 +406,8 @@ function checkMonitoring(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx)
       path: ['SWEEP_MIN_AGE_MS'],
       message: `must be at least RUN_TIMEOUT_MS + CLEANUP_TIMEOUT_MS (${String(runAndCleanup)} ms)` });
   }
+
+  checkScenarioIntervals(env, ctx);
 
   if (!Array.isArray(env.SCENARIOS) || !env.SCENARIOS.includes(CHECK_NOTIFICATION)) {
     return;
@@ -384,7 +436,8 @@ function checkCombinations(env: z.output<typeof baseSchema>, ctx: z.RefinementCt
   // Zod runs this check even when a field failed a format rule, so skip values that are not usable.
   const numbers = ['HTTP_TIMEOUT_MS', 'RUN_TIMEOUT_MS', 'LATE_DUPLICATE_WAIT_MS', ...STAGE_TIMEOUT_VARS.map(([name]) => name),
     'NOTIFICATION_TIMEOUT_MS', 'NOTIFICATION_PAIR_WAIT_MS', 'NOTIFICATION_SETUP_TIMEOUT_MS',
-    'CHECK_INTERVAL_MS', 'WATCHDOG_GRACE_MS', 'SCENARIO_STAGGER_MS', 'SWEEP_MIN_AGE_MS', 'RETRY_ATTEMPTS'] as const;
+    'CHECK_INTERVAL_MS', 'NEW_PROJECT_INTERVAL_MS', 'SOURCEMAPS_INTERVAL_MS', 'SENTRY_ENVELOPE_INTERVAL_MS',
+    'NEW_PROJECT_TOKEN_TIMEOUT_MS', 'RELEASE_SAVE_TIMEOUT_MS', 'WATCHDOG_GRACE_MS', 'SCENARIO_STAGGER_MS', 'SWEEP_MIN_AGE_MS', 'RETRY_ATTEMPTS'] as const;
 
   if (!URL.canParse(env.HAWK_API_URL) || numbers.some(name => typeof env[name] !== 'number') || !Array.isArray(env.RETRY_DELAYS_MS)) {
     return;

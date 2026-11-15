@@ -21,10 +21,11 @@ function messagesOf(overrides: Record<string, string | undefined>, variable: str
 
 describe('monitoring configuration', () => {
   it('uses the default monitoring settings', () => {
-    const { monitoring } = expectOk(loadConfig(validEnv())).config;
+    const { monitoring } = expectOk(loadConfig(validEnv({ ...NOTIFICATION_ENV,
+      SCENARIOS: undefined }))).config;
 
     expect(monitoring).toEqual({
-      scenarios: ['send-and-receive-event'],
+      scenarios: ['send-and-receive-event', 'check-notification', 'sourcemaps', 'sentry-envelope'],
       intervalMs: 600_000,
       watchdogGraceMs: 30_000,
       staggerMs: 30_000,
@@ -65,6 +66,59 @@ describe('monitoring configuration', () => {
       alertRetryMs: 1000,
       sweepIntervalMs: 0,
       sweepMinAgeMs: 600_000 });
+  });
+
+  it('uses the default settings of the scenarios with their own variables', () => {
+    expect(expectOk(loadConfig(validEnv())).config.scenarios).toEqual({
+      newProject: { intervalMs: 86_400_000,
+        tokenTimeoutMs: 180_000 },
+      sourcemaps: { intervalMs: 3_600_000,
+        releaseSaveTimeoutMs: 60_000 },
+      sentryEnvelope: { intervalMs: 3_600_000 },
+    });
+  });
+
+  it('reads the variables of the scenarios', () => {
+    const { scenarios } = expectOk(loadConfig(validEnv({ NEW_PROJECT_INTERVAL_MS: '90000000',
+      NEW_PROJECT_TOKEN_TIMEOUT_MS: '1000',
+      SOURCEMAPS_INTERVAL_MS: '4000000',
+      RELEASE_SAVE_TIMEOUT_MS: '2000',
+      SENTRY_ENVELOPE_INTERVAL_MS: '5000000' }))).config;
+
+    expect(scenarios).toEqual({ newProject: { intervalMs: 90_000_000,
+      tokenTimeoutMs: 1000 },
+    sourcemaps: { intervalMs: 4_000_000,
+      releaseSaveTimeoutMs: 2000 },
+    sentryEnvelope: { intervalMs: 5_000_000 } });
+  });
+
+  it('rejects zero and text in the variables of the scenarios', () => {
+    for (const name of ['NEW_PROJECT_INTERVAL_MS', 'SOURCEMAPS_INTERVAL_MS', 'SENTRY_ENVELOPE_INTERVAL_MS', 'NEW_PROJECT_TOKEN_TIMEOUT_MS', 'RELEASE_SAVE_TIMEOUT_MS']) {
+      expect(messagesOf({ [name]: '0' }, name)).toHaveLength(1);
+      expect(messagesOf({ [name]: 'soon' }, name)).toHaveLength(1);
+    }
+  });
+
+  it('the interval of a chosen scenario must exceed its watchdog', () => {
+    // sentry-envelope: 15000 + 15000 + 10000 + 120000 + 30000 + 30000 = 220000 with the defaults.
+    expect(messagesOf({ SCENARIOS: 'sentry-envelope',
+      SENTRY_ENVELOPE_INTERVAL_MS: '220000' }, 'SENTRY_ENVELOPE_INTERVAL_MS')[0]).toContain('220000 ms');
+    expectOk(loadConfig(validEnv({ SCENARIOS: 'sentry-envelope',
+      SENTRY_ENVELOPE_INTERVAL_MS: '220001' })));
+    // sourcemaps adds the upload (10000) and the save wait (60000).
+    expect(messagesOf({ SCENARIOS: 'sourcemaps',
+      SOURCEMAPS_INTERVAL_MS: '290000' }, 'SOURCEMAPS_INTERVAL_MS')).toHaveLength(1);
+    expectOk(loadConfig(validEnv({ SCENARIOS: 'sourcemaps',
+      SOURCEMAPS_INTERVAL_MS: '290001' })));
+    // new-project: 15000 + 15000 + 180000 + 120000 + 30000 + 30000 = 390000.
+    expect(messagesOf({ SCENARIOS: 'new-project',
+      NEW_PROJECT_INTERVAL_MS: '390000' }, 'NEW_PROJECT_INTERVAL_MS')).toHaveLength(1);
+    expectOk(loadConfig(validEnv({ SCENARIOS: 'new-project',
+      NEW_PROJECT_INTERVAL_MS: '390001' })));
+  });
+
+  it('does not check the interval of a scenario that is not chosen', () => {
+    expectOk(loadConfig(validEnv({ SENTRY_ENVELOPE_INTERVAL_MS: '1000' })));
   });
 
   it('rejects a repeated scenario', () => {
