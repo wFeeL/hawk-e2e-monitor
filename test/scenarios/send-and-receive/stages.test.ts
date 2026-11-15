@@ -11,7 +11,7 @@ import { TIMEOUT_LIMITS, createTestScenario } from '../../support/scenario.js';
 import type { TestScenarioOptions } from '../../support/scenario.js';
 import { CheckError } from '../../../src/errors/taxonomy.js';
 import { planRun } from '../../../src/scenarios/send-and-receive/plan.js';
-import { apiAvailabilityStage, checkEventFields, cleanupStage, collectorAcceptStage, collectorAvailabilityStage, eventMessage, eventVisibleStage, isOurEvent, sendEventShape } from '../../../src/scenarios/send-and-receive/stages.js';
+import { apiAvailabilityStage, BROWSER_USER_AGENT, EVENT_LIMITS, checkEventFields, cleanupStage, collectorAcceptStage, collectorAvailabilityStage, eventMessage, eventVisibleStage, isOurEvent, sendEventShape, withinEventLimits } from '../../../src/scenarios/send-and-receive/stages.js';
 import type { ScenarioContext } from '../../../src/scenarios/send-and-receive/stages.js';
 
 const TIMEOUT_MS = 2000;
@@ -202,13 +202,8 @@ describe('collectorAcceptStage', () => {
     const [stored] = hawk.store.all(hawk.projectId);
 
     expect(stored?.catcherType).toBe(plan.catcherType);
-    expect(stored?.payload).toEqual({ title: plan.title,
-      type: 'e2e-check',
-      context: plan.context,
-      backtrace: [{ file: 'hawk-e2e-monitor/check.js',
-        line: 1,
-        column: 1,
-        function: 'check' }] });
+    expect(stored?.payload).toEqual(eventMessage(context).payload);
+    expect(stored?.payload.title).toBe(plan.title);
   });
 
   it('calls beforeSend before the event reaches the collector', async () => {
@@ -223,17 +218,16 @@ describe('collectorAcceptStage', () => {
     expect(hawk.collector.posts).toBe(1);
   });
 
-  it('payload carries one backtrace frame', async () => {
+  it('payload carries three backtrace frames', async () => {
     const { context } = scenario();
 
     await run(collectorAcceptStage(TIMEOUT_MS), context);
 
     const [stored] = hawk.store.all(hawk.projectId);
 
-    expect(stored?.payload.backtrace).toEqual([{ file: 'hawk-e2e-monitor/check.js',
-      line: 1,
-      column: 1,
-      function: 'check' }]);
+    expect(stored?.payload.backtrace).toHaveLength(3);
+    expect((stored?.payload.backtrace as Array<Record<string, unknown>>)[0]).toMatchObject({ file: 'hawk-e2e-monitor/check.js',
+      function: 'check' });
   });
 
   it('fails with the class of a rejection and does not mark the send as reached', async () => {
@@ -448,5 +442,132 @@ describe('event shape', () => {
       catcherType: plan.catcherType,
       title: plan.title,
       context: {} })).toBe(true);
+  });
+});
+
+const PAN_PATTERN = /^(?:4[0-9]{12}(?:[0-9]{3})?|[25][1-7][0-9]{14}|6(?:011|5[0-9][0-9])[0-9]{12}|3[47][0-9]{13}|3(?:0[0-5]|[68][0-9])[0-9]{11}|(?:2131|1800|35\d{3})\d{11})$/u;
+const OBJECT_ID = /^[0-9a-f]{24}$/iu;
+const UUID = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$/iu;
+
+/**
+ * Applies the card number test the Hawk grouper runs on the values of `context` and `addons`.
+ * @param value Any value of the event.
+ * @returns True when the grouper would replace a string with `[filtered]`.
+ */
+function looksLikeCardNumber(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return !OBJECT_ID.test(value) && !UUID.test(value) && PAN_PATTERN.test(value.replaceAll(/\D/gu, ''));
+  }
+
+  if (Array.isArray(value)) {
+    return value.some(looksLikeCardNumber);
+  }
+
+  return typeof value === 'object' && value !== null && Object.values(value).some(looksLikeCardNumber);
+}
+
+describe('eventMessage', () => {
+  it.each(['http', 'ws'] as const)('carries the fields of the card over %s', (transport) => {
+    const { context, plan } = scenario({ transport });
+    const { payload, catcherType } = eventMessage(context);
+    const instanceId = plan.context.instanceId;
+
+    expect(catcherType).toBe(plan.catcherType);
+    expect(payload).toMatchObject({ title: plan.title,
+      type: 'E2eMonitorCheck',
+      release: `e2e-${instanceId}-plain`,
+      user: { id: `e2e-${instanceId}`,
+        name: 'e2e monitor' },
+      get: { e2e: plan.runId },
+      addons: { userAgent: BROWSER_USER_AGENT,
+        token: 'e2e-sentinel' },
+      context: { ...plan.context,
+        password: 'e2e-sentinel' } });
+
+    const frames = payload.backtrace as Array<Record<string, unknown>>;
+
+    expect(frames).toHaveLength(3);
+
+    for (const frame of frames) {
+      expect(frame).toMatchObject({ file: expect.any(String) as string,
+        line: expect.any(Number) as number,
+        column: expect.any(Number) as number,
+        function: expect.any(String) as string,
+        arguments: expect.any(Array) as unknown[] });
+      expect(frame.sourceCode).toHaveLength(3);
+      expect((frame.sourceCode as Array<Record<string, unknown>>)[0]).toMatchObject({ line: expect.any(Number) as number,
+        content: expect.any(String) as string });
+    }
+
+    const crumbs = payload.breadcrumbs as Array<Record<string, unknown>>;
+
+    expect(crumbs).toHaveLength(2);
+
+    for (const crumb of crumbs) {
+      expect(crumb).toMatchObject({ timestamp: expect.any(Number) as number,
+        type: expect.any(String) as string,
+        category: expect.any(String) as string,
+        message: expect.any(String) as string,
+        level: expect.any(String) as string });
+      // Hawk reads breadcrumb times as milliseconds.
+      expect(crumb.timestamp).toBeGreaterThan(1e12);
+    }
+  });
+
+  it('is the same message every time, so a repeat matches the first event', () => {
+    const { context } = scenario();
+
+    expect(eventMessage(context)).toEqual(eventMessage(context));
+  });
+
+  it.each(['http', 'ws'] as const)('stays within what the grouper keeps over %s', (transport) => {
+    const { payload } = eventMessage(scenario({ transport }).context);
+
+    expect(withinEventLimits(payload)).toBeUndefined();
+  });
+
+  it('keeps the user agent and every other string of context and addons out of the card number filter', () => {
+    const { payload } = eventMessage(scenario().context);
+
+    expect(looksLikeCardNumber(payload.context)).toBe(false);
+    expect(looksLikeCardNumber(payload.addons)).toBe(false);
+    expect(looksLikeCardNumber('4111 1111 1111 1111')).toBe(true);
+  });
+});
+
+describe('withinEventLimits', () => {
+  const ok = { title: 'x',
+    context: { a: 'x' },
+    addons: {},
+    backtrace: [] };
+
+  it('accepts values at the maximum', () => {
+    const keys = Object.fromEntries(Array.from({ length: EVENT_LIMITS.keys - 1 }, (_, index) => [`k${String(index)}`, 'y'.repeat(EVENT_LIMITS.string)]));
+
+    expect(withinEventLimits({ ...ok,
+      title: 't'.repeat(EVENT_LIMITS.title),
+      context: { ...keys,
+        list: [] },
+      backtrace: [{ sourceCode: Array.from({ length: EVENT_LIMITS.sourceLines }, () => ({ line: 1,
+        content: 'z'.repeat(EVENT_LIMITS.sourceLine) })) }] })).toBeUndefined();
+  });
+
+  it('names the first value over a limit', () => {
+    expect(withinEventLimits({ ...ok,
+      title: 't'.repeat(401) })).toContain('title');
+    expect(withinEventLimits({ ...ok,
+      context: { long: 'y'.repeat(201) } })).toContain('context.long');
+    expect(withinEventLimits({ ...ok,
+      addons: Object.fromEntries(Array.from({ length: 21 }, (_, index) => [`k${String(index)}`, 1])) })).toContain('addons');
+    expect(withinEventLimits({ ...ok,
+      context: { list: Array.from({ length: 11 }, () => 1) } })).toContain('context.list');
+    expect(withinEventLimits({ ...ok,
+      context: { a: { b: { c: { d: { e: { f: 1 } } } } } } })).toContain('depth');
+    expect(withinEventLimits({ ...ok,
+      backtrace: [{ sourceCode: Array.from({ length: 22 }, () => ({ line: 1,
+        content: 'z' })) }] })).toContain('sourceCode');
+    expect(withinEventLimits({ ...ok,
+      backtrace: [{ sourceCode: [{ line: 1,
+        content: 'z'.repeat(141) }] }] })).toContain('sourceCode');
   });
 });
