@@ -23,6 +23,13 @@ const FULL_FACTS: MessageFacts = {
   channel: 'webhook',
 };
 
+describe('blocked port', () => {
+  it('says what is wrong instead of printing a code', () => {
+    expect(describeError('collector_unavailable', { url: 'http://c:6000/',
+      code: 'BAD_PORT' })).toBe('Collector http://c:6000/ did not respond: the port is blocked by fetch, use another one');
+  });
+});
+
 describe('describeError', () => {
   it('every class has a non-empty message without "undefined"', () => {
     for (const errorClass of ERROR_CLASSES) {

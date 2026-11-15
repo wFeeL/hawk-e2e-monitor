@@ -6,6 +6,10 @@ import type { ErrorClass, MessageFacts } from './taxonomy.js';
  * @returns Code, `HTTP <status>`, or undefined.
  */
 function codeOrStatus(facts: MessageFacts): string | undefined {
+  if (facts.code === 'BAD_PORT') {
+    return 'the port is blocked by fetch, use another one';
+  }
+
   if (facts.code !== undefined) {
     return facts.code;
   }

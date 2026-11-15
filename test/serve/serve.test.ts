@@ -200,7 +200,7 @@ async function launch(options: LaunchOptions = {}, hawk?: FakeHawk): Promise<Har
   const logger = memoryLogger();
   const exit = vi.fn<(code: number) => void>();
   const { deps } = createTestDeps(fake, { env: { RECEIVER_SECRET: TEST_RECEIVER_SECRET,
-    TUNNEL_METRICS_URL: 'http://127.0.0.1:9',
+    TUNNEL_METRICS_URL: 'http://127.0.0.1:9100',
     ...options.env } });
   const config: Config = { ...deps.config,
     shutdownTimeoutMs: 1000,
@@ -709,7 +709,7 @@ describe('serve: notifications', () => {
     const hawk = await hawkFor();
     const port = await freePort();
     const { deps } = createTestDeps(hawk, { env: { RECEIVER_SECRET: TEST_RECEIVER_SECRET,
-      TUNNEL_METRICS_URL: 'http://127.0.0.1:9' } });
+      TUNNEL_METRICS_URL: 'http://127.0.0.1:9100' } });
 
     await preProvision(hawk, deps.config, port);
 
@@ -741,7 +741,7 @@ describe('serve: notifications', () => {
     const hawk = await hawkFor();
     const port = await freePort();
     const { deps } = createTestDeps(hawk, { env: { RECEIVER_SECRET: TEST_RECEIVER_SECRET,
-      TUNNEL_METRICS_URL: 'http://127.0.0.1:9' } });
+      TUNNEL_METRICS_URL: 'http://127.0.0.1:9100' } });
 
     await preProvision(hawk, deps.config, port);
 
@@ -833,7 +833,7 @@ describe('serve: notifications', () => {
       const hawk = await hawkFor();
       const receiverPort = await freePort();
       const { deps } = createTestDeps(hawk, { env: { RECEIVER_SECRET: TEST_RECEIVER_SECRET,
-        TUNNEL_METRICS_URL: 'http://127.0.0.1:9',
+        TUNNEL_METRICS_URL: 'http://127.0.0.1:9100',
         RULE_CACHE_WARMUP_MS: '50' } });
 
       await preProvision(hawk, deps.config, receiverPort);

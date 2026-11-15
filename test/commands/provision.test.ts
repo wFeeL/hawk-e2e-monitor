@@ -74,7 +74,7 @@ function capture(): Capture {
 beforeEach(async () => {
   hawk = await startFakeHawk();
   config = { ...createTestDeps(hawk, { env: { RECEIVER_SECRET: TEST_RECEIVER_SECRET,
-    TUNNEL_METRICS_URL: 'http://127.0.0.1:9',
+    TUNNEL_METRICS_URL: 'http://127.0.0.1:9100',
     RULE_CACHE_WARMUP_MS: '50' } }).deps.config,
   logLevel: 'debug' };
 });
