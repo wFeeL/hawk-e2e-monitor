@@ -17,6 +17,7 @@ describe('STAGE_NAMES', () => {
       'event_repeated',
       'threshold_formed',
       'cleanup',
+      'garage_availability',
     ]);
   });
 });

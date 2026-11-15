@@ -10,13 +10,14 @@ import type { MutableRedactor } from '../errors/redact.js';
 import { collectorEndpoints, decodeIntegrationToken } from '../hawk/token.js';
 import { createLogger } from '../log/logger.js';
 import { startReceiver } from '../receiver/server.js';
+import { runEndpointsProbe } from '../scenarios/endpoints-probe/run.js';
 import { runCheckNotification } from '../scenarios/check-notification/run.js';
 import type { NotificationDeps } from '../scenarios/check-notification/run.js';
 import { runSendAndReceive, scenarioSecrets } from '../scenarios/send-and-receive/run.js';
 import type { ScenarioDeps } from '../scenarios/send-and-receive/run.js';
 import { systemClock } from '../time/clock.js';
 import { refusalWhileServing } from './serving.js';
-import { CHECK_NOTIFICATION, NEW_PROJECT, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS } from '../scenarios/names.js';
+import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, NEW_PROJECT, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS } from '../scenarios/names.js';
 import type { ScenarioName } from '../scenarios/names.js';
 
 /** Where the command writes. */
@@ -175,6 +176,24 @@ const runMissingCommand: CheckScenario = async (command, _config, io) => {
   return Promise.resolve(1);
 };
 
+/**
+ * Runs `endpoints-probe` and prints the result.
+ * @param command Parsed `check` command.
+ * @param config Validated configuration.
+ * @param io Output streams.
+ * @param deps Replacements for the default dependencies, for tests.
+ * @param masking Redactor shared with the logger.
+ * @returns Exit code.
+ */
+const runProbeCommand: CheckScenario = async (command, config, io, deps, masking) => {
+  const result = await runEndpointsProbe({ ...defaultDeps(config, io, masking),
+    ...deps }, { sequence: command.sequence });
+
+  io.stdout(`${JSON.stringify(result)}\n`);
+
+  return summarize(result, io, masking);
+};
+
 /** One entry per scenario; a new scenario is added here. */
 const CHECKS: Readonly<Record<ScenarioName, CheckScenario>> = {
   [SEND_AND_RECEIVE_EVENT]: runSendAndReceiveCommand,
@@ -182,6 +201,7 @@ const CHECKS: Readonly<Record<ScenarioName, CheckScenario>> = {
   [NEW_PROJECT]: runMissingCommand,
   [SOURCEMAPS]: runMissingCommand,
   [SENTRY_ENVELOPE]: runMissingCommand,
+  [ENDPOINTS_PROBE]: runProbeCommand,
 };
 
 /**

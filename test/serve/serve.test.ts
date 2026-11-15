@@ -7,7 +7,10 @@ import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { StartupError } from '../../src/app.js';
 import type { HawkApi } from '../../src/clients/hawk-api.js';
-import type { Config } from '../../src/config/load.js';
+import type { Config, HeartbeatConfig, StageTimeouts } from '../../src/config/load.js';
+import type { RunResult } from '../../src/engine/result.js';
+import type { ScenarioName } from '../../src/scenarios/names.js';
+import type { ScenarioRunner } from '../../src/scheduler/scheduler.js';
 import { CheckError } from '../../src/errors/taxonomy.js';
 import { createProvisioner } from '../../src/notifications/provisioning.js';
 import { openDatabase } from '../../src/storage/database.js';
@@ -25,6 +28,7 @@ import type { FakeCollector } from '../support/fake-hawk/collector.js';
 import { startFakeHawk } from '../support/fake-hawk/index.js';
 import type { FakeHawk } from '../support/fake-hawk/index.js';
 import { decodeTokenKey } from '../support/fake-hawk/token.js';
+import { startFakeHealthchecks } from '../support/fake-healthchecks.js';
 import { startFakeNotify } from '../support/fake-notify.js';
 import type { FakeNotify, FakeNotifyAnswer } from '../support/fake-notify.js';
 import { memoryLogger } from '../support/logger.js';
@@ -35,6 +39,7 @@ import type { ProcessIdentity, ServeHandle } from '../../src/serve/serve.js';
 
 const SEND = 'send-and-receive-event';
 const NOTIFY = 'check-notification';
+const PROBE = 'endpoints-probe';
 const WAIT = { timeout: 15_000,
   interval: 25 };
 const FAKE_ID = 'fake';
@@ -106,7 +111,7 @@ interface Harness {
 /** What a test may change. */
 interface LaunchOptions {
   /** Scenarios to run; send-and-receive only by default. */
-  scenarios?: Array<typeof NOTIFY | typeof SEND>;
+  scenarios?: Array<typeof NOTIFY | typeof PROBE | typeof SEND>;
   /** Interval between runs of a scenario. */
   intervalMs?: number;
   /** Stagger between the first runs. */
@@ -129,6 +134,18 @@ interface LaunchOptions {
   sweepFirstDelayMs?: number;
   /** Replaces the Hawk API client of the scenarios with a changed copy. */
   wrapApi?: (api: HawkApi) => HawkApi;
+  /** Address and interval of the heartbeat, set on the configuration directly so that the interval can be short. */
+  heartbeat?: HeartbeatConfig;
+  /** Time added to the watchdog of a run, set on the configuration directly. */
+  watchdogGraceMs?: number;
+  /** Stage timeouts that replace the test ones, set on the configuration directly. */
+  timeouts?: Partial<StageTimeouts>;
+  /** Replaces the runner of a scenario. */
+  runners?: Partial<Record<ScenarioName, ScenarioRunner>>;
+  /** Interval of the probe, set on the configuration directly so that it can be short. */
+  probeIntervalMs?: number;
+  /** Token of manual runs; the route exists only with one. */
+  runToken?: string;
 }
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -212,13 +229,23 @@ async function launch(options: LaunchOptions = {}, hawk?: FakeHawk): Promise<Har
       port: 0 },
     notifications: { ...deps.config.notifications,
       receiverPort: options.receiverPort ?? 0 },
+    timeouts: { ...deps.config.timeouts,
+      ...options.timeouts },
     monitoring: { ...deps.config.monitoring,
       scenarios: options.scenarios ?? [SEND],
       intervalMs: options.intervalMs ?? 700,
       staggerMs: options.staggerMs ?? 0,
       databasePath: database.path,
       alertNotifyUrl: bot.url,
-      alertRetryMs: 1000 } };
+      alertRetryMs: 1000,
+      ...options.heartbeat === undefined ? {} : { heartbeat: options.heartbeat },
+      ...options.watchdogGraceMs === undefined ? {} : { watchdogGraceMs: options.watchdogGraceMs },
+      ...options.probeIntervalMs === undefined
+        ? {}
+        : { probe: { ...deps.config.monitoring.probe,
+            intervalMs: options.probeIntervalMs } },
+      manual: { ...options.runToken === undefined ? {} : { token: options.runToken },
+        minIntervalMs: 0 } } };
 
   if (options.seed !== undefined) {
     const history = createHistory(openDatabase(database.path));
@@ -234,6 +261,7 @@ async function launch(options: LaunchOptions = {}, hawk?: FakeHawk): Promise<Har
     overrides: { api: options.wrapApi?.(deps.api) ?? deps.api,
       collector: deps.collector,
       pollScheduleMs: [20, 40],
+      ...options.runners === undefined ? {} : { runners: options.runners },
       ...options.addressPollMs === undefined ? {} : { addressPollMs: options.addressPollMs },
       ...options.sweepFirstDelayMs === undefined ? {} : { sweepFirstDelayMs: options.sweepFirstDelayMs },
       ...options.resolveAddress === undefined ? {} : { resolveAddress: async () => resolveFor(options.resolveAddress, options.receiverPort ?? 0) } } });
@@ -275,7 +303,7 @@ function inspect<T>(harness: Harness, read: (history: History) => T): T {
  * @param scenario Scenario whose rows are read.
  * @returns Rows that are not running.
  */
-function finishedRows(harness: Harness, scenario: typeof NOTIFY | typeof SEND = SEND): RunRow[] {
+function finishedRows(harness: Harness, scenario: typeof NOTIFY | typeof PROBE | typeof SEND = SEND): RunRow[] {
   return inspect(harness, history => history.list({ scenario,
     limit: 100 })).filter(row => row.status !== 'running')
     .toReversed();
@@ -440,6 +468,454 @@ describe('serve: scheduled runs and the history routes', () => {
   });
 });
 
+/** One sample line of the metrics text. */
+interface Sample {
+  /** Printed name, with `_bucket`, `_sum` or `_count` for a histogram. */
+  name: string;
+  /** Labels as printed, empty without any. */
+  labels: string;
+  /** Number the line ends with. */
+  value: number;
+}
+
+/** Samples of a metrics text and the metric names that have a `# TYPE` line. */
+interface ParsedMetrics {
+  /** Sample lines. */
+  samples: Sample[];
+  /** Names with a `# TYPE` line. */
+  typed: Set<string>;
+}
+
+/**
+ * Splits the text of `/metrics` into sample lines and the metrics that have a `# TYPE` line.
+ * @param text Body of the answer.
+ * @returns Samples and the typed names.
+ */
+function parseMetrics(text: string): ParsedMetrics {
+  const typed = new Set<string>();
+  const samples: Sample[] = [];
+
+  for (const line of text.split('\n')) {
+    const type = /^# TYPE (\S+) /u.exec(line);
+    const sample = /^([A-Za-z_:][\w:]*)(\{.*\})? (\S+)$/u.exec(line);
+
+    if (type?.[1] !== undefined) {
+      typed.add(type[1]);
+    } else if (sample?.[1] !== undefined && !line.startsWith('#')) {
+      samples.push({ name: sample[1],
+        labels: sample[2] ?? '',
+        value: Number(sample[3]) });
+    }
+  }
+
+  return { samples,
+    typed };
+}
+
+describe('serve: metrics', () => {
+  it('prints the Prometheus text with a TYPE line for every hawk_e2e metric and counts the runs', async () => {
+    const harness = await launch();
+
+    await vi.waitFor(() => {
+      expect(finishedRows(harness).filter(row => row.status === 'ok')).toHaveLength(2);
+    }, WAIT);
+
+    const response = await get(harness, '/metrics');
+    const { samples, typed } = parseMetrics(await response.text());
+    const labelled = (name: string, fragment: string): Sample | undefined => samples.find(sample => sample.name === name && sample.labels.includes(fragment));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toMatch(/^text\/plain; version=0\.0\.4/u);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+
+    const own = samples.filter(sample => sample.name.startsWith('hawk_e2e_'));
+
+    expect(own.length).toBeGreaterThan(10);
+
+    for (const sample of own) {
+      const base = sample.name.replace(/_(bucket|sum|count)$/u, '');
+
+      expect(typed.has(sample.name) || typed.has(base), `${sample.name} has a TYPE line`).toBe(true);
+    }
+
+    expect(labelled('hawk_e2e_runs_total', `scenario="${SEND}",status="ok",trigger="schedule"`)?.value).toBeGreaterThanOrEqual(2);
+    expect(labelled('hawk_e2e_runs_total', `scenario="${SEND}",status="failed",trigger="manual"`)?.value).toBe(0);
+    expect(labelled('hawk_e2e_last_status', SEND)?.value).toBe(1);
+    expect(labelled('hawk_e2e_scenario_interval_seconds', SEND)?.value).toBe(0.7);
+    expect(labelled('hawk_e2e_stage_duration_seconds_count', 'stage="collector_availability"')?.value).toBeGreaterThanOrEqual(2);
+    expect(labelled('hawk_e2e_build_info', 'version="0.1.0"')?.value).toBe(1);
+  });
+
+  it('restores last_status and the timestamp of the earlier process and starts the counters at zero', async () => {
+    const finishedAt = new Date(Date.now() - 60_000).toISOString();
+    const harness = await launch({ intervalMs: 600_000,
+      seed: (history) => {
+        history.startRun({ runId: 'rfffffffffffffff',
+          scenario: SEND,
+          sequence: 1,
+          trigger: 'schedule',
+          startedAt: new Date(Date.now() - 65_000).toISOString() });
+        history.finishRun('rfffffffffffffff', { status: 'failed',
+          finishedAt,
+          durationMs: 5000,
+          degraded: [],
+          errorClass: 'event_not_found',
+          culprit: 'hawk',
+          failedStage: 'event_visible' });
+      } });
+    const { samples } = parseMetrics(await (await get(harness, '/metrics')).text());
+    const labelled = (name: string, fragment: string): Sample | undefined => samples.find(sample => sample.name === name && sample.labels.includes(fragment));
+
+    expect(labelled('hawk_e2e_last_status', SEND)?.value).toBe(0);
+    expect(labelled('hawk_e2e_last_run_timestamp_seconds', SEND)?.value).toBe(Date.parse(finishedAt) / 1000);
+    expect(labelled('hawk_e2e_runs_total', `scenario="${SEND}",status="ok",trigger="schedule"`)?.value).toBe(0);
+    expect(labelled('hawk_e2e_scenario_interval_seconds', SEND)?.value).toBe(600);
+  });
+});
+
+describe('serve: heartbeat', () => {
+  const PING_MS = 100;
+
+  /**
+   * Starts a fake heartbeat service that is closed after the test.
+   * @returns The fake.
+   */
+  async function healthchecks(): Promise<Awaited<ReturnType<typeof startFakeHealthchecks>>> {
+    const fake = await startFakeHealthchecks();
+
+    cleanups.push(async () => fake.close());
+
+    return fake;
+  }
+
+  it('pings while the monitor is healthy, also after a failed run, and keeps the address out of the log', async () => {
+    const fake = await healthchecks();
+    const hawk = await hawkFor();
+    const harness = await launch({ intervalMs: 500,
+      heartbeat: { url: fake.url,
+        intervalMs: PING_MS } }, hawk);
+
+    await vi.waitFor(() => {
+      expect(fake.pings).toBeGreaterThanOrEqual(2);
+    }, WAIT);
+    await hawk.collector.close();
+    await vi.waitFor(() => {
+      expect(finishedRows(harness).some(row => row.status === 'failed')).toBe(true);
+    }, WAIT);
+
+    const before = fake.pings;
+
+    await vi.waitFor(() => {
+      expect(fake.pings).toBeGreaterThan(before);
+    }, WAIT);
+    expect(JSON.stringify(harness.logger.lines)).not.toContain(fake.key);
+  });
+
+  it('counts a ping the service refuses and does not touch the runs', async () => {
+    const fake = await healthchecks();
+
+    fake.setStatus(500);
+
+    const harness = await launch({ intervalMs: 500,
+      heartbeat: { url: fake.url,
+        intervalMs: PING_MS } });
+
+    await vi.waitFor(() => {
+      expect(fake.pings).toBeGreaterThanOrEqual(2);
+    }, WAIT);
+    await vi.waitFor(() => {
+      expect(finishedRows(harness).filter(row => row.status === 'ok')).toHaveLength(2);
+    }, WAIT);
+
+    const { samples } = parseMetrics(await (await get(harness, '/metrics')).text());
+
+    expect(samples.find(sample => sample.name === 'hawk_e2e_heartbeat_failures_total')?.value).toBeGreaterThanOrEqual(2);
+    expect(JSON.stringify(harness.logger.lines)).not.toContain(fake.key);
+  });
+
+  it('stays silent while alerts are not delivered for over 30 minutes', async () => {
+    const fake = await healthchecks();
+    const harness = await launch({ intervalMs: 500,
+      answer: { status: 500 },
+      heartbeat: { url: fake.url,
+        intervalMs: PING_MS },
+      seed: (history) => {
+        const at = new Date(Date.now() - 31 * 60_000).toISOString();
+
+        history.saveAlert({ scenario: SEND,
+          state: 'failing',
+          failureStreak: 1,
+          episodeFailures: 1,
+          degraded: [],
+          updatedAt: at }, { text: 'old alert',
+          at });
+      } });
+
+    await vi.waitFor(() => {
+      expect(harness.logger.lines.some(line => line.level === 'warn' && String(line.msg).includes('alerts are not delivered'))).toBe(true);
+    }, WAIT);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 5 * PING_MS);
+    });
+    expect(fake.pings).toBe(0);
+    expect(harness.logger.lines.filter(line => String(line.msg).includes('alerts are not delivered'))).toHaveLength(1);
+  });
+
+  it('stops pinging when the serve stops', async () => {
+    const fake = await healthchecks();
+    const harness = await launch({ heartbeat: { url: fake.url,
+      intervalMs: PING_MS } });
+
+    await vi.waitFor(() => {
+      expect(fake.pings).toBeGreaterThanOrEqual(1);
+    }, WAIT);
+    await harness.handle.stop();
+
+    const stopped = fake.pings;
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 5 * PING_MS);
+    });
+    expect(fake.pings).toBe(stopped);
+  });
+
+  it('does not ping without an address', async () => {
+    const fake = await healthchecks();
+
+    await launch();
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 3 * PING_MS);
+    });
+    expect(fake.pings).toBe(0);
+  });
+});
+
+describe('serve: the probe', () => {
+  it('runs on its own interval, stores its stages and sends no event', async () => {
+    const hawk = await hawkFor();
+    const harness = await launch({ scenarios: [PROBE],
+      intervalMs: 600_000,
+      probeIntervalMs: 300 }, hawk);
+
+    await vi.waitFor(() => {
+      expect(finishedRows(harness, PROBE).filter(row => row.status === 'ok')).toHaveLength(3);
+    }, WAIT);
+
+    const [first] = finishedRows(harness, PROBE);
+
+    expect(first?.stages.map(stage => stage.name)).toEqual(['collector_availability', 'api_availability']);
+    expect(hawk.collector.posts).toBe(0);
+    expect(hawk.store.all(hawk.projectId)).toEqual([]);
+    expect(hawk.collector.wsMessages).toBeGreaterThanOrEqual(3);
+    expect(harness.exit).not.toHaveBeenCalled();
+  });
+
+  it('fails the run and records the class when the collector is closed', async () => {
+    const hawk = await hawkFor();
+    const harness = await launch({ scenarios: [PROBE],
+      intervalMs: 600_000,
+      probeIntervalMs: 300 }, hawk);
+
+    await vi.waitFor(() => {
+      expect(finishedRows(harness, PROBE).some(row => row.status === 'ok')).toBe(true);
+    }, WAIT);
+    await hawk.collector.close();
+    await vi.waitFor(() => {
+      expect(finishedRows(harness, PROBE).some(row => row.status === 'failed')).toBe(true);
+    }, WAIT);
+    expect(finishedRows(harness, PROBE).find(row => row.status === 'failed')).toMatchObject({ failedStage: 'collector_availability' });
+  });
+});
+
+/**
+ * Stores a finished `ok` run that started some days ago.
+ * @param history History to write to.
+ * @param runId Id given to the run.
+ * @param scenario Scenario the run belongs to.
+ * @param daysAgo Age of the run.
+ */
+function seedRun(history: History, runId: string, scenario: typeof NOTIFY | typeof PROBE | typeof SEND, daysAgo: number): void {
+  const startedAt = new Date(Date.now() - daysAgo * 86_400_000).toISOString();
+
+  history.startRun({ runId,
+    scenario,
+    sequence: 1,
+    trigger: 'schedule',
+    startedAt });
+  history.finishRun(runId, { status: 'ok',
+    finishedAt: startedAt,
+    durationMs: 10,
+    degraded: [] });
+}
+
+describe('serve: the probe in the history', () => {
+  it('GET /runs leaves the probe out unless it is named', async () => {
+    const harness = await launch({ intervalMs: 600_000,
+      seed: (history) => {
+        seedRun(history, 'rsendsendsendsend', SEND, 0.01);
+        seedRun(history, 'rprobeprobeprobep', PROBE, 0.005);
+      } });
+
+    await vi.waitFor(() => {
+      expect(finishedRows(harness)).not.toHaveLength(0);
+    }, WAIT);
+
+    const all = await (await get(harness, '/runs')).json() as RunRow[];
+    const probes = await (await get(harness, `/runs?scenario=${PROBE}`)).json() as RunRow[];
+
+    expect(all.map(row => row.scenario)).not.toContain(PROBE);
+    expect(all.map(row => row.runId)).toContain('rsendsendsendsend');
+    expect(probes.map(row => row.runId)).toEqual(['rprobeprobeprobep']);
+  });
+
+  it('keeps the probe for its own retention and the other scenarios for theirs, pruning at the start', async () => {
+    const harness = await launch({ intervalMs: 600_000,
+      seed: (history) => {
+        seedRun(history, 'rprobeoldoldoldo', PROBE, 8);
+        seedRun(history, 'rprobenewnewnewn', PROBE, 3);
+        seedRun(history, 'rsendeightdayold', SEND, 8);
+        seedRun(history, 'rsendfortydayold', SEND, 40);
+      } });
+    const kept = inspect(harness, history => ['rprobeoldoldoldo', 'rprobenewnewnewn', 'rsendeightdayold', 'rsendfortydayold']
+      .filter(runId => history.get(runId) !== undefined));
+
+    expect(kept).toEqual(['rprobenewnewnewn', 'rsendeightdayold']);
+  });
+
+  it('expires the rows of a scenario that is no longer known with the global retention', async () => {
+    const harness = await launch({ intervalMs: 600_000,
+      seed: (history) => {
+        seedRun(history, 'rgoneoldoldoldol', 'removed-scenario' as typeof SEND, 40);
+        seedRun(history, 'rgonenewnewnewne', 'removed-scenario' as typeof SEND, 10);
+      } });
+    const kept = inspect(harness, history => ['rgoneoldoldoldol', 'rgonenewnewnewne'].filter(runId => history.get(runId) !== undefined));
+
+    expect(kept).toEqual(['rgonenewnewnewne']);
+  });
+});
+
+describe('serve: manual runs', () => {
+  const RUN_TOKEN = 'serve-run-token-0123456789-0123456789';
+  const bearer = Object.fromEntries([['authorization', `Bearer ${RUN_TOKEN}`]]);
+
+  /**
+   * Posts to the manual run route.
+   * @param harness Running serve.
+   * @param path Path with the query.
+   * @param headers Request headers.
+   * @returns Response.
+   */
+  async function post(harness: Harness, path: string, headers: Record<string, string> = bearer): Promise<Response> {
+    return fetch(`http://127.0.0.1:${String(harness.handle.port)}${path}`, { method: 'POST',
+      headers });
+  }
+
+  it('has no route without a token', async () => {
+    const harness = await launch({ intervalMs: 600_000 });
+
+    expect((await post(harness, `/runs/${SEND}`)).status).toBe(404);
+    expect((await post(harness, `/runs/${SEND}`, {})).status).toBe(404);
+  });
+
+  it('refuses a request without the token and starts nothing', async () => {
+    const harness = await launch({ intervalMs: 600_000,
+      runToken: RUN_TOKEN });
+
+    await vi.waitFor(() => {
+      expect(finishedRows(harness)).toHaveLength(1);
+    }, WAIT);
+
+    const response = await post(harness, `/runs/${SEND}`, Object.fromEntries([['authorization', 'Bearer nope']]));
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get('www-authenticate')).toBe('Bearer');
+    expect(finishedRows(harness)).toHaveLength(1);
+  });
+
+  it('answers 409 while the scheduled run is going, then 202 and stores the run with the trigger manual and counts it', async () => {
+    const harness = await launch({ intervalMs: 600_000,
+      runToken: RUN_TOKEN });
+
+    expect((await post(harness, `/runs/${SEND}`)).status).toBe(409);
+    await vi.waitFor(() => {
+      expect(finishedRows(harness)).toHaveLength(1);
+    }, WAIT);
+
+    const accepted = await post(harness, `/runs/${SEND}`);
+    const { runId } = await accepted.json() as RunRow;
+
+    expect(accepted.status).toBe(202);
+    await vi.waitFor(() => {
+      expect(inspect(harness, history => history.get(runId))?.status).toBe('ok');
+    }, WAIT);
+    expect(inspect(harness, history => history.get(runId))?.trigger).toBe('manual');
+
+    const { samples } = parseMetrics(await (await get(harness, '/metrics')).text());
+
+    expect(samples.find(sample => sample.name === 'hawk_e2e_runs_total' && sample.labels.includes('status="ok",trigger="manual"'))?.value).toBe(1);
+    expect(samples.find(sample => sample.name === 'hawk_e2e_runs_total' && sample.labels.includes('status="ok",trigger="schedule"'))?.value).toBe(1);
+  });
+
+  it('with ?wait=true answers 200 with the finished run and its result', async () => {
+    const harness = await launch({ intervalMs: 600_000,
+      runToken: RUN_TOKEN });
+
+    await vi.waitFor(() => {
+      expect(finishedRows(harness)).toHaveLength(1);
+    }, WAIT);
+
+    const response = await post(harness, `/runs/${SEND}?wait=true`);
+    const body = await response.json() as RunWithResult;
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({ scenario: SEND,
+      trigger: 'manual',
+      status: 'ok' });
+    expect(body.result?.runId).toBe(body.runId);
+    expect(body.stages.length).toBeGreaterThan(0);
+  });
+});
+
+describe('serve: heartbeat with a hung scenario', () => {
+  it('send-and-receive hangs, the probe keeps running, and the pings stop with the reason logged once', async () => {
+    const fake = await startFakeHealthchecks();
+
+    cleanups.push(async () => fake.close());
+
+    const hawk = await hawkFor();
+    const harness = await launch({ scenarios: [SEND, PROBE],
+      intervalMs: 700,
+      probeIntervalMs: 300,
+      watchdogGraceMs: 1000,
+      timeouts: { run: 300,
+        cleanup: 100 },
+      // The send scenario never ends and ignores its signal, as a runner stuck in a call would.
+      runners: { [SEND]: async () => new Promise<RunResult>(() => undefined) },
+      heartbeat: { url: fake.url,
+        intervalMs: 100 } }, hawk);
+
+    await vi.waitFor(() => {
+      expect(fake.pings).toBeGreaterThanOrEqual(1);
+    }, WAIT);
+    await vi.waitFor(() => {
+      expect(harness.logger.lines.some(line => String(line.msg).includes(`${SEND} has no verdict`))).toBe(true);
+    }, WAIT);
+
+    const pings = fake.pings;
+    const probeRows = finishedRows(harness, PROBE).length;
+
+    await vi.waitFor(() => {
+      expect(finishedRows(harness, PROBE).length).toBeGreaterThanOrEqual(probeRows + 3);
+    }, WAIT);
+    expect(fake.pings).toBe(pings);
+
+    const notSent = harness.logger.lines.filter(line => String(line.msg).startsWith('heartbeat is not sent')).map(line => line.msg);
+
+    expect(new Set(notSent).size).toBe(notSent.length);
+    expect(notSent.filter(text => String(text).includes('has no verdict'))).toHaveLength(1);
+  });
+});
+
 describe('serve: sweep of leftover events', () => {
   it('removes the event a finished run left behind, on the timer', async () => {
     const hawk = await hawkFor();
@@ -554,6 +1030,10 @@ describe('serve: start and stop', () => {
 
     expect(inspect(harness, history => history.get('rsssssssssssssss'))).toMatchObject({ status: 'aborted',
       errorClass: 'monitor_restarted' });
+
+    const { samples } = parseMetrics(await (await get(harness, '/metrics')).text());
+
+    expect(samples.find(sample => sample.name === 'hawk_e2e_runs_total' && sample.labels.includes(`scenario="${SEND}",status="monitor_abort",trigger="schedule"`))?.value).toBe(1);
     await vi.waitFor(() => {
       expect(finishedRows(harness).some(row => row.status === 'ok')).toBe(true);
     }, WAIT);
@@ -903,5 +1383,36 @@ describe('serve: notifications', () => {
       }, WAIT);
       expect(proxy.hits()).toBeGreaterThanOrEqual(3);
     });
+  });
+  it('a manual run during the warmup of the rule cache answers 200 with the status skipped', async () => {
+    const hawk = await hawkFor();
+    const port = await freePort();
+    const { deps } = createTestDeps(hawk, { env: { RECEIVER_SECRET: TEST_RECEIVER_SECRET,
+      TUNNEL_METRICS_URL: 'http://127.0.0.1:9100' } });
+
+    await preProvision(hawk, deps.config, port);
+
+    const harness = await launch({ scenarios: [NOTIFY],
+      receiverPort: port,
+      intervalMs: 600_000,
+      runToken: 'serve-run-token-0123456789-0123456789',
+      env: { RULE_CACHE_WARMUP_MS: '65000' },
+      resolveAddress: async receiverPort => Promise.resolve(httpAddress(receiverPort)),
+      seed: (history) => {
+        history.setKv(MATCH_CHANGED_KEY, new Date(Date.now() - 10_000).toISOString());
+      } }, hawk);
+
+    await vi.waitFor(() => {
+      expect(finishedRows(harness, NOTIFY)).toHaveLength(1);
+    }, WAIT);
+
+    const response = await fetch(`http://127.0.0.1:${String(harness.handle.port)}/runs/${NOTIFY}?wait=true`, { method: 'POST',
+      headers: Object.fromEntries([['authorization', 'Bearer serve-run-token-0123456789-0123456789']]) });
+    const body = await response.json() as RunRow;
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({ status: 'skipped',
+      skipReason: 'rule_cache_warmup',
+      trigger: 'manual' });
   });
 });

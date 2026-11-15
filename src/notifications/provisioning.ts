@@ -3,7 +3,7 @@ import { CheckError, isCheckError } from '../errors/taxonomy.js';
 import type { Clock } from '../time/clock.js';
 import type { PublicAddress } from './address.js';
 import type { ChannelSettings, NotificationChannels, NotificationRule, NotificationRuleInput } from './types.js';
-import { CHECK_NOTIFICATION, SCENARIO_NAMES } from '../scenarios/names.js';
+import { CHECK_NOTIFICATION, EVENT_SCENARIOS } from '../scenarios/names.js';
 
 const CHANNEL_NAMES = ['email', 'slack', 'loop', 'telegram', 'webhook'] as const;
 const OFF: ChannelSettings = { isEnabled: false,
@@ -179,7 +179,7 @@ export function desiredRule(deps: Pick<ProvisionerDeps, 'instanceId' | 'loop' | 
     isEnabled: true,
     whatToReceive: 'ONLY_NEW',
     including: [`[e2e:${deps.instanceId}]`],
-    excluding: SCENARIO_NAMES.filter(name => name !== CHECK_NOTIFICATION),
+    excluding: EVENT_SCENARIOS.filter(name => name !== CHECK_NOTIFICATION),
     channels: { email: OFF,
       slack: OFF,
       telegram: OFF,

@@ -15,8 +15,11 @@ import { HttpStatus } from '../net/http-status.js';
 const SNIPPET_LENGTH = 200;
 const PROBE_ID = '00000000-0000-4000-8000-000000000000';
 
+/** Ways an event can travel to the collector. */
+export const TRANSPORTS = ['http', 'ws'] as const;
+
 /** How an event travels to the collector. */
-export type Transport = 'http' | 'ws';
+export type Transport = (typeof TRANSPORTS)[number];
 
 /** The body a Hawk SDK sends. */
 export interface CollectorMessage {

@@ -162,6 +162,9 @@ export interface EventShape {
   isOurs(event: FoundEvent): boolean;
 }
 
+/** What the two availability stages need, so a scenario without an event can run them too. */
+export type AvailabilityContext = Pick<ScenarioContext, 'api' | 'collector' | 'config'>;
+
 /**
  * Builds the message of the test event.
  * @param context Scenario context.
@@ -275,7 +278,7 @@ export function withinEventLimits(payload: Readonly<Record<string, unknown>>): s
  * @param timeoutMs Time limit of the stage.
  * @returns Stage spec.
  */
-export function collectorAvailabilityStage(timeoutMs: number): StageSpec<ScenarioContext> {
+export function collectorAvailabilityStage(timeoutMs: number): StageSpec<AvailabilityContext> {
   return {
     name: 'collector_availability',
     timeoutMs,
@@ -333,7 +336,7 @@ function patternFindings(patterns: readonly string[], title: string): PatternFin
  * @param options Title of the next event, for the pattern check.
  * @returns Stage spec.
  */
-export function apiAvailabilityStage(timeoutMs: number, options: ApiAvailabilityOptions = {}): StageSpec<ScenarioContext> {
+export function apiAvailabilityStage(timeoutMs: number, options: ApiAvailabilityOptions = {}): StageSpec<AvailabilityContext> {
   return {
     name: 'api_availability',
     timeoutMs,

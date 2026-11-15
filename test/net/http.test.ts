@@ -104,6 +104,29 @@ describe('httpRequest', () => {
       text: '{"ok":true}' });
   });
 
+  it('reads at most maxBytes of the body, across chunks', async () => {
+    const { url } = await listen((_request, response) => {
+      response.write('a'.repeat(100));
+      setTimeout(() => {
+        response.end('b'.repeat(100_000));
+      }, 50);
+    });
+    const response = await httpRequest(get(url, { maxBytes: 150 }), 'api');
+
+    expect(response.status).toBe(200);
+    expect(response.text).toHaveLength(150);
+    expect(response.text.startsWith('a'.repeat(100))).toBe(true);
+    expect(response.text.endsWith('b'.repeat(50))).toBe(true);
+  });
+
+  it('returns the whole body when it is shorter than maxBytes, multi-byte text included', async () => {
+    const { url } = await listen((_request, response) => {
+      response.end('héllo');
+    });
+
+    expect((await httpRequest(get(url, { maxBytes: 100 }), 'api')).text).toBe('héllo');
+  });
+
   it('sends the body and headers of a POST', async () => {
     const { url } = await listen((request, response) => {
       const chunks: Buffer[] = [];

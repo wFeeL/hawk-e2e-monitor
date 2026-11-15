@@ -15,6 +15,8 @@ import type { AlertTextInput } from './text.js';
 import { MS_PER_DAY } from '../time/units.js';
 import { scenarioSettings } from '../config/scenario.js';
 
+/** Age of the oldest undelivered alert after which the alerts count as not delivered. */
+export const ALERT_BACKLOG_LIMIT_MS = 1_800_000;
 const FLUSH_BATCH = 50;
 const MAX_RETRY_PAUSE_MS = 600_000;
 const REJECTED_LOG_EVERY = 3;

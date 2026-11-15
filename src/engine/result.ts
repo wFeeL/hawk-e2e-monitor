@@ -16,13 +16,17 @@ export const STAGE_NAMES = [
   'event_repeated',
   'threshold_formed',
   'cleanup',
+  'garage_availability',
 ] as const;
 
 /** One of `STAGE_NAMES`. */
 export type StageName = (typeof STAGE_NAMES)[number];
 
+/** Ways a stage can end. */
+export const STAGE_STATUSES = ['ok', 'failed', 'uncertain', 'skipped'] as const;
+
 /** How a stage ended. */
-export type StageStatus = 'ok' | 'failed' | 'uncertain' | 'skipped';
+export type StageStatus = (typeof STAGE_STATUSES)[number];
 
 /** Recorded outcome of one stage. */
 export interface StageResult {
@@ -107,12 +111,12 @@ export interface RunResult {
   instanceId: string;
   /** Run number. */
   sequence: number;
-  /** Transport the event was sent over. */
-  transport: Transport;
-  /** Catcher type of the event. */
-  catcherType: string;
-  /** Title of the event. */
-  title: string;
+  /** Transport the event was sent over; absent for a scenario that sends none. */
+  transport?: Transport;
+  /** Catcher type of the event; absent for a scenario that sends none. */
+  catcherType?: string;
+  /** Title of the event; absent for a scenario that sends none. */
+  title?: string;
   /** Wall-clock start, ISO. */
   startedAt: string;
   /** Wall-clock end, ISO. */

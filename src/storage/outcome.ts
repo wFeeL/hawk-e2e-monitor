@@ -3,7 +3,7 @@ import type { RunResult } from '../engine/result.js';
 import { CheckError } from '../errors/taxonomy.js';
 import type { ErrorClass, MessageFacts } from '../errors/taxonomy.js';
 import { scenarioSettings } from '../config/scenario.js';
-import { CHECK_NOTIFICATION, EVENT_SCENARIOS } from '../scenarios/names.js';
+import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, EVENT_SCENARIOS } from '../scenarios/names.js';
 import type { RunStart } from './history.js';
 import { DEGRADED_CODES } from './types.js';
 import type { DegradedCode, RunOutcome, RunRow } from './types.js';
@@ -34,7 +34,8 @@ function degradationOf(result: RunResult, context: OutcomeContext): DegradedCode
   }
 
   // The quota stage marks a nearly used event limit; the monitor's own events do not count, because cleanup removes them.
-  if (result.stages.find(stage => stage.name === 'api_availability')?.details?.quotaLow === true) {
+  // The probe only reads the quota, so a nearly used one is the business of the scenarios that send events.
+  if (result.scenario !== ENDPOINTS_PROBE && result.stages.find(stage => stage.name === 'api_availability')?.details?.quotaLow === true) {
     codes.push('quota_usage');
   }
 
@@ -138,6 +139,8 @@ export function rowOf(start: RunStart, outcome: RunOutcome): RunRow {
 export interface VerdictOptions {
   /** Also counts an `aborted` run that is not a stop or restart of the monitor. */
   aborts?: boolean;
+  /** Set to false to leave out the skip for the rule cache warmup. */
+  warmup?: boolean;
 }
 
 /** The part of a run that tells whether it carries a verdict. */
@@ -164,7 +167,7 @@ export function isVerdict(row: VerdictFields, options: VerdictOptions = {}): boo
   }
 
   if (row.status === 'skipped') {
-    return row.skipReason === 'rule_cache_warmup';
+    return row.skipReason === 'rule_cache_warmup' && options.warmup !== false;
   }
 
   return options.aborts === true && row.status === 'aborted' && !isMonitorAbort(row);

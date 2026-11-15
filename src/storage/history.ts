@@ -150,8 +150,18 @@ export type RunWithResult = RunRow & {
 export interface ListOptions {
   /** Only runs of this scenario. */
   scenario?: ScenarioName;
+  /** Leaves out the runs of these scenarios. */
+  exceptScenarios?: readonly ScenarioName[];
   /** Most rows to return. */
   limit: number;
+}
+
+/** What `prune` is limited to. */
+export interface PruneOptions {
+  /** Only runs and delivered alerts of this scenario; all of them by default. */
+  scenario?: ScenarioName;
+  /** Only runs and delivered alerts of scenarios that are not listed, such as ones the code no longer knows; ignored with `scenario`. */
+  exceptScenarios?: readonly ScenarioName[];
 }
 
 /** A message to queue together with a state change. */
@@ -193,9 +203,9 @@ export interface History {
    * Ends every run still marked running.
    * @param errorClass Class to give them.
    * @param at Time of the end, ISO.
-   * @returns Number of rows changed.
+   * @returns The rows as they are after the change.
    */
-  abortRunning(errorClass: 'monitor_restarted', at: string): number;
+  abortRunning(errorClass: 'monitor_restarted', at: string): RunRow[];
   /**
    * Reads one run.
    * @param runId Id of the run to read.
@@ -211,7 +221,7 @@ export interface History {
   /**
    * Finds the newest run that carries a verdict.
    * @param scenario Scenario whose runs are searched.
-   * @param options `aborts` also counts an abort that is not a stop or restart of the monitor.
+   * @param options `aborts` also counts an abort that is not a stop or restart of the monitor; `warmup: false` leaves out the warmup skip.
    * @returns The row, or undefined when no run has a verdict.
    */
   lastVerdict(scenario: ScenarioName, options?: VerdictOptions): RunRow | undefined;
@@ -289,9 +299,10 @@ export interface History {
   /**
    * Deletes old data.
    * @param before ISO time.
+   * @param options Limits the deletion to one scenario.
    * @returns Number of runs deleted, those that finished before it; delivered or dropped alerts before it go too.
    */
-  prune(before: string): number;
+  prune(before: string, options?: PruneOptions): number;
   /** Closes the database. */
   close(): void;
 }
@@ -533,7 +544,7 @@ export function createHistory(db: DatabaseSync): History {
           at, Number.isNaN(duration) ? 0 : duration, errorClass, CULPRIT_OF[errorClass], message, num(row, 'id') ?? 0);
       }
 
-      return rows.length;
+      return rows.map(row => toRow(one('SELECT * FROM runs WHERE id = ?', num(row, 'id') ?? 0) ?? row));
     });
   };
 
@@ -553,11 +564,15 @@ export function createHistory(db: DatabaseSync): History {
   };
 
   const list: History['list'] = (options) => {
-    const rows = options.scenario === undefined
-      ? all('SELECT * FROM runs ORDER BY started_at DESC, id DESC LIMIT ?', options.limit)
-      : all('SELECT * FROM runs WHERE scenario = ? ORDER BY started_at DESC, id DESC LIMIT ?', options.scenario, options.limit);
+    const except = options.exceptScenarios ?? [];
+    const filters = [
+      ...options.scenario === undefined ? [] : ['scenario = ?'],
+      ...except.length === 0 ? [] : [`scenario NOT IN (${except.map(() => '?').join(', ')})`],
+    ];
+    const where = filters.length === 0 ? '' : ` WHERE ${filters.join(' AND ')}`;
+    const params: SQLInputValue[] = [...options.scenario === undefined ? [] : [options.scenario], ...except, options.limit];
 
-    return rows.map(toRow);
+    return all(`SELECT * FROM runs${where} ORDER BY started_at DESC, id DESC LIMIT ?`, ...params).map(toRow);
   };
 
   const lastVerdict: History['lastVerdict'] = (scenario, options = {}) => {
@@ -690,11 +705,29 @@ export function createHistory(db: DatabaseSync): History {
     run('DELETE FROM kv WHERE key = ?', key);
   };
 
-  const prune: History['prune'] = (before) => {
+  const prune: History['prune'] = (before, options = {}) => {
     return transaction(() => {
-      const removed = run('DELETE FROM runs WHERE finished_at IS NOT NULL AND finished_at < ?', before);
+      if (options.scenario === undefined && options.exceptScenarios !== undefined) {
+        const marks = options.exceptScenarios.map(() => '?').join(', ');
+        const listed = options.exceptScenarios.length === 0 ? '' : ` AND scenario NOT IN (${marks})`;
+        const removed = run(`DELETE FROM runs WHERE finished_at IS NOT NULL AND finished_at < ?${listed}`, before, ...options.exceptScenarios);
 
-      run('DELETE FROM alert_outbox WHERE sent_at < ? OR dropped_at < ?', before, before);
+        run(`DELETE FROM alert_outbox WHERE (sent_at < ? OR dropped_at < ?)${listed}`, before, before, ...options.exceptScenarios);
+
+        return removed;
+      }
+
+      if (options.scenario === undefined) {
+        const removed = run('DELETE FROM runs WHERE finished_at IS NOT NULL AND finished_at < ?', before);
+
+        run('DELETE FROM alert_outbox WHERE sent_at < ? OR dropped_at < ?', before, before);
+
+        return removed;
+      }
+
+      const removed = run('DELETE FROM runs WHERE scenario = ? AND finished_at IS NOT NULL AND finished_at < ?', options.scenario, before);
+
+      run('DELETE FROM alert_outbox WHERE scenario = ? AND (sent_at < ? OR dropped_at < ?)', options.scenario, before, before);
 
       return removed;
     });

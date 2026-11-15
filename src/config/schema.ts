@@ -1,9 +1,9 @@
 import { z } from 'zod';
 import { decodeIntegrationToken } from '../hawk/token.js';
 import { blockedPortOf } from '../net/blocked-ports.js';
-import { CHECK_NOTIFICATION, NEW_PROJECT, SCENARIO_NAMES, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS } from '../scenarios/names.js';
-import { boundedDurationMs, durationMs } from './duration.js';
-import { watchdogOf } from './scenario.js';
+import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, NEW_PROJECT, SCENARIO_NAMES, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS } from '../scenarios/names.js';
+import { MAX_DURATION_MS, boundedDurationMs, durationMs } from './duration.js';
+import { PROBE_WATCHDOG_MARGIN_MS, watchdogOf } from './scenario.js';
 
 const DEFAULT_INTERNAL_PORT = 8090;
 const MAX_PORT = 65_535;
@@ -45,6 +45,16 @@ const DEFAULT_RETRY_ATTEMPTS = 3;
 const MAX_RETRY_ATTEMPTS = 5;
 const DEFAULT_RETRY_DELAYS = '200,500';
 const MAX_RETRY_DELAY_MS = 60_000;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
+const MIN_HEARTBEAT_INTERVAL_MS = 10_000;
+const MAX_PERIOD_MS = 3_600_000;
+const DEFAULT_MANUAL_MIN_INTERVAL_MS = 60_000;
+const MIN_RUN_TOKEN_LENGTH = 32;
+const DEFAULT_PROBE_INTERVAL_MS = 90_000;
+const MIN_PROBE_INTERVAL_MS = 10_000;
+const DEFAULT_PROBE_ALERT_AFTER_FAILURES = 3;
+const DEFAULT_PROBE_RETENTION_DAYS = 7;
+const DEFAULT_GARAGE_TIMEOUT_MS = 15_000;
 const DEFAULT_SWEEP_INTERVAL_MS = 3_600_000;
 const DEFAULT_SWEEP_MIN_AGE_MS = 900_000;
 const RECEIVER_SECRET_PATTERN = /^[\w-]{32,}$/;
@@ -119,6 +129,20 @@ function rejectBlockedPort(value: string, ctx: z.RefinementCtx): void {
 function httpUrl(): z.ZodType<string> {
   return z.url({ protocol: /^https?$/,
     message: 'must be an http(s) URL' }).superRefine(rejectBlockedPort);
+}
+
+/**
+ * Builds the schema for the address of Garage: an http(s) origin, since the probe adds its own paths.
+ * @returns Schema that outputs the origin without a trailing slash.
+ */
+function httpOrigin(): z.ZodType<string> {
+  return httpUrl()
+    .refine((value) => {
+      const url = new URL(value);
+
+      return url.pathname === '/' && url.search === '' && url.hash === '' && url.username === '' && url.password === '';
+    }, 'must be an origin: scheme, host and optional port, without a path, query or credentials')
+    .transform(value => new URL(value).origin);
 }
 
 /**
@@ -285,6 +309,17 @@ export const ENV_SHAPE = {
   ALERT_RETRY_MS: pub(boundedDurationMs(DEFAULT_ALERT_RETRY_MS, MIN_ALERT_RETRY_MS, MAX_ALERT_RETRY_MS)),
   SWEEP_INTERVAL_MS: pub(durationMs(DEFAULT_SWEEP_INTERVAL_MS, { allowZero: true })),
   SWEEP_MIN_AGE_MS: pub(durationMs(DEFAULT_SWEEP_MIN_AGE_MS)),
+  // The address of a ping service is a secret: whoever knows it can ping for the monitor.
+  HEARTBEAT_URL: httpUrl().optional(),
+  HEARTBEAT_INTERVAL_MS: pub(boundedDurationMs(DEFAULT_HEARTBEAT_INTERVAL_MS, MIN_HEARTBEAT_INTERVAL_MS, MAX_PERIOD_MS)),
+  RUN_TOKEN: z.string().min(MIN_RUN_TOKEN_LENGTH, `must be at least ${String(MIN_RUN_TOKEN_LENGTH)} characters`)
+    .optional(),
+  MANUAL_MIN_INTERVAL_MS: pub(boundedDurationMs(DEFAULT_MANUAL_MIN_INTERVAL_MS, 0, MAX_PERIOD_MS)),
+  PROBE_INTERVAL_MS: pub(boundedDurationMs(DEFAULT_PROBE_INTERVAL_MS, MIN_PROBE_INTERVAL_MS, MAX_DURATION_MS)),
+  PROBE_ALERT_AFTER_FAILURES: pub(intRange(DEFAULT_PROBE_ALERT_AFTER_FAILURES, 1, MAX_ALERT_AFTER_FAILURES)),
+  PROBE_RETENTION_DAYS: pub(intRange(DEFAULT_PROBE_RETENTION_DAYS, 1, MAX_RETENTION_DAYS)),
+  GARAGE_URL: pub(httpOrigin().optional()),
+  GARAGE_TIMEOUT_MS: pub(durationMs(DEFAULT_GARAGE_TIMEOUT_MS)),
 };
 
 /**
@@ -337,7 +372,8 @@ function checkRetry(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx): voi
   }
 
   const pauses = env.RETRY_DELAYS_MS.reduce((sum, delay) => sum + delay, 0);
-  const [shortestName, shortest] = [...STAGE_TIMEOUT_VARS.map(([name]) => name), 'NOTIFICATION_SETUP_TIMEOUT_MS' as const]
+  const containing = [...STAGE_TIMEOUT_VARS.map(([name]) => name), 'NOTIFICATION_SETUP_TIMEOUT_MS' as const, ...env.GARAGE_URL === undefined ? [] : ['GARAGE_TIMEOUT_MS' as const]];
+  const [shortestName, shortest] = containing
     .map(name => [name, env[name]] as const)
     .reduce((least, entry) => entry[1] < least[1] ? entry : least);
 
@@ -388,6 +424,42 @@ function checkScenarioIntervals(env: z.output<typeof baseSchema>, ctx: z.Refinem
 }
 
 /**
+ * Checks the variables of the probe against the rest.
+ * @param env Parsed variables with usable numbers.
+ * @param ctx Collects the issues.
+ */
+function checkProbe(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx): void {
+  // A configuration without the probe was valid before the probe existed, so its variables are not judged.
+  if (Array.isArray(env.SCENARIOS) && env.SCENARIOS.includes(ENDPOINTS_PROBE)) {
+    const budget = env.COLLECTOR_AVAILABILITY_TIMEOUT_MS + env.API_AVAILABILITY_TIMEOUT_MS + (env.GARAGE_URL === undefined ? 0 : env.GARAGE_TIMEOUT_MS);
+
+    if (env.PROBE_INTERVAL_MS > env.CHECK_INTERVAL_MS) {
+      ctx.addIssue({ code: 'custom',
+        path: ['PROBE_INTERVAL_MS'],
+        message: 'must not exceed CHECK_INTERVAL_MS' });
+    }
+
+    if (env.PROBE_INTERVAL_MS <= budget + PROBE_WATCHDOG_MARGIN_MS) {
+      ctx.addIssue({ code: 'custom',
+        path: ['PROBE_INTERVAL_MS'],
+        message: `must be greater than the timeouts of the probe stages (${String(budget)} ms) + ${String(PROBE_WATCHDOG_MARGIN_MS)} ms` });
+    }
+
+    if (env.PROBE_RETENTION_DAYS > env.HISTORY_RETENTION_DAYS) {
+      ctx.addIssue({ code: 'custom',
+        path: ['PROBE_RETENTION_DAYS'],
+        message: 'must not exceed HISTORY_RETENTION_DAYS' });
+    }
+  }
+
+  if (env.GARAGE_URL !== undefined && env.HTTP_TIMEOUT_MS >= env.GARAGE_TIMEOUT_MS) {
+    ctx.addIssue({ code: 'custom',
+      path: ['GARAGE_TIMEOUT_MS'],
+      message: 'must be greater than HTTP_TIMEOUT_MS' });
+  }
+}
+
+/**
  * Checks the scheduling variables of the continuous monitoring against each other.
  * @param env Parsed variables with usable numbers.
  * @param ctx Collects the issues.
@@ -415,6 +487,7 @@ function checkMonitoring(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx)
   }
 
   checkScenarioIntervals(env, ctx);
+  checkProbe(env, ctx);
 }
 
 /**
@@ -428,7 +501,8 @@ function checkCombinations(env: z.output<typeof baseSchema>, ctx: z.RefinementCt
   const numbers = ['HTTP_TIMEOUT_MS', 'RUN_TIMEOUT_MS', 'LATE_DUPLICATE_WAIT_MS', ...STAGE_TIMEOUT_VARS.map(([name]) => name),
     'NOTIFICATION_TIMEOUT_MS', 'NOTIFICATION_PAIR_WAIT_MS', 'NOTIFICATION_SETUP_TIMEOUT_MS',
     'CHECK_INTERVAL_MS', 'NEW_PROJECT_INTERVAL_MS', 'SOURCEMAPS_INTERVAL_MS', 'SENTRY_ENVELOPE_INTERVAL_MS',
-    'NEW_PROJECT_TOKEN_TIMEOUT_MS', 'RELEASE_SAVE_TIMEOUT_MS', 'WATCHDOG_GRACE_MS', 'SCENARIO_STAGGER_MS', 'SWEEP_MIN_AGE_MS', 'RETRY_ATTEMPTS'] as const;
+    'NEW_PROJECT_TOKEN_TIMEOUT_MS', 'RELEASE_SAVE_TIMEOUT_MS', 'WATCHDOG_GRACE_MS', 'SCENARIO_STAGGER_MS', 'SWEEP_MIN_AGE_MS', 'RETRY_ATTEMPTS',
+    'PROBE_INTERVAL_MS', 'PROBE_RETENTION_DAYS', 'HISTORY_RETENTION_DAYS', 'GARAGE_TIMEOUT_MS'] as const;
 
   if (!URL.canParse(env.HAWK_API_URL) || numbers.some(name => typeof env[name] !== 'number') || !Array.isArray(env.RETRY_DELAYS_MS)) {
     return;

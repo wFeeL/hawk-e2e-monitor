@@ -1,6 +1,9 @@
-import { CHECK_NOTIFICATION, NEW_PROJECT, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS } from '../scenarios/names.js';
+import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, NEW_PROJECT, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS } from '../scenarios/names.js';
 import type { ScenarioName } from '../scenarios/names.js';
 import type { Config } from './load.js';
+
+/** A scenario that runs stages with a test event; the probe has settings of its own. */
+export type ScenarioWithEvent = Exclude<ScenarioName, typeof ENDPOINTS_PROBE>;
 
 const NEW_PROJECT_ALERT_AFTER_FAILURES = 1;
 
@@ -16,6 +19,27 @@ export interface ScenarioSettings {
   alertAfterFailures: number;
   /** Days to keep finished runs. */
   retentionDays: number;
+}
+
+/** Time added to the timeouts of the probe stages before a probe counts as hung. */
+export const PROBE_WATCHDOG_MARGIN_MS = 10_000;
+
+/**
+ * Finds the settings of the probe: its own interval, threshold and retention, and a watchdog from the timeouts of its stages.
+ * @param config Validated configuration.
+ * @returns Settings of `endpoints-probe`; it has no cleanup.
+ */
+function probeSettings(config: Config): ScenarioSettings {
+  const { timeouts, hawk, monitoring } = config;
+  const budgetMs = timeouts.collectorAvailability + timeouts.apiAvailability + (hawk.garageUrl === undefined ? 0 : timeouts.garage);
+
+  return {
+    intervalMs: monitoring.probe.intervalMs,
+    watchdogMs: budgetMs + PROBE_WATCHDOG_MARGIN_MS,
+    cleanupMs: 0,
+    alertAfterFailures: monitoring.probe.alertAfterFailures,
+    retentionDays: monitoring.probe.retentionDays,
+  };
 }
 
 /** The time limits that make up the watchdog of a scenario. */
@@ -46,7 +70,7 @@ export interface WatchdogParts {
  * @param parts Limits as numbers, from the configuration or from raw variables.
  * @returns Time after which a run of the scenario counts as hung.
  */
-export function watchdogOf(scenario: ScenarioName, parts: WatchdogParts): number {
+export function watchdogOf(scenario: ScenarioWithEvent, parts: WatchdogParts): number {
   const tail = parts.cleanup + parts.graceMs;
 
   switch (scenario) {
@@ -68,7 +92,7 @@ export function watchdogOf(scenario: ScenarioName, parts: WatchdogParts): number
  * @param scenario Scenario to ask about.
  * @returns Its own interval, or the global one for the two original scenarios.
  */
-function intervalOf(config: Config, scenario: ScenarioName): number {
+function intervalOf(config: Config, scenario: ScenarioWithEvent): number {
   const { scenarios, monitoring } = config;
 
   switch (scenario) {
@@ -87,10 +111,14 @@ function intervalOf(config: Config, scenario: ScenarioName): number {
 /**
  * Finds the settings of a scenario.
  * @param config Validated configuration.
- * @param scenario Scenario to ask about.
+ * @param scenario Scenario; the probe has its own values, every other scenario shares the global ones.
  * @returns Interval, watchdog, cleanup time, alert threshold and retention.
  */
 export function scenarioSettings(config: Config, scenario: ScenarioName): ScenarioSettings {
+  if (scenario === ENDPOINTS_PROBE) {
+    return probeSettings(config);
+  }
+
   const { timeouts, monitoring, scenarios } = config;
 
   return {
