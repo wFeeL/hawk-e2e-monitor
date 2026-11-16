@@ -149,8 +149,10 @@ Waiting is condition-based. Stages poll the API with a growing pause and a
 deadline instead of sleeping a fixed time, and a poll result is one of found,
 not found (the API answered, the event is not there) or API error. Network
 errors and 5xx answers are retried (`RETRY_ATTEMPTS`, `RETRY_DELAYS_MS`) only
-where a retry cannot change anything twice: reads of the API, and sends to
-the collector that failed before the event could reach it. An event the
+where a retry cannot change anything twice: reads of the API, mutations that
+can safely repeat (login, token refresh, rule update and delete), event
+removal with a recheck that the event is gone, and sends to the collector that
+failed before the event could reach it. An event the
 collector may have received is never sent again, and API mutations that create
 something are not retried. The whole run has its
 own limit (`RUN_TIMEOUT_MS`), and the configuration check refuses stage
@@ -297,7 +299,7 @@ is reported as degraded (`grouping_pattern`).
 - **Late copies.** Before cleanup the check waits `LATE_DUPLICATE_WAIT_MS`
   (5 s) and reads the event count once more: a count that grew after the
   check means Hawk counted a late copy, and the run fails with
-  `duplicate_event`. Set it to 0 to skip the recheck.
+  `duplicate_event`. Set it to 0 to recheck at once, without the pause.
 - **Threshold rule.** check-notification keeps a second rule for the instance
   that Hawk sends on the second event of the same error within an hour. On
   repeat runs (`REPEAT_EVERY_N_RUNS`) the stage `threshold_formed` waits for
