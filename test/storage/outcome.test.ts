@@ -241,7 +241,10 @@ describe('projection', () => {
   const DAY_RUNS = 144;
 
   it('eventsPerRun follows the transport mode and the repeat period, for both scenarios alike', () => {
-    expect(eventsPerRun(testConfig())).toBeCloseTo(1 + 1 / 12);
+    // The repeat period counts runs in every mode: 2 of every 2N runs repeat, which is a share of 1/N.
+    expect(eventsPerRun(testConfig())).toBeCloseTo(1 + 1 / 6);
+    expect(eventsPerRun(testConfig({ transportMode: 'alternate',
+      repeatEveryNRuns: 2 }))).toBeCloseTo(1 + 1 / 2);
     expect(eventsPerRun(testConfig({ transportMode: 'http',
       repeatEveryNRuns: 6 }))).toBeCloseTo(1 + 1 / 6);
     expect(eventsPerRun(testConfig({ repeatEveryNRuns: 0 }))).toBe(1);
@@ -253,7 +256,7 @@ describe('projection', () => {
       intervalMs: 600_000,
       scenarios: ['check-notification'] } });
 
-    expect(eventsSentPer30Days(only)).toBeCloseTo(DAY_RUNS * 30 * (1 + 1 / 12));
+    expect(eventsSentPer30Days(only)).toBeCloseTo(DAY_RUNS * 30 * (1 + 1 / 6));
   });
 
   it('applies the repeat share to the two scenarios that repeat and not to the others', () => {

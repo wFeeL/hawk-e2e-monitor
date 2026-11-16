@@ -200,10 +200,8 @@ export function eventsPerRun(config: Config): number {
     return 1;
   }
 
-  // In `alternate` mode the period counts runs of one transport, so only every second run advances it.
-  const period = config.transportMode === 'alternate' ? 2 * config.repeatEveryNRuns : config.repeatEveryNRuns;
-
-  return 1 + 1 / period;
+  // In `alternate` mode 2 of every 2N runs repeat, so the share is 1/N there too.
+  return 1 + 1 / config.repeatEveryNRuns;
 }
 
 /**
