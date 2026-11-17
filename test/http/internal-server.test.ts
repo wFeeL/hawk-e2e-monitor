@@ -2,13 +2,13 @@ import type { Server } from 'node:http';
 import type { Buffer } from 'node:buffer';
 import net from 'node:net';
 import type { AddressInfo } from 'node:net';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createFakeClock } from '../support/fake-clock.js';
 import { memoryLogger } from '../support/logger.js';
 import { createInternalServer } from '../../src/http/internal-server.js';
 import type { InternalServerOptions } from '../../src/http/internal-server.js';
 
 const HUNG_TIMEOUT_MS = 50;
-const HANG_TIMEOUT_MS = 1000;
 
 const servers: Server[] = [];
 
@@ -31,6 +31,7 @@ async function start(overrides: Partial<InternalServerOptions> = {}): Promise<Ru
     liveness: [],
     readiness: [],
     checkTimeoutMs: 100,
+    clock: createFakeClock(),
     ...overrides,
   });
 
@@ -91,9 +92,11 @@ describe('internal server', () => {
       failed: ['db'] });
   });
 
-  it('hanging check times out', async () => {
+  it('a check that never resolves fails with timeout when the fake clock passes the limit', async () => {
+    const clock = createFakeClock();
     let seen: AbortSignal | undefined;
     const { call } = await start({
+      clock,
       checkTimeoutMs: HUNG_TIMEOUT_MS,
       readiness: [{
         name: 'hung',
@@ -104,12 +107,20 @@ describe('internal server', () => {
         },
       }],
     });
-    const started = performance.now();
-    const res = await call('/readyz');
+    const answer = call('/readyz');
+
+    await vi.waitFor(() => {
+      expect(clock.pending()).toBe(1);
+    });
+    await clock.advance(HUNG_TIMEOUT_MS - 1);
+    expect(seen?.aborted).toBe(false);
+    await clock.advance(1);
+
+    const res = await answer;
 
     expect(res.status).toBe(503);
-    expect(performance.now() - started).toBeLessThan(HANG_TIMEOUT_MS);
     expect(seen?.aborted).toBe(true);
+    expect(clock.pending()).toBe(0);
   });
 
   it('checks run in parallel', async () => {
@@ -145,8 +156,10 @@ describe('internal server', () => {
 
   it('logs reason of a failed check', async () => {
     const logger = memoryLogger();
+    const clock = createFakeClock();
     const { call } = await start({
       logger,
+      clock,
       checkTimeoutMs: HUNG_TIMEOUT_MS,
       readiness: [
         { name: 'falsy',
@@ -157,7 +170,15 @@ describe('internal server', () => {
           run: () => new Promise<boolean>(() => undefined) },
       ],
     });
-    const res = await call('/readyz');
+    const answer = call('/readyz');
+
+    // Only the hung check is still waiting once the other two have answered.
+    await vi.waitFor(() => {
+      expect(clock.pending()).toBe(1);
+    });
+    await clock.advance(HUNG_TIMEOUT_MS);
+
+    const res = await answer;
     const entries = logger.lines.filter(line => line.msg === 'check failed');
 
     expect(await res.json()).toEqual({ status: 'fail',

@@ -95,8 +95,9 @@ describe('runProvisionCommand', () => {
     const running = runProvisionCommand(WAIT, config, io, { clock,
       resolveAddress: async () => Promise.resolve(address()) });
 
+    // The setup deadline and the warmup wait.
     await vi.waitFor(() => {
-      expect(clock.pending()).toBe(1);
+      expect(clock.pending()).toBe(2);
     });
     expect(captured.stderr).toContain('waiting 1 s for Hawk to reload notification rules');
 
@@ -145,6 +146,28 @@ describe('runProvisionCommand', () => {
     expect(await runProvisionCommand(NO_WAIT, config, io, { resolveAddress: async () => Promise.resolve(address()) })).toBe(1);
     expect(captured.stderr).toContain('failed api_forbidden: ');
     expect(captured.stdout).toBe('');
+  });
+
+  it('exit 1 when the setup deadline passes on the fake clock while the address hangs', async () => {
+    const clock = createFakeClock();
+    const { captured, io } = capture();
+    const running = runProvisionCommand(NO_WAIT, config, io, { clock,
+      resolveAddress: async signal => new Promise<PublicAddress>((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          reject(signal.reason);
+        }, { once: true });
+      }) });
+
+    await vi.waitFor(() => {
+      expect(clock.pending()).toBe(1);
+    });
+    await clock.advance(config.notifications.setupTimeoutMs - 1);
+    expect(captured.stderr).not.toContain('failed');
+    await clock.advance(1);
+
+    expect(await running).toBe(1);
+    expect(captured.stderr).toContain('failed monitor_internal: ');
+    expect(clock.pending()).toBe(0);
   });
 
   it('an unexpected exception is monitor_internal', async () => {

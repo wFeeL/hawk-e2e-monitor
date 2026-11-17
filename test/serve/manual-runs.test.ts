@@ -107,6 +107,7 @@ async function rig(options: RigOptions = {}): Promise<Rig> {
     liveness: [],
     readiness: [],
     checkTimeoutMs: 100,
+    clock,
     routes: new Map([['POST /runs/*', handler]]) });
 
   servers.push(server);

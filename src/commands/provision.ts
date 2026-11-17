@@ -13,7 +13,8 @@ import { createProvisioner } from '../notifications/provisioning.js';
 import { scenarioSecrets } from '../scenarios/send-and-receive/run.js';
 import { TELEGRAM_DELIVERY } from '../scenarios/names.js';
 import { MATCH_CHANGED_KEY, TELEGRAM_MATCH_CHANGED_KEY } from '../storage/keys.js';
-import { systemClock } from '../time/clock.js';
+import { systemClock, timeoutSignal } from '../time/clock.js';
+import type { TimeoutSignal } from '../time/clock.js';
 import type { Clock } from '../time/clock.js';
 import type { CheckIo } from './check.js';
 import { refusalWhileServing } from './serving.js';
@@ -54,22 +55,27 @@ export async function runProvisionCommand(command: ProvisionCommand, config: Con
       io.stderr(`${redact(line)}\n`);
     } });
 
+  let deadline: TimeoutSignal | undefined;
+
   try {
     const settings = notificationSettings(config);
     // Rule T exists only for a configuration that chooses the scenario; its settings are checked before anything changes.
     const bot = config.monitoring.scenarios.includes(TELEGRAM_DELIVERY) ? telegramSettings(config) : undefined;
-    const signal = AbortSignal.timeout(settings.setupTimeoutMs);
+
+    deadline = timeoutSignal(clock, settings.setupTimeoutMs);
+
+    const { signal } = deadline;
     const api = deps.api ?? createHawkApi({ transport: createGraphqlTransport({ url: config.hawk.apiUrl,
       httpTimeoutMs: config.httpTimeoutMs,
-      clock: systemClock,
+      clock,
       retry: config.retry }),
     email: config.hawk.email,
     password: config.hawk.password,
-    clock: systemClock,
+    clock,
     retry: config.retry });
     const address = deps.resolveAddress === undefined
       ? await resolvePublicAddress(settings, { httpTimeoutMs: config.httpTimeoutMs,
-        clock: systemClock,
+        clock,
         retry: config.retry }, signal)
       : await deps.resolveAddress(signal);
 
@@ -135,5 +141,7 @@ export async function runProvisionCommand(command: ProvisionCommand, config: Con
     io.stderr(`${redact(`failed ${errorClass}: ${message}`)}\n`);
 
     return 1;
+  } finally {
+    deadline?.dispose();
   }
 }

@@ -3,11 +3,14 @@ import type { Config } from './config/load.js';
 import { createInternalServer } from './http/internal-server.js';
 import type { Check, RouteHandler } from './http/internal-server.js';
 import type { Logger } from './log/logger.js';
+import type { Clock } from './time/clock.js';
 
 /** Dependencies injected into `startApp`. */
 export interface AppDeps {
   /** Logger for the whole service. */
   logger: Logger;
+  /** Clock of the check time limit and the shutdown cut. */
+  clock: Clock;
   /** Checks behind `/healthz`; none by default. */
   liveness?: readonly Check[];
   /** Checks behind `/readyz`; none by default. */
@@ -67,6 +70,7 @@ export async function startApp(config: Config, deps: AppDeps): Promise<AppHandle
     readiness: deps.readiness ?? [],
     ...deps.routes === undefined ? {} : { routes: deps.routes },
     checkTimeoutMs: config.healthCheckTimeoutMs,
+    clock: deps.clock,
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -86,13 +90,14 @@ export async function startApp(config: Config, deps: AppDeps): Promise<AppHandle
   const stop: AppHandle['stop'] = () => {
     stopPromise ??= new Promise<void>((resolve, reject) => {
       // Connections still busy after the timeout are cut so shutdown ends.
-      const timer = setTimeout(() => {
-        server.closeAllConnections();
-      }, config.shutdownTimeoutMs);
+      const cut = new AbortController();
 
-      timer.unref();
+      deps.clock.sleep(config.shutdownTimeoutMs, cut.signal).then(() => {
+        server.closeAllConnections();
+      }, () => undefined);
       server.close((error) => {
-        clearTimeout(timer);
+        // A live timer would keep the process up after a clean close.
+        cut.abort();
         if (error) {
           reject(error);
         } else {
