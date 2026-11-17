@@ -4,11 +4,15 @@ import { CheckError, CULPRIT_OF } from '../errors/taxonomy.js';
 import type { Culprit, ErrorClass } from '../errors/taxonomy.js';
 import type { LateKind } from '../notifications/types.js';
 import type { ScenarioName } from '../scenarios/names.js';
-import type { AlertAttempt, AlertLevelState, AlertMessage, AlertStateRow, ListOptions, OutboxRow, PruneOptions, RunOutcome, RunRow, RunStart, RunStatus, RunTrigger, RunWithResult, ScenarioStats, SkipReason, SkipRecord, StageRow, StatsWindow } from './types.js';
+import type { ListOptions, PruneOptions, RunOutcome, RunRow, RunStart, RunStatus, RunTrigger, RunWithResult, ScenarioStats, SkipReason, SkipRecord, StageRow, StatsWindow } from './types.js';
 import { MS_PER_DAY } from '../time/units.js';
 import { isMonitorAbort, isVerdict } from './outcome.js';
 import { codes, compact, num, required, text } from './rows.js';
 import type { SqlRow } from './rows.js';
+import { createAlertStore } from './alerts.js';
+import type { AlertStore } from './alerts.js';
+import { createKvStore } from './kv.js';
+import type { KvStore } from './kv.js';
 import { createSql } from './sql.js';
 import type { VerdictOptions } from './outcome.js';
 
@@ -18,7 +22,7 @@ const P50 = 0.5;
 const P95 = 0.95;
 
 /** Storage of runs, alert state and small values. */
-export interface History {
+export interface History extends AlertStore, KvStore {
   /**
    * Gives the number of the next run of a scenario.
    * @param scenario Scenario whose runs are counted.
@@ -93,65 +97,6 @@ export interface History {
    */
   markLateNotification(runId: string, channel: LateKind, at: string): 'duplicate' | 'late' | undefined;
   /**
-   * Reads the alert state of a scenario.
-   * @param scenario Scenario whose state is read.
-   * @returns State, or undefined when none is stored.
-   */
-  alertState(scenario: ScenarioName): AlertStateRow | undefined;
-  /**
-   * Writes the alert state and queues a message in one transaction.
-   * @param state New state.
-   * @param message Message to queue.
-   */
-  saveAlert(state: AlertStateRow, message?: AlertMessage): void;
-  /**
-   * Writes to the alert tables as `saveAlert` does and takes the write back, to find out whether they accept writes.
-   * @param at Time stamped on the probe row, ISO.
-   */
-  probeAlertStorage(at: string): void;
-  /**
-   * Lists alerts due for delivery.
-   * @param now Current time, ISO.
-   * @param limit Most rows to return.
-   * @returns Unsent, undropped rows with `nextAttemptAt` up to `now`, oldest first.
-   */
-  pendingAlerts(now: string, limit: number): OutboxRow[];
-  /**
-   * Records a delivery attempt and counts it.
-   * @param id Row id.
-   * @param update What came of it.
-   */
-  alertAttempt(id: number, update: AlertAttempt): void;
-  /**
-   * Finds the oldest message that is neither sent nor dropped.
-   * @returns Its `createdAt`, or undefined when the queue is empty.
-   */
-  oldestUnsentAlert(): string | undefined;
-  /**
-   * Reads a stored value.
-   * @param key Key the value is kept under.
-   * @returns The value, or undefined.
-   */
-  getKv(key: string): string | undefined;
-  /**
-   * Stores a value.
-   * @param key Key to keep the value under.
-   * @param value Text to keep under the key.
-   */
-  setKv(key: string, value: string): void;
-  /**
-   * Reads a key and writes the value `decide` returns, in one immediate transaction.
-   * @param key Key in `kv`.
-   * @param decide Gets the current value; returns the value to write, `null` to delete the key, or undefined to leave it.
-   * @returns The value before the call.
-   */
-  updateKv(key: string, decide: (current: string | undefined) => string | null | undefined): string | undefined;
-  /**
-   * Removes a stored value.
-   * @param key Key the value is kept under.
-   */
-  deleteKv(key: string): void;
-  /**
    * Deletes old data.
    * @param before ISO time.
    * @param options Limits the deletion to one scenario.
@@ -178,7 +123,8 @@ function nearestRank(sorted: readonly number[], fraction: number): number | null
  * @returns History bound to it.
  */
 export function createHistory(db: DatabaseSync): History {
-  const { transaction, all, one, run, iterate } = createSql(db);
+  const sql = createSql(db);
+  const { transaction, all, one, run, iterate } = sql;
 
   const stagesOf = (pk: number): StageRow[] => all('SELECT name, status, duration_ms, error_class, culprit FROM stages WHERE run_pk = ? ORDER BY position', pk)
     .map(row => compact({ name: required(row, 'name') as StageName,
@@ -419,92 +365,6 @@ export function createHistory(db: DatabaseSync): History {
     });
   };
 
-  const alertState: History['alertState'] = (scenario) => {
-    const row = one('SELECT * FROM alert_state WHERE scenario = ?', scenario);
-
-    return row === undefined
-      ? undefined
-      : compact<AlertStateRow>({
-          scenario,
-          state: required(row, 'state') as AlertLevelState,
-          failureStreak: num(row, 'failure_streak') ?? 0,
-          lastClass: text(row, 'last_class'),
-          lastStage: text(row, 'last_stage'),
-          lastRunId: text(row, 'last_run_id'),
-          episodeStartedAt: text(row, 'episode_started_at'),
-          episodeFailures: num(row, 'episode_failures') ?? 0,
-          degraded: codes(text(row, 'degraded')),
-          updatedAt: required(row, 'updated_at'),
-        });
-  };
-
-  const saveAlert: History['saveAlert'] = (state, message) => {
-    transaction(() => {
-      run('INSERT OR REPLACE INTO alert_state (scenario, state, failure_streak, last_class, last_stage, last_run_id, episode_started_at, episode_failures, degraded, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        state.scenario, state.state, state.failureStreak, state.lastClass ?? null, state.lastStage ?? null, state.lastRunId ?? null,
-        state.episodeStartedAt ?? null, state.episodeFailures, JSON.stringify(state.degraded), state.updatedAt);
-
-      if (message !== undefined) {
-        run('INSERT INTO alert_outbox (scenario, run_id, text, created_at, next_attempt_at) VALUES (?, ?, ?, ?, ?)',
-          state.scenario, message.runId ?? null, message.text, message.at, message.at);
-      }
-    });
-  };
-
-  const probeAlertStorage: History['probeAlertStorage'] = (at) => {
-    transaction(() => {
-      run('INSERT INTO alert_outbox (scenario, run_id, text, created_at, next_attempt_at) VALUES (\'probe\', NULL, \'probe\', ?, ?)', at, at);
-      run('DELETE FROM alert_outbox WHERE id = last_insert_rowid()');
-    });
-  };
-
-  const pendingAlerts: History['pendingAlerts'] = (now, limit) => {
-    return all('SELECT * FROM alert_outbox WHERE sent_at IS NULL AND dropped_at IS NULL AND next_attempt_at <= ? ORDER BY created_at, id LIMIT ?', now, limit)
-      .map(row => compact<OutboxRow>({ id: num(row, 'id') ?? 0,
-        scenario: required(row, 'scenario') as ScenarioName,
-        runId: text(row, 'run_id'),
-        text: required(row, 'text'),
-        createdAt: required(row, 'created_at'),
-        attempts: num(row, 'attempts') ?? 0,
-        nextAttemptAt: required(row, 'next_attempt_at') }));
-  };
-
-  const alertAttempt: History['alertAttempt'] = (id, update) => {
-    run('UPDATE alert_outbox SET attempts = attempts + 1, sent_at = COALESCE(?, sent_at), next_attempt_at = COALESCE(?, next_attempt_at), dropped_at = COALESCE(?, dropped_at), last_error = COALESCE(?, last_error) WHERE id = ?',
-      update.sentAt ?? null, update.nextAttemptAt ?? null, update.droppedAt ?? null, update.error ?? null, id);
-  };
-
-  const oldestUnsentAlert: History['oldestUnsentAlert'] = () => {
-    return text(one('SELECT MIN(created_at) AS oldest FROM alert_outbox WHERE sent_at IS NULL AND dropped_at IS NULL') ?? {}, 'oldest');
-  };
-
-  const getKv: History['getKv'] = (key) => {
-    return text(one('SELECT value FROM kv WHERE key = ?', key) ?? {}, 'value');
-  };
-
-  const setKv: History['setKv'] = (key, value) => {
-    run('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)', key, value);
-  };
-
-  const deleteKv: History['deleteKv'] = (key) => {
-    run('DELETE FROM kv WHERE key = ?', key);
-  };
-
-  const updateKv: History['updateKv'] = (key, decide) => {
-    return transaction(() => {
-      const current = getKv(key);
-      const next = decide(current);
-
-      if (next === null) {
-        deleteKv(key);
-      } else if (next !== undefined) {
-        setKv(key, next);
-      }
-
-      return current;
-    });
-  };
-
   const prune: History['prune'] = (before, options = {}) => {
     return transaction(() => {
       if (options.scenario === undefined && options.exceptScenarios !== undefined) {
@@ -538,6 +398,8 @@ export function createHistory(db: DatabaseSync): History {
   };
 
   return {
+    ...createAlertStore(sql),
+    ...createKvStore(sql),
     nextSequence,
     startRun,
     finishRun,
@@ -549,16 +411,6 @@ export function createHistory(db: DatabaseSync): History {
     stats,
     markLateEvent,
     markLateNotification,
-    alertState,
-    saveAlert,
-    probeAlertStorage,
-    pendingAlerts,
-    alertAttempt,
-    oldestUnsentAlert,
-    getKv,
-    setKv,
-    updateKv,
-    deleteKv,
     prune,
     close,
   };
