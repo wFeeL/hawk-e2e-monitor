@@ -4,17 +4,37 @@ import { scenarioSettings } from '../config/scenario.js';
 import type { ScenarioSettings } from '../config/scenario.js';
 import type { RunResult } from '../engine/result.js';
 import type { Redactor } from '../errors/redact.js';
+import { CheckError } from '../errors/taxonomy.js';
 import type { Logger } from '../log/logger.js';
 import { createRunId } from '../scenarios/send-and-receive/plan.js';
 import type { ScenarioName } from '../scenarios/names.js';
 import type { History, RunStart } from '../storage/history.js';
-import { abortedOutcome, isVerdict, outcomeOf, rowOf } from '../storage/outcome.js';
+import { abortedOutcome, isMonitorAbort, isVerdict, outcomeOf, rowOf } from '../storage/outcome.js';
+import type { VerdictFields } from '../storage/outcome.js';
 import type { RunOutcome, RunRow, RunTrigger } from '../storage/types.js';
 import type { Clock } from '../time/clock.js';
 
 const SELF_CHECK_MS = 60_000;
 const HUNGS_BEFORE_EXIT = 3;
 const LAST_RUNS_LOOKED_AT = 5;
+
+/** Notification checks skipped for the rule cache warmup in a row that make the last of them a failure. */
+export const WARMUP_SKIP_LIMIT = 3;
+
+/**
+ * Tells whether a run neither extends nor resets the warmup streak.
+ * @param row Run to judge.
+ * @returns True for an overlap skip and for a stop or restart of the monitor.
+ */
+const keepsStreak = (row: VerdictFields): boolean => (row.status === 'skipped' && row.skipReason === 'overlap') || isMonitorAbort(row);
+
+/**
+ * Tells whether a stored run counts toward the warmup streak.
+ * @param row Run to judge.
+ * @returns True for a warmup skip and for the failure that the scheduler made of one.
+ */
+const isWarmupRun = (row: RunRow): boolean => (row.status === 'skipped' && row.skipReason === 'rule_cache_warmup')
+  || (row.status === 'failed' && row.errorClass === 'provisioning_unstable' && row.failedStage === 'notification_formed');
 
 /** What a runner gets for one run. */
 export interface ScenarioRunOptions {
@@ -189,6 +209,8 @@ interface ScenarioState {
   running?: Handle;
   /** Hung runs in a row. */
   hungStreak: number;
+  /** Runs in a row that ended skipped for the rule cache warmup. */
+  warmupStreak: number;
   /** Last number given, for a failing history. */
   lastSequence: number;
   /** Number of the last run whose start the history could not store; the next number must follow it. */
@@ -238,6 +260,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     states.set(name, { name,
       index: states.size,
       hungStreak: 0,
+      warmupStreak: 0,
       lastSequence: 0 });
   }
 
@@ -372,12 +395,32 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
       logger.error('scenario threw', { runId: handle.start.runId,
         error: redact(error instanceof Error ? error.stack ?? text : text) });
+      state.warmupStreak = 0;
       finish(state, handle, abortedOutcome('monitor_internal', { detail: text }, wallIso(), durationMs));
 
       return;
     }
 
-    const outcome = outcomeOf(result, { loopEnabled: config.notifications.loop });
+    let outcome = outcomeOf(result, { loopEnabled: config.notifications.loop });
+
+    if (outcome.status === 'skipped' && outcome.skipReason === 'rule_cache_warmup') {
+      state.warmupStreak += 1;
+
+      if (state.warmupStreak >= WARMUP_SKIP_LIMIT) {
+        // Skips that repeat would stay silent: the heartbeat counts them and alerting ignores them.
+        const failure = new CheckError('provisioning_unstable', { detail: `the notification check was skipped for the rule cache warmup ${String(state.warmupStreak)} runs in a row` });
+        const { skipReason: _skipReason, ...kept } = outcome;
+
+        outcome = { ...kept,
+          status: 'failed',
+          errorClass: failure.errorClass,
+          culprit: failure.culprit,
+          message: failure.message,
+          failedStage: 'notification_formed' };
+      }
+    } else if (!keepsStreak(outcome)) {
+      state.warmupStreak = 0;
+    }
 
     finish(state, handle, outcome);
 
@@ -397,6 +440,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       scenario: state.name });
     finish(state, handle, abortedOutcome('run_hung', { waitedMs: settingsOf(state.name).watchdogMs }, wallIso(), clock.monotonicMs() - handle.startedMono));
     state.hungStreak += 1;
+    state.warmupStreak = 0;
 
     if (state.hungStreak >= HUNGS_BEFORE_EXIT) {
       logger.error('three hung runs in a row; exiting', { scenario: state.name });
@@ -625,6 +669,16 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         }
       } catch (error) {
         writeFailed('lastVerdict', error);
+      }
+
+      try {
+        const recent = history.list({ scenario: state.name,
+          limit: LAST_RUNS_LOOKED_AT }).filter(row => !keepsStreak(row));
+        const resetAt = recent.findIndex(row => !isWarmupRun(row));
+
+        state.warmupStreak = resetAt === -1 ? recent.length : resetAt;
+      } catch (error) {
+        writeFailed('list', error);
       }
     }
 

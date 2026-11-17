@@ -7,7 +7,7 @@ import type { ScenarioName } from '../../src/scenarios/names.js';
 import { openDatabase } from '../../src/storage/database.js';
 import { createHistory } from '../../src/storage/history.js';
 import type { History } from '../../src/storage/history.js';
-import type { RunRow } from '../../src/storage/types.js';
+import type { RunOutcome, RunRow } from '../../src/storage/types.js';
 import { testConfig } from '../support/config.js';
 import { createFakeClock } from '../support/fake-clock.js';
 import type { FakeClock } from '../support/fake-clock.js';
@@ -1108,5 +1108,237 @@ describe('lastVerdictAt', () => {
 
     expect(scheduler.lastVerdictAt(SEND)).toBeUndefined();
     expect(logger.lines.some(line => line.level === 'error' && String(line.msg).includes('lastVerdict'))).toBe(true);
+  });
+});
+
+describe('warmup streak', () => {
+  /**
+   * Builds the result of a run whose notification check was skipped for the warmup.
+   * @returns Result fields for the fake runner.
+   */
+  function skipResult(): Partial<RunResult> {
+    return { scenario: NOTIFY,
+      stages: [stageFixture('notification_formed', 'skipped', 0, { details: { reason: 'rule_cache_warmup',
+        warmupRemainingMs: 20_000 } })] };
+  }
+
+  /**
+   * Ends the next call of the notification runner with a warmup skip, and lets the scheduler record it.
+   * @param parts Scheduler setup.
+   * @param index Position of the call.
+   * @returns The stored row of the run.
+   */
+  async function skipCall(parts: Setup, index: number): Promise<RunRow> {
+    const call = callOf(parts.runners[NOTIFY], index);
+
+    call.resolve(skipResult());
+    await settle(parts.clock);
+
+    return rowOf(parts.history, call.runId);
+  }
+
+  /**
+   * Starts a manual run of the notification scenario and waits until the runner has it.
+   * @param parts Scheduler setup.
+   */
+  async function manualRun(parts: Setup): Promise<void> {
+    expect(parts.scheduler.runNow(NOTIFY, 'manual')).toMatchObject({ started: true });
+    await settle(parts.clock);
+  }
+
+  /**
+   * Stores a finished run of the notification scenario in the history of an earlier process.
+   * @param history History to write to.
+   * @param index Order of the run, oldest first.
+   * @param outcome How it ended.
+   */
+  function seedRun(history: History, index: number, outcome: Omit<RunOutcome, 'durationMs' | 'finishedAt'>): void {
+    const runId = `r${String(index).repeat(16)}`;
+    const startedAt = new Date(START.getTime() - (10 - index) * INTERVAL_MS - 2000).toISOString();
+
+    history.startRun({ runId,
+      scenario: NOTIFY,
+      sequence: index,
+      trigger: 'schedule',
+      startedAt });
+    history.finishRun(runId, { ...outcome,
+      finishedAt: startedAt,
+      durationMs: 1 });
+  }
+
+  const SEEDED_SKIP: Omit<RunOutcome, 'durationMs' | 'finishedAt'> = { status: 'skipped',
+    skipReason: 'rule_cache_warmup',
+    degraded: [] };
+
+  it('three warmup skips in a row, scheduled and manual mixed, make the third failed provisioning_unstable', async () => {
+    const parts = setup({ scenarios: [NOTIFY] });
+
+    parts.scheduler.start();
+    await settle(parts.clock);
+    expect(await skipCall(parts, 0)).toMatchObject({ status: 'skipped' });
+    await manualRun(parts);
+    expect(await skipCall(parts, 1)).toMatchObject({ status: 'skipped' });
+    // The scheduled run that the first skip moved.
+    await parts.clock.advance(21_000);
+
+    const third = await skipCall(parts, 2);
+
+    expect(third).toMatchObject({ status: 'failed',
+      errorClass: 'provisioning_unstable',
+      failedStage: 'notification_formed' });
+    expect(third.message).toContain('3 runs in a row');
+    expect(third.skipReason).toBeUndefined();
+  });
+
+  it('an ok run resets the streak', async () => {
+    const parts = setup({ scenarios: [NOTIFY] });
+
+    parts.scheduler.start();
+    await settle(parts.clock);
+    await skipCall(parts, 0);
+    await manualRun(parts);
+    await skipCall(parts, 1);
+    await manualRun(parts);
+    callOf(parts.runners[NOTIFY], 2).resolve({ scenario: NOTIFY });
+    await settle(parts.clock);
+    await manualRun(parts);
+    await skipCall(parts, 3);
+    await manualRun(parts);
+
+    expect(await skipCall(parts, 4)).toMatchObject({ status: 'skipped' });
+    expect(parts.history.list({ scenario: NOTIFY,
+      limit: 10 }).some(row => row.status === 'failed')).toBe(false);
+  });
+
+  it('an overlap skip does not reset the streak', async () => {
+    const parts = setup({ scenarios: [NOTIFY] });
+
+    parts.scheduler.start();
+    await settle(parts.clock);
+    await skipCall(parts, 0);
+    await manualRun(parts);
+    // The tick that the first skip moved finds the manual run going.
+    await parts.clock.advance(21_000);
+    expect(parts.history.list({ scenario: NOTIFY,
+      limit: 10 }).some(row => row.skipReason === 'overlap')).toBe(true);
+    await skipCall(parts, 1);
+    await manualRun(parts);
+
+    expect(await skipCall(parts, 2)).toMatchObject({ status: 'failed',
+      errorClass: 'provisioning_unstable' });
+  });
+
+  it('a run that threw resets the streak', async () => {
+    const parts = setup({ scenarios: [NOTIFY] });
+
+    parts.scheduler.start();
+    await settle(parts.clock);
+    await skipCall(parts, 0);
+    await manualRun(parts);
+    await skipCall(parts, 1);
+    await manualRun(parts);
+    callOf(parts.runners[NOTIFY], 2).reject(new Error('boom'));
+    await settle(parts.clock);
+    await manualRun(parts);
+
+    expect(await skipCall(parts, 3)).toMatchObject({ status: 'skipped' });
+  });
+
+  it('a converted run is not rescheduled early', async () => {
+    const parts = setup({ scenarios: [NOTIFY] });
+    const { runners, clock } = parts;
+
+    parts.scheduler.start();
+    await settle(clock);
+    await skipCall(parts, 0);
+    await clock.advance(21_000);
+    await skipCall(parts, 1);
+    await clock.advance(21_000);
+    expect(await skipCall(parts, 2)).toMatchObject({ status: 'failed' });
+    expect(runners[NOTIFY].calls).toHaveLength(3);
+    // The warmup delay would have started the next run here.
+    await clock.advance(21_000);
+    expect(runners[NOTIFY].calls).toHaveLength(3);
+    await clock.advance(INTERVAL_MS - 21_000 - 1);
+    expect(runners[NOTIFY].calls).toHaveLength(3);
+    await clock.advance(1);
+    expect(runners[NOTIFY].calls).toHaveLength(4);
+  });
+
+  it('the fourth skip in a row is failed too', async () => {
+    const parts = setup({ scenarios: [NOTIFY] });
+
+    parts.scheduler.start();
+    await settle(parts.clock);
+    await skipCall(parts, 0);
+    await manualRun(parts);
+    await skipCall(parts, 1);
+    await manualRun(parts);
+    await skipCall(parts, 2);
+    await manualRun(parts);
+
+    const fourth = await skipCall(parts, 3);
+
+    expect(fourth).toMatchObject({ status: 'failed',
+      errorClass: 'provisioning_unstable' });
+    expect(fourth.message).toContain('4 runs in a row');
+  });
+
+  it('the streak survives a restart', async () => {
+    const history = createHistory(openDatabase(':memory:'));
+
+    seedRun(history, 1, SEEDED_SKIP);
+    seedRun(history, 2, SEEDED_SKIP);
+
+    const parts = setup({ scenarios: [NOTIFY],
+      history });
+
+    parts.scheduler.start();
+    await settle(parts.clock);
+
+    expect(await skipCall(parts, 0)).toMatchObject({ status: 'failed',
+      errorClass: 'provisioning_unstable' });
+  });
+
+  it('a restart after a converted run keeps failing', async () => {
+    const history = createHistory(openDatabase(':memory:'));
+
+    seedRun(history, 1, SEEDED_SKIP);
+    seedRun(history, 2, SEEDED_SKIP);
+    seedRun(history, 3, { status: 'failed',
+      degraded: [],
+      errorClass: 'provisioning_unstable',
+      culprit: 'monitor',
+      failedStage: 'notification_formed',
+      message: 'converted' });
+
+    const parts = setup({ scenarios: [NOTIFY],
+      history });
+
+    parts.scheduler.start();
+    await settle(parts.clock);
+
+    const row = await skipCall(parts, 0);
+
+    expect(row).toMatchObject({ status: 'failed',
+      errorClass: 'provisioning_unstable' });
+    expect(row.message).toContain('4 runs in a row');
+  });
+
+  it('a restart does not count skips behind an ok run', async () => {
+    const history = createHistory(openDatabase(':memory:'));
+
+    seedRun(history, 1, SEEDED_SKIP);
+    seedRun(history, 2, SEEDED_SKIP);
+    seedRun(history, 3, { status: 'ok',
+      degraded: [] });
+
+    const parts = setup({ scenarios: [NOTIFY],
+      history });
+
+    parts.scheduler.start();
+    await settle(parts.clock);
+
+    expect(await skipCall(parts, 0)).toMatchObject({ status: 'skipped' });
   });
 });
