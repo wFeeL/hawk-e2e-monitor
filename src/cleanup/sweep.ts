@@ -1,5 +1,6 @@
 import type { FoundEvent, HawkApi } from '../clients/hawk-api.js';
 import type { Config } from '../config/load.js';
+import { CheckError } from '../errors/taxonomy.js';
 import type { Logger } from '../log/logger.js';
 import { buildTitle } from '../scenarios/send-and-receive/plan.js';
 import { EVENT_SCENARIOS, SENTRY_ENVELOPE } from '../scenarios/names.js';
@@ -272,7 +273,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
     const home = lists.find(list => list.projects.some(project => project.id === projectId));
 
     if (home === undefined) {
-      throw new Error('the workspace of the monitored project was not found, so no project is removed');
+      throw new CheckError('api_error', { detail: 'none of the workspaces the API listed holds the monitored project, so no project is removed' });
     }
 
     const pattern = projectNamePattern(config.instanceId);

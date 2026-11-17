@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HawkApi } from '../../src/clients/hawk-api.js';
 import type { Config } from '../../src/config/load.js';
+import { describeError } from '../../src/errors/messages.js';
 import { runResultFixture } from '../support/run-result.js';
 import { buildTitle } from '../../src/scenarios/send-and-receive/plan.js';
 import type { ScenarioName } from '../../src/scenarios/names.js';
@@ -761,15 +762,16 @@ describe('sweepOnce of projects', () => {
     expect(report.projects?.removed).toBe(2);
   });
 
-  it('reports an error and removes nothing when the monitored project is not in any workspace', async () => {
+  it('a workspace list without the monitored project fails the project sweep with an api_error text', async () => {
     const id = leftoverProject(PROJECT_RUN);
 
     const report = await sweeper({ api: { ...api,
       workspaceProjects: async () => Promise.resolve([{ workspaceId: 'fake-workspace',
         projects: [] }]) } }).sweepOnce(SIGNAL);
 
-    expect(report.error).toContain('monitored project');
+    expect(report.error).toBe(describeError('api_error', { detail: 'none of the workspaces the API listed holds the monitored project, so no project is removed' }));
     expect(hawk.projects.has(id)).toBe(true);
+    expect(hawk.api.operations).not.toContain('RemoveProject');
   });
 });
 
