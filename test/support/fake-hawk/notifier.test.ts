@@ -12,6 +12,7 @@ import { createFakeRules } from './rules.js';
 import type { FakeRules } from './rules.js';
 import { createFakeStore } from './store.js';
 import type { FakeStore, StoredEvent } from './store.js';
+import { reservedPort } from '../ports.js';
 
 const PROJECT = 'a'.repeat(24);
 const OTHER_PROJECT = 'b'.repeat(24);
@@ -336,10 +337,8 @@ describe('fake notifier senders', () => {
 
   it('an unreachable address is an error entry and still counts as delivered', async () => {
     const { store, rules, receiver, notifier } = await setup(null);
-    const dead = await startReceiver();
-    const deadUrl = dead.url;
+    const deadUrl = `http://127.0.0.1:${String(await reservedPort())}`;
 
-    await dead.close();
     rules.create(PROJECT, ruleInput(receiver, { channels: { email: { isEnabled: false,
       endpoint: '' },
     slack: { isEnabled: false,

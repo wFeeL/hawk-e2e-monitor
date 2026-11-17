@@ -11,6 +11,7 @@ import type { FakeCollector } from '../support/fake-hawk/collector.js';
 import { createFakeStore } from '../support/fake-hawk/store.js';
 import type { FakeStore } from '../support/fake-hawk/store.js';
 import { decodeTokenKey, encodeToken } from '../support/fake-hawk/token.js';
+import { reservedPort } from '../support/ports.js';
 import type { RetryPolicy } from '../../src/net/retry.js';
 import { systemClock } from '../../src/time/clock.js';
 import { PROBE_TOKEN, classifyCollectorReply, createCollectorClient } from '../../src/clients/collector.js';
@@ -115,15 +116,11 @@ async function checkError(promise: Promise<void>): Promise<CheckError> {
 }
 
 /**
- * Closes a collector server.
- * @returns The URL it had.
+ * Builds the URL of a collector that is not there.
+ * @returns URL on a port nothing listens on.
  */
-async function closeCollector(): Promise<string> {
-  const { url } = collector;
-
-  await collector.close();
-
-  return url;
+async function missingCollectorUrl(): Promise<string> {
+  return `http://127.0.0.1:${String(await reservedPort())}/`;
 }
 
 beforeEach(async () => {
@@ -261,7 +258,7 @@ describe('send over HTTP', () => {
   });
 
   it('refused connection is retried 3 times then rejected', async () => {
-    const url = await closeCollector();
+    const url = await missingCollectorUrl();
     const outcome = rejected(await clientFor(1000, url).send(message(), 'http', signal));
 
     expect(outcome.error.errorClass).toBe('collector_unavailable');
@@ -270,7 +267,7 @@ describe('send over HTTP', () => {
   });
 
   it('uses the configured number of attempts', async () => {
-    const url = await closeCollector();
+    const url = await missingCollectorUrl();
     const outcome = rejected(await clientFor(1000, url, { attempts: 5,
       delaysMs: [1, 1, 1, 1] }).send(message(), 'http', signal));
 
@@ -466,7 +463,7 @@ describe('health', () => {
   });
 
   it('refused connection is unavailable', async () => {
-    const url = await closeCollector();
+    const url = await missingCollectorUrl();
     const error = await checkError(clientFor(1000, url).health(signal));
 
     expect(error.errorClass).toBe('collector_unavailable');
@@ -597,7 +594,7 @@ describe('uploadRelease', () => {
   });
 
   it('a collector that is not there is rejected before the send, after the attempts', async () => {
-    const url = await closeCollector();
+    const url = await missingCollectorUrl();
     const outcome = rejected(await clientFor(1000, url).uploadRelease(VALID_TOKEN, 'rel-1', MAP_FILE, signal));
 
     expect(outcome.error.errorClass).toBe('collector_unavailable');
@@ -718,7 +715,7 @@ describe('sendEnvelope', () => {
   });
 
   it('a collector that is not there is rejected before the send', async () => {
-    const url = await closeCollector();
+    const url = await missingCollectorUrl();
     const outcome = rejected(await clientFor(1000, url).sendEnvelope(KEY, ENVELOPE, signal));
 
     expect(outcome.error.errorClass).toBe('collector_unavailable');

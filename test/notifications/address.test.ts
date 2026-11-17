@@ -7,6 +7,7 @@ import type { Receiver } from '../../src/receiver/server.js';
 import { startFakeTunnelMetrics } from '../support/fake-tunnel.js';
 import type { FakeTunnelMetrics, TunnelAnswer } from '../support/fake-tunnel.js';
 import { memoryLogger } from '../support/logger.js';
+import { reservedPort } from '../support/ports.js';
 import { systemClock } from '../../src/time/clock.js';
 import { probeReceiver, resolvePublicAddress } from '../../src/notifications/address.js';
 import type { PublicAddress } from '../../src/notifications/address.js';
@@ -180,10 +181,11 @@ describe('resolvePublicAddress', () => {
     const fake = await tunnel(() => ({ status: 200,
       body: '{}' }));
 
-    await fake.close();
-    tunnels.length = 0;
+    const dead = new URL(fake.url);
 
-    const error = await failure(resolvePublicAddress({ tunnelMetricsUrl: fake.url }, DEPS, signal));
+    dead.port = String(await reservedPort());
+
+    const error = await failure(resolvePublicAddress({ tunnelMetricsUrl: dead.href }, DEPS, signal));
 
     expect(error.errorClass).toBe('tunnel_unavailable');
   });
@@ -204,10 +206,11 @@ describe('probeReceiver', () => {
   it('probe on a closed port is receiver_unreachable', async () => {
     const { running, address } = await receiver();
 
-    await running.close();
-    receivers.length = 0;
-
-    const error = await failure(probeReceiver(address, SECRET, running.nonce, { ...DEPS,
+    const port = String(await reservedPort());
+    const closed = { ...address,
+      baseUrl: `http://127.0.0.1:${port}`,
+      hostname: `127.0.0.1:${port}` };
+    const error = await failure(probeReceiver(closed, SECRET, running.nonce, { ...DEPS,
       attempts: 3 }, signal));
 
     expect(error.errorClass).toBe('receiver_unreachable');

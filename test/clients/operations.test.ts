@@ -10,6 +10,7 @@ import type { CheckError, ErrorClass } from '../../src/errors/taxonomy.js';
 import { startEndlessServer } from '../support/endless-server.js';
 import { startFakeHawk } from '../support/fake-hawk/index.js';
 import type { FakeApiError, FakeHawk } from '../support/fake-hawk/index.js';
+import { reservedPort } from '../support/ports.js';
 import { systemClock } from '../../src/time/clock.js';
 import { GraphqlFailure, createGraphqlTransport } from '../../src/clients/graphql.js';
 import type { GraphqlOperation, GraphqlTransport } from '../../src/clients/graphql.js';
@@ -205,11 +206,10 @@ describe('graphql transport', () => {
   });
 
   it('refused connection is api_unavailable', async () => {
-    const url = hawk.api.url;
+    const url = new URL(hawk.api.url);
 
-    await hawk.close();
-    checkError(await failureOf(transportFor(url).request(PROJECT_TOKEN, { projectId: hawk.projectId }, 'x', signal)), 'api_unavailable');
-    hawk = await startFakeHawk();
+    url.port = String(await reservedPort());
+    checkError(await failureOf(transportFor(url.href).request(PROJECT_TOKEN, { projectId: hawk.projectId }, 'x', signal)), 'api_unavailable');
   });
 
   it('a 404 page is api_unexpected_response and is not retried', async () => {
