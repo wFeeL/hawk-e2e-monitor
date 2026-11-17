@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AlertStateRow } from '../../src/storage/types.js';
-import type { DegradedCode, RunRow } from '../../src/storage/types.js';
+import type { DegradedCode } from '../../src/engine/result.js';
+import type { RunRow } from '../../src/storage/types.js';
 import { decideAlert } from '../../src/alerting/state.js';
 
 const NOW = '2026-03-10T12:00:00.000Z';

@@ -375,7 +375,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     const stage = result.stages.find(item => item.name === 'notification_formed');
     const remaining = stage?.details?.warmupRemainingMs;
 
-    return (typeof remaining === 'number' ? remaining : config.notifications.ruleCacheWarmupMs) + RULE_WARMUP_MARGIN_MS;
+    return (remaining ?? config.notifications.ruleCacheWarmupMs) + RULE_WARMUP_MARGIN_MS;
   };
 
   const onSettled = (state: ScenarioState, handle: Handle, result: RunResult | undefined, error: unknown): void => {

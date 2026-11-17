@@ -1,4 +1,5 @@
 import type { FoundEvent } from '../../clients/hawk-api.js';
+import type { StageDetails } from '../../engine/result.js';
 import type { StageOutcome, StageSpec } from '../../engine/stages.js';
 import { CheckError } from '../../errors/taxonomy.js';
 import type { ScenarioContext } from './context.js';
@@ -29,7 +30,7 @@ export function cleanupStage(timeoutMs: number): StageSpec<ScenarioContext> {
       const shape = shapeOf(context);
       const { projectId } = shape;
       const refuse = (event: FoundEvent): CheckError => new CheckError('cleanup_refused', { detail: `"${event.title}" (${event.originalEventId})` });
-      const details: Record<string, unknown> = {};
+      const details: StageDetails = {};
       let target = state.event;
 
       if (target === undefined) {

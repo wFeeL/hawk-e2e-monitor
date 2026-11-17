@@ -46,7 +46,7 @@ export function decideHead(stages: readonly StageResult[]): Verdict | undefined 
       return { status: 'failed',
         failedStage: 'collector_accept',
         error: new CheckError(accept.errorClass ?? 'collector_unavailable', {},
-          { message: `Collector did not confirm the event (${accept.message ?? 'no details'}); the event did not appear within ${typeof waited === 'number' ? formatDuration(waited) : 'the time limit'}` }) };
+          { message: `Collector did not confirm the event (${accept.message ?? 'no details'}); the event did not appear within ${waited === undefined ? 'the time limit' : formatDuration(waited)}` }) };
     }
 
     if (failed.details?.pollOutcome === 'api_error') {
@@ -79,7 +79,7 @@ export function decideHead(stages: readonly StageResult[]): Verdict | undefined 
 export function decideTail(stages: readonly StageResult[]): Verdict {
   const late = stages.find(stage => stage.name === 'cleanup')?.details?.lateTotalCount;
 
-  if (typeof late === 'number') {
+  if (late !== undefined) {
     const repeated = stages.find(stage => stage.name === 'event_repeated')?.status === 'ok';
 
     return { status: 'failed',

@@ -248,7 +248,7 @@ describe('decideTelegramVerdict', () => {
   });
 
   it('row 6a: a run in the rule cache warmup is ok', () => {
-    const warmup = { reason: 'rule_cache_warmup' };
+    const warmup = { reason: 'rule_cache_warmup' } as const;
     const list = stages(stage('notification_formed', 'skipped', { details: warmup }),
       stage('telegram_delivered', 'skipped', { details: warmup }));
 

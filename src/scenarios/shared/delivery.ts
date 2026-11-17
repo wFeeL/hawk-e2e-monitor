@@ -1,6 +1,7 @@
 import { formatDuration } from '../../time/format.js';
 import type { EventCard, FoundEvent } from '../../clients/hawk-api.js';
 import { pollUntil } from '../../engine/poll.js';
+import type { StageDetails } from '../../engine/result.js';
 import type { StageOutcome, StageSpec } from '../../engine/stages.js';
 import { CheckError } from '../../errors/taxonomy.js';
 import type { ScenarioContext } from './context.js';
@@ -143,7 +144,7 @@ export function eventVisibleStage(timeoutMs: number): StageSpec<ScenarioContext>
         throw mismatch;
       }
 
-      const details: Record<string, unknown> = { pollOutcome: 'found',
+      const details: StageDetails = { pollOutcome: 'found',
         attempts: poll.attempts,
         errors: poll.errors };
 

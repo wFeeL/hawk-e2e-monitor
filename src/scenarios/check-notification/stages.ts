@@ -1,6 +1,7 @@
 import { formatDuration } from '../../time/format.js';
 import type { FoundEvent } from '../../clients/hawk-api.js';
 import type { notificationSettings } from '../../config/load.js';
+import type { StageDetails } from '../../engine/result.js';
 import type { StageOutcome, StageSpec } from '../../engine/stages.js';
 import { CheckError, isCheckError } from '../../errors/taxonomy.js';
 import { probeReceiver } from '../../notifications/address.js';
@@ -357,7 +358,7 @@ export function notificationFormedStage(timeoutMs: number): StageSpec<Notificati
         signal });
       const waitedMs = Math.round(clock.monotonicMs() - startedMs);
       const missing = missingChannels(arrivals, channels);
-      const details: Record<string, unknown> = { unmatched: arrivals.unmatched };
+      const details: StageDetails = { unmatched: arrivals.unmatched };
 
       notification.arrivals = arrivals;
 
@@ -520,7 +521,7 @@ export function thresholdFormedStage(timeoutMs: number): StageSpec<NotificationC
       }
 
       const sentAtMs = state.repeatAcceptedAtMs ?? state.acceptedAtMs;
-      const details: Record<string, unknown> = { unmatched: arrivals.unmatched };
+      const details: StageDetails = { unmatched: arrivals.unmatched };
 
       if (sentAtMs !== undefined) {
         details.latencyMs = Math.round(arrival.atMs - sentAtMs);

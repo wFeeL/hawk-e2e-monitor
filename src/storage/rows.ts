@@ -1,4 +1,4 @@
-import type { DegradedCode } from './types.js';
+import type { DegradedCode } from '../engine/result.js';
 
 /** A row as `node:sqlite` returns it. */
 export type SqlRow = Record<string, unknown>;

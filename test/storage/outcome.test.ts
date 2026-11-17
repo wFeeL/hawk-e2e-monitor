@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Config } from '../../src/config/load.js';
 import { testConfig } from '../support/config.js';
 import { runResultFixture, stageFixture } from '../support/run-result.js';
-import type { RunResult } from '../../src/engine/result.js';
+import type { RunResult, StageDetails } from '../../src/engine/result.js';
 import { abortedOutcome, eventsPerRun, isMonitorAbort, isVerdict, outcomeOf, eventsSentPer30Days, rowOf } from '../../src/storage/outcome.js';
 
 const CONTEXT = { loopEnabled: true };
@@ -62,7 +62,7 @@ describe('outcomeOf', () => {
   });
 
   it('keeps ok for another skip reason', () => {
-    expect(outcomeOf(notificationResult({ stages: [stageFixture('notification_formed', 'skipped', 0, { details: { reason: 'other' } })] }), CONTEXT).status).toBe('ok');
+    expect(outcomeOf(notificationResult({ stages: [stageFixture('notification_formed', 'skipped', 0, { details: { reason: 'other' } as unknown as StageDetails })] }), CONTEXT).status).toBe('ok');
   });
 
   it('single_channel: the webhook did not arrive', () => {
@@ -90,7 +90,7 @@ describe('outcomeOf', () => {
   });
 
   it('ignores a code that is not a degradation code and reports nothing for a failed run', () => {
-    const odd = runResultFixture({ stages: [stageFixture('event_visible', 'ok', 0, { details: { degraded: ['nope', 7] } })] });
+    const odd = runResultFixture({ stages: [stageFixture('event_visible', 'ok', 0, { details: { degraded: ['nope', 7] } as unknown as StageDetails })] });
 
     expect(outcomeOf(odd, CONTEXT).degraded).toEqual([]);
     expect(outcomeOf({ ...odd,

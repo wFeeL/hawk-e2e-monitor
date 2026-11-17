@@ -1,12 +1,12 @@
 import type { Config } from '../config/load.js';
-import type { RunResult } from '../engine/result.js';
+import { DEGRADED_CODES } from '../engine/result.js';
+import type { DegradedCode, RunResult } from '../engine/result.js';
 import { CheckError } from '../errors/taxonomy.js';
 import type { ErrorClass, MessageFacts } from '../errors/taxonomy.js';
 import { scenarioSettings } from '../config/scenario.js';
 import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, EVENT_SCENARIOS, SEND_AND_RECEIVE_EVENT, TELEGRAM_DELIVERY } from '../scenarios/names.js';
 import type { RunStart } from './types.js';
-import { DEGRADED_CODES } from './types.js';
-import type { DegradedCode, RunOutcome, RunRow } from './types.js';
+import type { RunOutcome, RunRow } from './types.js';
 import { MS_PER_DAY } from '../time/units.js';
 
 const DAYS_PER_PERIOD = 30;
@@ -57,7 +57,7 @@ function degradationOf(result: RunResult, context: OutcomeContext): DegradedCode
   }
 
   // Stages name the other degradations themselves, in `details.degraded`.
-  const reported = new Set(result.stages.flatMap(stage => Array.isArray(stage.details?.degraded) ? stage.details.degraded as unknown[] : []));
+  const reported = new Set(result.stages.flatMap(stage => stage.details?.degraded ?? []));
 
   for (const code of DEGRADED_CODES) {
     if (reported.has(code) && !codes.includes(code)) {

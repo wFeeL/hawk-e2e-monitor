@@ -1,4 +1,4 @@
-import type { RunResult, StageName, StageResult } from '../engine/result.js';
+import type { DegradedCode, RunResult, StageName, StageResult } from '../engine/result.js';
 import type { Culprit, ErrorClass } from '../errors/taxonomy.js';
 import type { LateKind } from '../notifications/types.js';
 import type { ScenarioName } from '../scenarios/names.js';
@@ -14,18 +14,6 @@ export const RUN_TRIGGERS = ['manual', 'schedule'] as const;
 
 /** What started a run. */
 export type RunTrigger = (typeof RUN_TRIGGERS)[number];
-
-/** Conditions under which an `ok` run still deserves a warning. */
-export const DEGRADED_CODES = [
-  'quota_usage',
-  'single_channel',
-  'accept_uncertain',
-  'js_worker_not_seen',
-  'grouping_pattern',
-] as const;
-
-/** One of `DEGRADED_CODES`. */
-export type DegradedCode = (typeof DEGRADED_CODES)[number];
 
 /** Alert state of a scenario. */
 export type AlertLevelState = 'degraded' | 'failing' | 'ok';

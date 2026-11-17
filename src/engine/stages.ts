@@ -1,6 +1,6 @@
 import { CheckError } from '../errors/taxonomy.js';
 import type { Clock } from '../time/clock.js';
-import type { StageName, StageResult, StageStatus } from './result.js';
+import type { StageDetails, StageName, StageResult, StageStatus } from './result.js';
 
 /** What a stage body reports. */
 export interface StageOutcome {
@@ -9,7 +9,7 @@ export interface StageOutcome {
   /** Reason of a failure, or of the uncertainty. */
   error?: CheckError;
   /** Stage-specific data. */
-  details?: Record<string, unknown>;
+  details?: StageDetails;
 }
 
 /** A stage: name, time limit and body. */
