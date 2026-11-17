@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createRedactor } from '../../src/errors/redact.js';
 import type { RunResult } from '../../src/engine/result.js';
 import { runResultFixture, stageFixture } from '../support/run-result.js';
-import type { AlertStateRow } from '../../src/storage/history.js';
+import type { AlertStateRow } from '../../src/storage/types.js';
 import type { RunRow } from '../../src/storage/types.js';
 import { ALERT_TEXT_LIMIT, alertText, escapeHtml, plainAlertText, storageFailingText } from '../../src/alerting/text.js';
 import type { AlertTextInput } from '../../src/alerting/text.js';

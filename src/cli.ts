@@ -1,7 +1,7 @@
 import type { Transport } from './clients/collector.js';
 import { SCENARIO_NAMES, SCENARIO_TRAITS } from './scenarios/names.js';
 import type { ScenarioName } from './scenarios/names.js';
-import { DEFAULT_LIST_LIMIT } from './storage/history.js';
+import { DEFAULT_LIST_LIMIT } from './storage/types.js';
 
 /** Start the service. */
 export interface ServeCommand {

@@ -1,4 +1,4 @@
-import type { AlertStateRow } from '../storage/history.js';
+import type { AlertStateRow } from '../storage/types.js';
 import { isMonitorAbort } from '../storage/outcome.js';
 import type { DegradedCode, RunRow } from '../storage/types.js';
 

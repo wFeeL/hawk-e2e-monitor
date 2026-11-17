@@ -2,7 +2,7 @@ import type { RunResult } from '../engine/result.js';
 import type { Redactor } from '../errors/redact.js';
 import type { ErrorClass } from '../errors/taxonomy.js';
 import type { ScenarioName } from '../scenarios/names.js';
-import type { AlertStateRow } from '../storage/history.js';
+import type { AlertStateRow } from '../storage/types.js';
 import type { RunRow } from '../storage/types.js';
 import type { AlertKind } from './state.js';
 import { formatDuration, formatUtc } from '../time/format.js';

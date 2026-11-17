@@ -7,7 +7,8 @@ import type { RunResult } from '../../src/engine/result.js';
 import { runResultFixture, stageFixture } from '../support/run-result.js';
 import { EmptyDatabaseError, openDatabase, SCHEMA_VERSION } from '../../src/storage/database.js';
 import { createHistory } from '../../src/storage/history.js';
-import type { AlertStateRow, History } from '../../src/storage/history.js';
+import type { History } from '../../src/storage/history.js';
+import type { AlertStateRow } from '../../src/storage/types.js';
 import type { RunOutcome } from '../../src/storage/types.js';
 
 const NOW = new Date('2026-03-10T12:00:00.000Z');
