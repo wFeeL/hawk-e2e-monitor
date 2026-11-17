@@ -284,7 +284,7 @@ That guard sees only one database file. A `check` on the host next to a
 monitor in compose works on another file, so nothing stops it, and with the
 same `INSTANCE_ID` both processes own the same rules. The hand run points them
 at its own tunnel; a monitor run waiting for a notification at that moment ends
-in `notification_timeout` with Hawk to blame, and the monitor's next run moves
+in `notification_timeout` that blames Hawk, and the monitor's next run moves
 the rules back and skips the notification stage. While a monitor works on the
 project, give hand runs their own `INSTANCE_ID`.
 
@@ -616,8 +616,6 @@ TODO:
 - [x] telegram delivery: Hawk notification found in a Telegram group by a bot, with a probe through @codex_bot
 - [x] more scenarios: threshold rule, source maps, Sentry envelope, new project
 - [ ] degradation thresholds computed from the collected stage durations
-- [ ] code debt: the three scenarios that send an event each read the
-  collector's answer with their own `switch`, five scenario run files repeat
-  the rule of when to keep going after a failed stage, and the HTTP timeout,
-  clock and retry settings travel as three separate fields through eight
-  interfaces
+- [ ] code debt: three scenarios handle the collector's answer each in their
+  own way, and five scenarios repeat the rule of when a run goes on after a
+  failed stage
