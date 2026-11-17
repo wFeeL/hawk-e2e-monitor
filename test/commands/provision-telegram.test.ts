@@ -190,8 +190,9 @@ describe('runProvisionCommand with telegram-delivery', () => {
     const running = runProvisionCommand(WAIT, configFor('check-notification,telegram-delivery'), io, { clock,
       resolveAddress: async () => Promise.resolve(ADDRESS) });
 
+    // The setup deadline and the warmup wait.
     await vi.waitFor(() => {
-      expect(clock.pending()).toBe(1);
+      expect(clock.pending()).toBe(2);
     });
     expect(captured.stderr).toContain('waiting 1 s for Hawk to reload notification rules');
 

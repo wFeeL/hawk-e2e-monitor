@@ -1,10 +1,10 @@
-import { CheckError } from '../../errors/taxonomy.js';
-import type { MessageFacts } from '../../errors/taxonomy.js';
-import { HttpStatus } from '../../net/http-status.js';
-import { NetworkError, networkFailureToCheckError, requestWithRetry } from '../../net/http.js';
-import type { HttpRequest, HttpResponse } from '../../net/http.js';
-import type { RetryPolicy } from '../../net/retry.js';
-import type { Clock } from '../../time/clock.js';
+import { CheckError } from '../errors/taxonomy.js';
+import type { MessageFacts } from '../errors/taxonomy.js';
+import { HttpStatus } from '../net/http-status.js';
+import { NetworkError, networkFailureToCheckError, requestWithRetry } from '../net/http.js';
+import type { HttpRequest, HttpResponse } from '../net/http.js';
+import type { RetryPolicy } from '../net/retry.js';
+import type { Clock } from '../time/clock.js';
 
 const INDEX_MAX_BYTES = 262_144;
 const BUNDLE_RANGE = 'bytes=0-1023';

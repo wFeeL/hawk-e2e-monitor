@@ -393,6 +393,7 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
         } },
     ];
     const app = await startApp(config, { logger,
+      clock,
       liveness,
       readiness,
       routes: createRoutes({ history,

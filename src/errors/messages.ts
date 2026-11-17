@@ -220,7 +220,7 @@ export function describeError(errorClass: ErrorClass, facts: MessageFacts): stri
     case 'provisioning_conflict':
       return withDetail('The notification rule is being changed in parallel', facts.detail);
     case 'provisioning_unstable':
-      return withDetail('The notification rule is changed again on every run', facts.detail);
+      return withDetail('The notification rule is changed again on every run; another monitor with the same INSTANCE_ID may be moving it', facts.detail);
     case 'notification_timeout':
       return notificationTimeoutText(facts);
     case 'notification_mismatch':

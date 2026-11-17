@@ -1,6 +1,8 @@
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { Logger } from '../log/logger.js';
+import { timeoutSignal } from '../time/clock.js';
+import type { Clock } from '../time/clock.js';
 import { sendJson } from './respond.js';
 import { HttpStatus } from '../net/http-status.js';
 
@@ -28,6 +30,8 @@ export interface InternalServerOptions {
   readiness: readonly Check[];
   /** Time limit for one check. */
   checkTimeoutMs: number;
+  /** Clock that measures the limit. */
+  clock: Clock;
   /** Extra routes keyed by `${method} ${pathname}`, e.g. `POST /runs`; a key that ends in `/*` serves every path below that prefix. */
   routes?: ReadonlyMap<string, RouteHandler>;
 }
@@ -46,21 +50,20 @@ export interface CheckFailure {
  * Runs one check; a throw, `false` or a timeout counts as a failure.
  * @param check Probe to execute.
  * @param timeoutMs Time limit before the probe is aborted.
+ * @param clock Clock that measures the limit.
  * @returns The failure, or undefined when the check passed in time.
  */
-async function runCheck(check: Check, timeoutMs: number): Promise<CheckFailure | undefined> {
-  const controller = new AbortController();
-  let timer: NodeJS.Timeout | undefined;
+async function runCheck(check: Check, timeoutMs: number, clock: Clock): Promise<CheckFailure | undefined> {
+  const deadline = timeoutSignal(clock, timeoutMs);
   const timeout = new Promise<CheckFailure>((resolve) => {
-    timer = setTimeout(() => {
-      controller.abort();
+    deadline.signal.addEventListener('abort', () => {
       resolve({ name: check.name,
         reason: 'timeout' });
-    }, timeoutMs);
+    }, { once: true });
   });
   const outcome = (async (): Promise<CheckFailure | undefined> => {
     try {
-      if (await check.run(controller.signal)) {
+      if (await check.run(deadline.signal)) {
         return undefined;
       }
 
@@ -76,7 +79,7 @@ async function runCheck(check: Check, timeoutMs: number): Promise<CheckFailure |
   try {
     return await Promise.race([outcome, timeout]);
   } finally {
-    clearTimeout(timer);
+    deadline.dispose();
   }
 }
 
@@ -84,10 +87,11 @@ async function runCheck(check: Check, timeoutMs: number): Promise<CheckFailure |
  * Runs all checks in parallel.
  * @param checks Checks to run.
  * @param timeoutMs Time limit for each check.
+ * @param clock Clock that measures the limit.
  * @returns Failed checks with reasons, in the order of `checks`.
  */
-export async function evaluateChecks(checks: readonly Check[], timeoutMs: number): Promise<CheckFailure[]> {
-  const results = await Promise.all(checks.map(async check => runCheck(check, timeoutMs)));
+export async function evaluateChecks(checks: readonly Check[], timeoutMs: number, clock: Clock): Promise<CheckFailure[]> {
+  const results = await Promise.all(checks.map(async check => runCheck(check, timeoutMs, clock)));
 
   return results.filter(result => result !== undefined);
 }
@@ -148,7 +152,7 @@ export function createInternalServer(options: InternalServerOptions): Server {
     const checks = probes.get(pathname);
 
     if (checks && method === 'GET') {
-      const failures = await evaluateChecks(checks, options.checkTimeoutMs);
+      const failures = await evaluateChecks(checks, options.checkTimeoutMs, options.clock);
 
       for (const failure of failures) {
         options.logger.warn('check failed', {

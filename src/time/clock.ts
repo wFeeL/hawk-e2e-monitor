@@ -30,3 +30,32 @@ export const systemClock: Clock = {
     await delay(ms, undefined, signal ? { signal } : undefined);
   },
 };
+
+/** A signal that aborts when a sleep on the clock ends, and a way to cancel that sleep. */
+export interface TimeoutSignal {
+  /** Aborts with a `DOMException` named `TimeoutError` after the time passed. */
+  signal: AbortSignal;
+  /** Cancels the sleep; the signal then never aborts. Safe to call twice. */
+  dispose(): void;
+}
+
+/**
+ * Builds a deadline on the clock, so tests move it with their fake clock.
+ * @param clock Clock whose `sleep` measures the time.
+ * @param ms Time before the abort.
+ * @returns The signal and its disposer.
+ */
+export function timeoutSignal(clock: Clock, ms: number): TimeoutSignal {
+  const controller = new AbortController();
+  const cancel = new AbortController();
+
+  // A cancelled sleep rejects; that is the normal end of a deadline that was not needed.
+  clock.sleep(ms, cancel.signal).then(() => {
+    controller.abort(new DOMException('The operation timed out.', 'TimeoutError'));
+  }, () => undefined);
+
+  return { signal: controller.signal,
+    dispose: () => {
+      cancel.abort();
+    } };
+}

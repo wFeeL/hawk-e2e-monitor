@@ -1,15 +1,15 @@
 import type { Buffer } from 'node:buffer';
 import net from 'node:net';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { startApp, StartupError } from '../src/app.js';
 import type { AppHandle } from '../src/app.js';
 import { testConfig } from './support/config.js';
+import { createFakeClock } from './support/fake-clock.js';
+import type { FakeClock } from './support/fake-clock.js';
 import { memoryLogger } from './support/logger.js';
 
 const TIMEOUT_MS = 200;
 const SETTLE_MS = 50;
-const MIN_STOP_MS = 150;
-const MAX_STOP_MS = 1000;
 
 const running: AppHandle[] = [];
 
@@ -17,10 +17,12 @@ const running: AppHandle[] = [];
  * Starts the app and registers it for cleanup.
  * @param overrides Config overrides.
  * @param liveness Liveness checks.
+ * @param clock Clock of the shutdown cut and the checks.
  * @returns Running app.
  */
-async function launch(overrides: Parameters<typeof testConfig>[0] = {}, liveness: Parameters<typeof startApp>[1]['liveness'] = []): Promise<AppHandle> {
+async function launch(overrides: Parameters<typeof testConfig>[0] = {}, liveness: Parameters<typeof startApp>[1]['liveness'] = [], clock: FakeClock = createFakeClock()): Promise<AppHandle> {
   const app = await startApp(testConfig(overrides), { logger: memoryLogger(),
+    clock,
     liveness });
 
   running.push(app);
@@ -59,8 +61,9 @@ describe('startApp', () => {
     await expect(Promise.all([first, second])).resolves.toBeDefined();
   });
 
-  it('stop does not wait for hanging connections longer than the timeout', async () => {
-    const app = await launch({ shutdownTimeoutMs: TIMEOUT_MS });
+  it('shutdown closes busy connections when the fake clock passes the shutdown timeout', async () => {
+    const clock = createFakeClock();
+    const app = await launch({ shutdownTimeoutMs: TIMEOUT_MS }, [], clock);
     const socket = net.connect(app.port, '127.0.0.1');
     const noop = (): void => undefined;
 
@@ -79,14 +82,20 @@ describe('startApp', () => {
         setTimeout(resolve, SETTLE_MS);
       });
 
-      const started = performance.now();
+      let stopped = false;
+      const stopping = app.stop().then(() => {
+        stopped = true;
+      });
 
-      await app.stop();
-
-      const elapsed = performance.now() - started;
-
-      expect(elapsed).toBeGreaterThanOrEqual(MIN_STOP_MS);
-      expect(elapsed).toBeLessThan(MAX_STOP_MS);
+      await vi.waitFor(() => {
+        expect(clock.pending()).toBe(1);
+      });
+      await clock.advance(TIMEOUT_MS - 1);
+      expect(stopped).toBe(false);
+      await clock.advance(1);
+      await stopping;
+      expect(stopped).toBe(true);
+      expect(clock.pending()).toBe(0);
     } finally {
       socket.destroy();
     }
@@ -95,7 +104,8 @@ describe('startApp', () => {
   it('busy port is a StartupError', async () => {
     const first = await launch();
     const second = startApp(testConfig({ internal: { host: '127.0.0.1',
-      port: first.port } }), { logger: memoryLogger() });
+      port: first.port } }), { logger: memoryLogger(),
+      clock: createFakeClock() });
 
     await expect(second).rejects.toBeInstanceOf(StartupError);
     await expect(second).rejects.toThrow('is already in use');
@@ -112,6 +122,7 @@ describe('startApp', () => {
 
   it('extra routes are wired', async () => {
     const app = await startApp(testConfig(), { logger: memoryLogger(),
+      clock: createFakeClock(),
       routes: new Map([['GET /extra', (_req, res) => {
         res.writeHead(200).end('extra');
       }]]) });

@@ -135,15 +135,16 @@ async function runOnReceiver(command: CheckCommand, config: Config, io: CheckIo,
 
     scenario.validate(config);
 
+    const clock = deps.clock ?? base.clock;
+
     if (receiver === undefined) {
       receiver = await startReceiver({ host: settings.receiverHost,
         port: settings.receiverPort,
         secret: settings.receiverSecret,
-        clock: systemClock,
+        clock,
         logger: base.logger });
     }
 
-    const clock = deps.clock ?? base.clock;
     const lastChange = deps.provisioner === undefined ? readMatchChange(config, io, scenario.key) : undefined;
     // A stored time in the future must not stretch the wait beyond the warmup.
     const remainingMs = lastChange === undefined
