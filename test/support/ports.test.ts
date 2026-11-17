@@ -1,12 +1,12 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { reservedPort } from './ports.js';
+import { reservedPort, sweepPortLocks } from './ports.js';
 
 const LOCK_DIR = join(tmpdir(), 'hawk-e2e-monitor-ports');
 const servers: Server[] = [];
@@ -36,7 +36,7 @@ afterEach(async () => {
  * @returns Port in the searched range with room for the next one.
  */
 function portFor(slot: number): number {
-  return 20_000 + (process.pid * 7 + slot * 3000) % 9000;
+  return 20_000 + (process.pid * 7 + slot * 2000) % 9000;
 }
 
 /**
@@ -62,16 +62,23 @@ async function occupy(port: number): Promise<void> {
 }
 
 /**
+ * Gives the path of the lock file of a port.
+ * @param port Port the lock file stands for.
+ * @returns Path in the shared lock directory.
+ */
+function lockPath(port: number): string {
+  return join(LOCK_DIR, `${String(port)}.lock`);
+}
+
+/**
  * Writes the lock file of a port as another process would.
  * @param port Port the lock file stands for.
- * @param pid Process id to write into it.
+ * @param content Text to write into it, normally a process id.
  */
-function lock(port: number, pid: number): void {
-  const path = join(LOCK_DIR, `${String(port)}.lock`);
-
+function lock(port: number, content: number | string): void {
   mkdirSync(LOCK_DIR, { recursive: true });
-  writeFileSync(path, String(pid));
-  locks.push(path);
+  writeFileSync(lockPath(port), String(content));
+  locks.push(lockPath(port));
 }
 
 describe('reservedPort', () => {
@@ -107,14 +114,32 @@ describe('reservedPort', () => {
     expect(await reservedPort()).toBe(port + 1);
   });
 
-  it('takes over the lock of a process that is gone', async () => {
+  it('skips a lock of a dead process, it does not take it over', async () => {
     const { pid } = spawnSync(process.execPath, ['-e', '']);
-
     const port = portFor(2);
 
     startAt(port);
     lock(port, pid);
 
-    expect(await reservedPort()).toBe(port);
+    expect(await reservedPort()).toBe(port + 1);
+    expect(existsSync(lockPath(port))).toBe(true);
+  });
+});
+
+describe('sweepPortLocks', () => {
+  it('removes the locks of dead processes and keeps live ones', () => {
+    const { pid } = spawnSync(process.execPath, ['-e', '']);
+    const base = portFor(3);
+
+    lock(base, process.pid);
+    lock(base + 1, pid);
+    lock(base + 2, '');
+
+    const removed = sweepPortLocks();
+
+    expect(removed).toBeGreaterThanOrEqual(0);
+    expect(existsSync(lockPath(base))).toBe(true);
+    expect(existsSync(lockPath(base + 1))).toBe(false);
+    expect(existsSync(lockPath(base + 2))).toBe(false);
   });
 });
