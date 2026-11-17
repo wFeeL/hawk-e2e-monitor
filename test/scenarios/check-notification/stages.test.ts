@@ -18,7 +18,7 @@ import { TEST_RECEIVER_SECRET } from '../../support/env.js';
 import { createNotificationTestScenario } from '../../support/scenario.js';
 import type { NotificationTestOptions, NotificationTestScenario } from '../../support/scenario.js';
 import { systemClock } from '../../../src/time/clock.js';
-import { collectorAcceptStage, eventRepeatedStage, eventVisibleStage } from '../../../src/scenarios/send-and-receive/stages.js';
+import { collectorAcceptStage, eventRepeatedStage, eventVisibleStage } from '../../../src/scenarios/shared/delivery.js';
 import { checkNotificationAgainstEvent, notificationBeforeSend, notificationFormedStage, notificationSetupStage, thresholdBeforeRepeat, thresholdFormedStage } from '../../../src/scenarios/check-notification/stages.js';
 import type { NotificationContext } from '../../../src/scenarios/check-notification/stages.js';
 

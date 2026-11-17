@@ -1,7 +1,7 @@
 import { formatDuration } from '../../time/format.js';
 import type { StageName, StageResult } from '../../engine/result.js';
 import { CheckError } from '../../errors/taxonomy.js';
-import type { ScenarioState } from './stages.js';
+import type { ScenarioState } from './context.js';
 
 /** Final outcome of a run. */
 export interface Verdict {

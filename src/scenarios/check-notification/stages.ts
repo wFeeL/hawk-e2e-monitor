@@ -8,7 +8,7 @@ import type { PublicAddress } from '../../notifications/address.js';
 import type { ProvisionResult, Provisioner } from '../../notifications/provisioning.js';
 import type { ArrivalKind, NotificationChannel } from '../../notifications/types.js';
 import type { Arrival, Arrivals, Receiver } from '../../receiver/server.js';
-import type { ScenarioContext } from '../send-and-receive/stages.js';
+import type { ScenarioContext } from '../shared/context.js';
 import { MS_PER_SECOND } from '../../time/units.js';
 
 const DEFAULT_ADDRESS_POLL_MS = 2000;

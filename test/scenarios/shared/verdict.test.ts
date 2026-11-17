@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { StageName, StageResult, StageStatus } from '../../../src/engine/result.js';
 import type { ErrorClass } from '../../../src/errors/taxonomy.js';
 import { CULPRIT_OF } from '../../../src/errors/taxonomy.js';
-import { decideVerdict } from '../../../src/scenarios/send-and-receive/verdict.js';
+import { decideVerdict } from '../../../src/scenarios/shared/verdict.js';
 
 /** Optional parts of a stage result. */
 interface StageExtra {

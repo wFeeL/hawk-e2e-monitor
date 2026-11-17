@@ -7,8 +7,9 @@ import { decodeIntegrationToken, tokenKey } from '../../hawk/token.js';
 import type { Logger } from '../../log/logger.js';
 import type { CreatedProjects } from '../../storage/created-projects.js';
 import type { PendingProjects } from '../../storage/pending-projects.js';
-import { eventMessage, sendEventShape } from '../send-and-receive/stages.js';
-import type { EventShape, ScenarioContext } from '../send-and-receive/stages.js';
+import { eventMessage, sendEventShape } from '../shared/event.js';
+import type { EventShape } from '../shared/event.js';
+import type { ScenarioContext } from '../shared/context.js';
 
 const REFUSED = 'ECONNREFUSED';
 const MAY_EXIST_WARNING = 'The project of this run may still be created in Hawk; the sweep removes it';

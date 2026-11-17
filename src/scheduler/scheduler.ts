@@ -6,7 +6,7 @@ import type { RunResult } from '../engine/result.js';
 import type { Redactor } from '../errors/redact.js';
 import { CheckError } from '../errors/taxonomy.js';
 import type { Logger } from '../log/logger.js';
-import { createRunId } from '../scenarios/send-and-receive/plan.js';
+import { createRunId } from '../scenarios/shared/plan.js';
 import type { ScenarioName } from '../scenarios/names.js';
 import type { History } from '../storage/history.js';
 import type { RunStart } from '../storage/types.js';

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ConfigFailure, loadConfig, telegramSettings } from '../../src/config/load.js';
 import type { Config } from '../../src/config/load.js';
 import { scenarioSettings } from '../../src/config/scenario.js';
-import { scenarioSecrets } from '../../src/scenarios/send-and-receive/run.js';
+import { scenarioSecrets } from '../../src/scenarios/shared/deps.js';
 import { testConfig } from '../support/config.js';
 import { validEnv } from '../support/env.js';
 import { expectErrors, expectOk } from '../support/result.js';

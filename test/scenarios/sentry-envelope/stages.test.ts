@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { EventCard } from '../../../src/clients/hawk-api.js';
-import { planRun } from '../../../src/scenarios/send-and-receive/plan.js';
+import { planRun } from '../../../src/scenarios/shared/plan.js';
 import { checkSentryCard, sentryTitle } from '../../../src/scenarios/sentry-envelope/stages.js';
 import { testConfig } from '../../support/config.js';
 

@@ -2,12 +2,14 @@ import { scenarioSettings } from '../../config/scenario.js';
 import type { RunResult } from '../../engine/result.js';
 import { SENTRY_ENVELOPE } from '../names.js';
 import { buildRunResult, runSteps, stageWarnings } from '../run-steps.js';
-import { planRun } from '../send-and-receive/plan.js';
-import type { PlanOptions } from '../send-and-receive/plan.js';
-import type { ScenarioDeps } from '../send-and-receive/run.js';
-import { apiAvailabilityStage, cleanupStage, collectorAvailabilityStage, eventVisibleStage } from '../send-and-receive/stages.js';
-import type { ScenarioContext, ScenarioState } from '../send-and-receive/stages.js';
-import { decideVerdict } from '../send-and-receive/verdict.js';
+import { planRun } from '../shared/plan.js';
+import type { PlanOptions } from '../shared/plan.js';
+import type { ScenarioDeps } from '../shared/deps.js';
+import { apiAvailabilityStage, collectorAvailabilityStage } from '../shared/availability.js';
+import { cleanupStage } from '../shared/cleanup.js';
+import { eventVisibleStage } from '../shared/delivery.js';
+import type { ScenarioContext, ScenarioState } from '../shared/context.js';
+import { decideVerdict } from '../shared/verdict.js';
 import { DEFAULT_CATCHER, envelopeAcceptStage, sentryShape, sentryTitle } from './stages.js';
 
 /**

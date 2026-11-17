@@ -15,7 +15,7 @@ import { startFakeHawk } from '../../support/fake-hawk/index.js';
 import type { CollectorReplyOverride, FakeHawk } from '../../support/fake-hawk/index.js';
 import { createNotificationTestDeps, createTestDeps } from '../../support/scenario.js';
 import type { NotificationTestDeps, NotificationTestOptions } from '../../support/scenario.js';
-import type { PlanOptions } from '../../../src/scenarios/send-and-receive/plan.js';
+import type { PlanOptions } from '../../../src/scenarios/shared/plan.js';
 import { runSendAndReceive } from '../../../src/scenarios/send-and-receive/run.js';
 import { runCheckNotification } from '../../../src/scenarios/check-notification/run.js';
 import type { NotificationDeps } from '../../../src/scenarios/check-notification/run.js';

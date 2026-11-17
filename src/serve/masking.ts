@@ -1,7 +1,7 @@
 import type { Config } from '../config/load.js';
 import { createMutableRedactor } from '../errors/redact.js';
 import type { MutableRedactor } from '../errors/redact.js';
-import { scenarioSecrets } from '../scenarios/send-and-receive/run.js';
+import { scenarioSecrets } from '../scenarios/shared/deps.js';
 
 const NOTIFY_TOKEN_MARKER = '/u/';
 
