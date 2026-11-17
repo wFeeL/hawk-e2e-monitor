@@ -16,6 +16,7 @@ import { runCheckCommand } from '../../src/commands/check.js';
 import type { CheckIo } from '../../src/commands/check.js';
 import { seedLease, tempDatabase } from '../support/database.js';
 import type { TempDatabase } from '../support/database.js';
+import { reservedPort } from '../support/ports.js';
 import { LEASE_TTL_MS } from '../../src/storage/lease.js';
 import { openDatabase } from '../../src/storage/database.js';
 import { createHistory } from '../../src/storage/history.js';
@@ -224,28 +225,6 @@ describe('runCheckCommand with check-notification', () => {
     return captured;
   }
 
-  /**
-   * Finds a port that is free right now.
-   * @returns Its number.
-   */
-  async function freePort(): Promise<number> {
-    const probe = createServer();
-
-    await new Promise<void>((resolve) => {
-      probe.listen(0, '127.0.0.1', resolve);
-    });
-
-    const { port } = probe.address() as AddressInfo;
-
-    await new Promise<void>((resolve) => {
-      probe.close(() => {
-        resolve();
-      });
-    });
-
-    return port;
-  }
-
   it('prints the result of the new scenario and exits 0', async () => {
     const { code, stdout, stderr } = await runNotification();
     const result = JSON.parse(stdout) as RunResult;
@@ -314,7 +293,7 @@ describe('runCheckCommand with check-notification', () => {
   });
 
   it('starts its own receiver on the configured port and closes it at the end', async () => {
-    const port = await freePort();
+    const port = await reservedPort();
     const own = httpAddress(port);
     const { code, stderr } = await runNotification({}, (config, deps) => ({ config: { ...config,
       notifications: { ...config.notifications,

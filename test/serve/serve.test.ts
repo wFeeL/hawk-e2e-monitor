@@ -35,6 +35,7 @@ import type { FakeNotify, FakeNotifyAnswer } from '../support/fake-notify.js';
 import { memoryLogger } from '../support/logger.js';
 import type { MemoryLogger } from '../support/logger.js';
 import { createTestDeps } from '../support/scenario.js';
+import { reservedPort } from '../support/ports.js';
 import { systemClock } from '../../src/time/clock.js';
 import type { Clock } from '../../src/time/clock.js';
 import { startServe } from '../../src/serve/serve.js';
@@ -189,28 +190,6 @@ async function hawkFor(): Promise<FakeHawk> {
   cleanups.push(async () => hawk.close());
 
   return hawk;
-}
-
-/**
- * Finds a port nobody listens on.
- * @returns A port that was free a moment ago.
- */
-async function freePort(): Promise<number> {
-  const server = createServer();
-
-  await new Promise<void>((resolve) => {
-    server.listen(0, '127.0.0.1', resolve);
-  });
-
-  const { port } = server.address() as AddressInfo;
-
-  await new Promise<void>((resolve) => {
-    server.close(() => {
-      resolve();
-    });
-  });
-
-  return port;
 }
 
 /**
@@ -1381,7 +1360,7 @@ describe('serve: notifications', () => {
 
   it('takes the warmup of the last rule change from the database, so the first run is skipped', async () => {
     const hawk = await hawkFor();
-    const port = await freePort();
+    const port = await reservedPort();
     const { deps } = createTestDeps(hawk, { env: { RECEIVER_SECRET: TEST_RECEIVER_SECRET,
       TUNNEL_METRICS_URL: 'http://127.0.0.1:9100' } });
 
@@ -1413,7 +1392,7 @@ describe('serve: notifications', () => {
 
   it('never waits longer than the warmup when the stored time is in the future', async () => {
     const hawk = await hawkFor();
-    const port = await freePort();
+    const port = await reservedPort();
     const { deps } = createTestDeps(hawk, { env: { RECEIVER_SECRET: TEST_RECEIVER_SECRET,
       TUNNEL_METRICS_URL: 'http://127.0.0.1:9100' } });
 
@@ -1505,7 +1484,7 @@ describe('serve: notifications', () => {
 
     it('waits for the new address to answer before it changes the rule, and the next run is ok', async () => {
       const hawk = await hawkFor();
-      const receiverPort = await freePort();
+      const receiverPort = await reservedPort();
       const { deps } = createTestDeps(hawk, { env: { RECEIVER_SECRET: TEST_RECEIVER_SECRET,
         TUNNEL_METRICS_URL: 'http://127.0.0.1:9100',
         RULE_CACHE_WARMUP_MS: '50' } });
@@ -1535,7 +1514,7 @@ describe('serve: notifications', () => {
   });
   it('a manual run during the warmup of the rule cache answers 200 with the status skipped', async () => {
     const hawk = await hawkFor();
-    const port = await freePort();
+    const port = await reservedPort();
     const { deps } = createTestDeps(hawk, { env: { RECEIVER_SECRET: TEST_RECEIVER_SECRET,
       TUNNEL_METRICS_URL: 'http://127.0.0.1:9100' } });
 

@@ -3,6 +3,7 @@ import { startFakeCollector } from '../support/fake-hawk/collector.js';
 import type { FakeCollector } from '../support/fake-hawk/collector.js';
 import { createFakeStore } from '../support/fake-hawk/store.js';
 import { decodeTokenKey, encodeToken } from '../support/fake-hawk/token.js';
+import { reservedPort } from '../support/ports.js';
 import { sendOverWebSocket } from '../../src/net/ws.js';
 import type { WsSendOptions } from '../../src/net/ws.js';
 
@@ -56,11 +57,11 @@ describe('sendOverWebSocket', () => {
   });
 
   it('closed port is handshake_failed', async () => {
-    const { wsUrl } = collector;
+    const dead = new URL(collector.wsUrl);
 
-    await collector.close();
+    dead.port = String(await reservedPort());
 
-    const outcome = await sendOverWebSocket(wsUrl, MESSAGE, options());
+    const outcome = await sendOverWebSocket(dead.href, MESSAGE, options());
 
     expect(outcome.kind).toBe('handshake_failed');
   });

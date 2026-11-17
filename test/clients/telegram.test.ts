@@ -4,9 +4,9 @@ import type { TelegramClient } from '../../src/clients/telegram.js';
 import { isCheckError } from '../../src/errors/taxonomy.js';
 import type { CheckError } from '../../src/errors/taxonomy.js';
 import { systemClock } from '../../src/time/clock.js';
-import { startDeadPort } from '../support/dead-port.js';
 import { startFakeTelegram } from '../support/fake-telegram.js';
 import type { FakeTelegram } from '../support/fake-telegram.js';
+import { reservedPort } from '../support/ports.js';
 
 const HTTP_TIMEOUT_MS = 300;
 const open: Array<() => Promise<void>> = [];
@@ -306,15 +306,7 @@ describe('telegram client failures', () => {
   });
 
   it('a refused connection is telegram_api_unavailable with the code', async () => {
-    const dead = await startDeadPort();
-
-    open.push(async () => new Promise<void>((resolve) => {
-      dead.server.close(() => {
-        resolve();
-      });
-    }));
-
-    const { client } = await start({ apiUrl: `http://127.0.0.1:${String(dead.port)}` });
+    const { client } = await start({ apiUrl: `http://127.0.0.1:${String(await reservedPort())}` });
     const error = await failure(async () => client.getMe(AbortSignal.timeout(2000)));
 
     expect(error.errorClass).toBe('telegram_api_unavailable');

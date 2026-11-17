@@ -5,6 +5,7 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, describe, expect, it } from 'vitest';
 import { createSelfSignedCert } from '../support/tls.js';
+import { reservedPort } from '../support/ports.js';
 import { systemClock } from '../../src/time/clock.js';
 import { CheckError } from '../../src/errors/taxonomy.js';
 import { NetworkError, httpRequest, networkFailureToCheckError, requestWithRetry } from '../../src/net/http.js';
@@ -144,16 +145,7 @@ describe('httpRequest', () => {
   });
 
   it('refused connection is unavailable before send', async () => {
-    const { url, server } = await listen(() => undefined);
-
-    server.closeAllConnections();
-    await new Promise<void>((resolve) => {
-      server.close(() => {
-        resolve();
-      });
-    });
-
-    const error = await failure(get(url));
+    const error = await failure(get(`http://127.0.0.1:${String(await reservedPort())}/`));
 
     expect(error.failure).toEqual({ errorClass: 'collector_unavailable',
       code: 'ECONNREFUSED',
@@ -292,14 +284,7 @@ describe('requestWithRetry', () => {
   });
 
   it('rethrows the network error after the last attempt', async () => {
-    const { url, server } = await listen(() => undefined);
-
-    server.closeAllConnections();
-    await new Promise<void>((resolve) => {
-      server.close(() => {
-        resolve();
-      });
-    });
+    const url = `http://127.0.0.1:${String(await reservedPort())}/`;
 
     await expect(requestWithRetry(get(url), 'collector', base)).rejects.toBeInstanceOf(NetworkError);
   });

@@ -5,6 +5,7 @@ import type { GarageDeps } from '../../src/clients/garage.js';
 import { systemClock } from '../../src/time/clock.js';
 import { BUNDLE_PATH, startFakeGarage } from '../support/fake-garage.js';
 import type { FakeGarage } from '../support/fake-garage.js';
+import { reservedPort } from '../support/ports.js';
 
 const DEPS: GarageDeps = { httpTimeoutMs: 1000,
   clock: systemClock,
@@ -156,9 +157,7 @@ describe('checkGarage', () => {
   });
 
   it('blames Garage for a closed port and keeps the address in the text', async () => {
-    const origin = garage.origin;
-
-    await garage.close();
+    const origin = `http://127.0.0.1:${String(await reservedPort())}`;
 
     try {
       await checkGarage(origin, DEPS, new AbortController().signal);
@@ -168,8 +167,6 @@ describe('checkGarage', () => {
       expect((error as CheckError).errorClass).toBe('garage_unavailable');
       expect((error as CheckError).message).toContain(`Garage at ${origin} did not serve the index page: connection refused (ECONNREFUSED)`);
     }
-
-    garage = await startFakeGarage();
   });
 
   it('is cancelled by the signal', async () => {

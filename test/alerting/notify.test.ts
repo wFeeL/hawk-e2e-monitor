@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { CheckError } from '../../src/errors/taxonomy.js';
 import { startFakeNotify } from '../support/fake-notify.js';
 import type { FakeNotify } from '../support/fake-notify.js';
+import { reservedPort } from '../support/ports.js';
 import { systemClock } from '../../src/time/clock.js';
 import { sendNotify } from '../../src/alerting/notify.js';
 
@@ -87,11 +88,12 @@ describe('sendNotify', () => {
 
   it('a refused connection is a network error that names the host but not the token', async () => {
     const fake = await startBot();
-    const { url, token } = fake;
+    const { token } = fake;
+    const dead = new URL(fake.url);
 
-    await fake.close();
+    dead.port = String(await reservedPort());
 
-    const error = await rejection(sendNotify(url, 'x', DEPS, SIGNAL));
+    const error = await rejection(sendNotify(dead.href, 'x', DEPS, SIGNAL));
 
     expect(error.errorClass).toBe('network_error');
     expect(error.culprit).toBe('network');

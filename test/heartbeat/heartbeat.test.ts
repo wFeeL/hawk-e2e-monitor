@@ -8,6 +8,7 @@ import { createFakeClock } from '../support/fake-clock.js';
 import { startFakeHealthchecks } from '../support/fake-healthchecks.js';
 import type { FakeHealthchecks } from '../support/fake-healthchecks.js';
 import { memoryLogger } from '../support/logger.js';
+import { reservedPort } from '../support/ports.js';
 
 const SEND = 'send-and-receive-event';
 const NOTIFY = 'check-notification';
@@ -263,9 +264,8 @@ describe('beatOnce', () => {
   });
 
   it('fails when the service is not reachable', async () => {
-    const { heartbeat, fake, failures } = await rig();
+    const { heartbeat, failures } = await rig(`http://127.0.0.1:${String(await reservedPort())}/ping/gone`);
 
-    await fake.close();
     expect(await heartbeat.beatOnce(new AbortController().signal)).toBe('failed');
     expect(failures).toHaveBeenCalledTimes(1);
   });
