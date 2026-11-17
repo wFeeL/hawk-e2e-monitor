@@ -2,7 +2,7 @@ import type { StageOutcome, StageSpec } from '../../engine/stages.js';
 import { CheckError } from '../../errors/taxonomy.js';
 import type { Clock } from '../../time/clock.js';
 import type { AvailabilityContext } from '../send-and-receive/stages.js';
-import { checkGarage } from './garage.js';
+import { checkGarage } from '../../clients/garage.js';
 
 /** Everything a stage of the probe needs. */
 export interface ProbeContext extends AvailabilityContext {

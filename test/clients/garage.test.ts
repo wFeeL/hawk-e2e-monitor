@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CheckError } from '../../../src/errors/taxonomy.js';
-import { checkGarage } from '../../../src/scenarios/endpoints-probe/garage.js';
-import type { GarageDeps } from '../../../src/scenarios/endpoints-probe/garage.js';
-import { systemClock } from '../../../src/time/clock.js';
-import { BUNDLE_PATH, startFakeGarage } from '../../support/fake-garage.js';
-import type { FakeGarage } from '../../support/fake-garage.js';
+import { CheckError } from '../../src/errors/taxonomy.js';
+import { checkGarage } from '../../src/clients/garage.js';
+import type { GarageDeps } from '../../src/clients/garage.js';
+import { systemClock } from '../../src/time/clock.js';
+import { BUNDLE_PATH, startFakeGarage } from '../support/fake-garage.js';
+import type { FakeGarage } from '../support/fake-garage.js';
 
 const DEPS: GarageDeps = { httpTimeoutMs: 1000,
   clock: systemClock,
