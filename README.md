@@ -280,6 +280,14 @@ then they cannot tell whether `serve` is running. A `check check-notification`
 started within `RULE_CACHE_WARMUP_MS` of a rule change first waits for Hawk to
 reload the rules.
 
+That guard sees only one database file. A `check` on the host next to a
+monitor in compose works on another file, so nothing stops it, and with the
+same `INSTANCE_ID` both processes own the same rules. The hand run points them
+at its own tunnel; a monitor run waiting for a notification at that moment ends
+in `notification_timeout` with Hawk to blame, and the monitor's next run moves
+the rules back and skips the notification stage. While a monitor works on the
+project, give hand runs their own `INSTANCE_ID`.
+
 Tests:
 
 ```sh
@@ -501,6 +509,13 @@ of the collector.
 error class and culprit, run, stage, event and notification latency
 histograms, the last status and run time of every scenario, the alert queue
 age and heartbeat failures.
+
+Event latency runs from the moment the collector accepted the event to the API
+read that found it. The monitor reads after 0.5, 1, 2 and 4 s and then every
+5 s, each wait off by up to 20%, so the figure is an upper bound and can be
+late by one wait: under a second for an event that shows up at once, up to
+6 s for a slow one. Notification latency has no such step, because the
+receiver stamps each webhook as it arrives.
 
 The `observability` profile adds Prometheus and Grafana with a provisioned
 dashboard and six alert rules (monitor down, scenario stale, scenario
