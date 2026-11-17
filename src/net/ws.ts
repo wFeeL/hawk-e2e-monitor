@@ -96,6 +96,7 @@ export async function sendOverWebSocket(url: string, message: string, options: W
         resolve({ kind: 'timeout',
           sent });
       };
+      // A real timer on purpose: tests move a fake clock in steps longer than a request timeout while the socket still answers.
       const timer = setTimeout(onTimeout, options.timeoutMs);
 
       socket.addEventListener('open', onOpen);

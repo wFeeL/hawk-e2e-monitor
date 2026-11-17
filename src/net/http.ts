@@ -132,6 +132,7 @@ async function readStart(response: Response, maxBytes: number): Promise<string> 
  * @throws NetworkError on any failure of the request or of the body read.
  */
 export async function httpRequest(request: HttpRequest, target: NetTarget): Promise<HttpResponse> {
+  // A real timer on purpose: tests move a fake clock in steps longer than a request timeout while the socket still answers.
   const signal = AbortSignal.any([request.signal, AbortSignal.timeout(request.timeoutMs)]);
 
   try {
