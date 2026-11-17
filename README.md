@@ -616,3 +616,8 @@ TODO:
 - [x] telegram delivery: Hawk notification found in a Telegram group by a bot, with a probe through @codex_bot
 - [x] more scenarios: threshold rule, source maps, Sentry envelope, new project
 - [ ] degradation thresholds computed from the collected stage durations
+- [ ] code debt: the three scenarios that send an event each read the
+  collector's answer with their own `switch`, five scenario run files repeat
+  the rule of when to keep going after a failed stage, and the HTTP timeout,
+  clock and retry settings travel as three separate fields through eight
+  interfaces
