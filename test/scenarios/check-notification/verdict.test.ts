@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { StageName, StageResult } from '../../../src/engine/result.js';
 import type { Arrival, Arrivals } from '../../../src/receiver/server.js';
-import type { ScenarioState } from '../../../src/scenarios/send-and-receive/stages.js';
+import type { ScenarioState } from '../../../src/scenarios/shared/context.js';
 import type { NotificationState } from '../../../src/scenarios/check-notification/stages.js';
 import { decideNotificationVerdict } from '../../../src/scenarios/check-notification/verdict.js';
 

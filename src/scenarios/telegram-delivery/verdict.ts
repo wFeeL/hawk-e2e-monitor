@@ -5,7 +5,7 @@ import type { Arrivals } from '../../receiver/server.js';
 import { checkNotificationAgainstEvent } from '../check-notification/stages.js';
 import type { NotificationState } from '../check-notification/stages.js';
 import { stageWarnings } from '../run-steps.js';
-import type { ScenarioState } from '../send-and-receive/stages.js';
+import type { ScenarioState } from '../shared/context.js';
 import { decideHead, decideTail, errorOf } from '../shared/verdict.js';
 import type { Verdict } from '../shared/verdict.js';
 import type { TelegramState } from './stages.js';

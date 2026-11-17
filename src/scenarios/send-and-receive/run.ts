@@ -4,8 +4,10 @@ import { buildRunResult, runSteps, stageWarnings } from '../run-steps.js';
 import type { ScenarioDeps } from '../shared/deps.js';
 import { planRun } from '../shared/plan.js';
 import type { PlanOptions } from '../shared/plan.js';
-import { apiAvailabilityStage, cleanupStage, collectorAcceptStage, collectorAvailabilityStage, eventRepeatedStage, eventVisibleStage } from './stages.js';
-import type { ScenarioContext, ScenarioState } from './stages.js';
+import { apiAvailabilityStage, collectorAvailabilityStage } from '../shared/availability.js';
+import { cleanupStage } from '../shared/cleanup.js';
+import { collectorAcceptStage, eventRepeatedStage, eventVisibleStage } from '../shared/delivery.js';
+import type { ScenarioContext, ScenarioState } from '../shared/context.js';
 import { decideVerdict } from '../shared/verdict.js';
 
 /**

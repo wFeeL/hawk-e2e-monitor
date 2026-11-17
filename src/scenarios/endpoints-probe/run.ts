@@ -7,7 +7,7 @@ import { ENDPOINTS_PROBE } from '../names.js';
 import { createRunId } from '../shared/plan.js';
 import { followOutsideSignal } from '../run-steps.js';
 import type { ScenarioDeps } from '../shared/deps.js';
-import { apiAvailabilityStage, collectorAvailabilityStage } from '../send-and-receive/stages.js';
+import { apiAvailabilityStage, collectorAvailabilityStage } from '../shared/availability.js';
 import { errorOf } from '../shared/verdict.js';
 import { garageAvailabilityStage } from './stages.js';
 import type { ProbeContext } from './stages.js';

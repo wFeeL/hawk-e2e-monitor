@@ -4,8 +4,9 @@ import { pollUntil } from '../../engine/poll.js';
 import type { StageOutcome, StageSpec } from '../../engine/stages.js';
 import { CheckError } from '../../errors/taxonomy.js';
 import type { RunPlan } from '../shared/plan.js';
-import { checkEventFields, sendEventShape } from '../send-and-receive/stages.js';
-import type { EventShape, ScenarioContext } from '../send-and-receive/stages.js';
+import { checkEventFields, sendEventShape } from '../shared/event.js';
+import type { EventShape } from '../shared/event.js';
+import type { ScenarioContext } from '../shared/context.js';
 import { SOURCE_NAME, expectedSourceCode } from './map.js';
 import type { BuiltSourceMap } from './map.js';
 

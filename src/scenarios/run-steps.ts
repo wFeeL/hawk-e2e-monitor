@@ -8,7 +8,7 @@ import type { Logger } from '../log/logger.js';
 import type { Clock } from '../time/clock.js';
 import type { ScenarioName } from './names.js';
 import type { RunPlan } from './shared/plan.js';
-import type { ScenarioState } from './send-and-receive/stages.js';
+import type { ScenarioState } from './shared/context.js';
 import type { Verdict } from './shared/verdict.js';
 
 /** What `runSteps` needs. */

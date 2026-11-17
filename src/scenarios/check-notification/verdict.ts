@@ -3,7 +3,7 @@ import type { RunNotification, StageResult } from '../../engine/result.js';
 import { CheckError } from '../../errors/taxonomy.js';
 import type { Arrivals } from '../../receiver/server.js';
 import type { NotificationChannel } from '../../notifications/types.js';
-import type { ScenarioState } from '../send-and-receive/stages.js';
+import type { ScenarioState } from '../shared/context.js';
 import { decideVerdict } from '../shared/verdict.js';
 import type { Verdict } from '../shared/verdict.js';
 import { stageWarnings } from '../run-steps.js';

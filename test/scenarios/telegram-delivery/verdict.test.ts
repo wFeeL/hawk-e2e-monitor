@@ -4,7 +4,7 @@ import type { ErrorClass } from '../../../src/errors/taxonomy.js';
 import { CULPRIT_OF } from '../../../src/errors/taxonomy.js';
 import type { Arrival, Arrivals } from '../../../src/receiver/server.js';
 import type { NotificationState } from '../../../src/scenarios/check-notification/stages.js';
-import type { ScenarioState } from '../../../src/scenarios/send-and-receive/stages.js';
+import type { ScenarioState } from '../../../src/scenarios/shared/context.js';
 import type { TelegramState } from '../../../src/scenarios/telegram-delivery/stages.js';
 import { decideTelegramVerdict } from '../../../src/scenarios/telegram-delivery/verdict.js';
 

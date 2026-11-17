@@ -18,7 +18,7 @@ import { createMutableRedactor } from '../../src/errors/redact.js';
 import type { NotificationDeps } from '../../src/scenarios/check-notification/run.js';
 import { createScenarioRedactor, scenarioSecrets } from '../../src/scenarios/shared/deps.js';
 import type { ScenarioDeps } from '../../src/scenarios/shared/deps.js';
-import type { ScenarioContext } from '../../src/scenarios/send-and-receive/stages.js';
+import type { ScenarioContext } from '../../src/scenarios/shared/context.js';
 import { systemClock } from '../../src/time/clock.js';
 import type { Clock } from '../../src/time/clock.js';
 import { memoryLogger } from './logger.js';
