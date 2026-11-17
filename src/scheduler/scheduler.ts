@@ -411,12 +411,26 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         const failure = new CheckError('provisioning_unstable', { detail: `the notification check was skipped for the rule cache warmup ${String(state.warmupStreak)} runs in a row` });
         const { skipReason: _skipReason, ...kept } = outcome;
 
+        const fields = { errorClass: failure.errorClass,
+          culprit: failure.culprit,
+          message: failure.message };
+
+        // The stored result must agree with the row, so the copy is failed too; the original is left alone.
         outcome = { ...kept,
           status: 'failed',
-          errorClass: failure.errorClass,
-          culprit: failure.culprit,
-          message: failure.message,
-          failedStage: 'notification_formed' };
+          ...fields,
+          failedStage: 'notification_formed',
+          ...kept.result === undefined
+            ? {}
+            : { result: { ...kept.result,
+                status: 'failed',
+                ...fields,
+                failedStage: 'notification_formed',
+                stages: kept.result.stages.map(stage => stage.name === 'notification_formed'
+                  ? { ...stage,
+                      status: 'failed',
+                      ...fields }
+                  : stage) } } };
       }
     } else if (!keepsStreak(outcome)) {
       state.warmupStreak = 0;

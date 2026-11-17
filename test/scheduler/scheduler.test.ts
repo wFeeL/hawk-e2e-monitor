@@ -1182,6 +1182,24 @@ describe('warmup streak', () => {
     await parts.clock.advance(21_000);
 
     const third = await skipCall(parts, 2);
+    const resultOf = (index: number): RunResult | undefined => parts.history.get(callOf(parts.runners[NOTIFY], index).runId)?.result;
+    const stageOf = (result: RunResult | undefined): RunResult['stages'][number] | undefined => result?.stages.find(stage => stage.name === 'notification_formed');
+
+    for (const index of [0, 1]) {
+      expect(resultOf(index)).toMatchObject({ status: 'ok' });
+      expect(stageOf(resultOf(index))).toMatchObject({ status: 'skipped' });
+    }
+
+    expect(resultOf(2)).toMatchObject({ status: 'failed',
+      errorClass: 'provisioning_unstable',
+      failedStage: 'notification_formed',
+      message: third.message });
+    expect(stageOf(resultOf(2))).toMatchObject({ status: 'failed',
+      errorClass: 'provisioning_unstable',
+      message: third.message,
+      durationMs: 0,
+      details: { reason: 'rule_cache_warmup',
+        warmupRemainingMs: 20_000 } });
 
     expect(third).toMatchObject({ status: 'failed',
       errorClass: 'provisioning_unstable',
