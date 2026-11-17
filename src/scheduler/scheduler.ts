@@ -18,6 +18,9 @@ const SELF_CHECK_MS = 60_000;
 const HUNGS_BEFORE_EXIT = 3;
 const LAST_RUNS_LOOKED_AT = 5;
 
+/** Rows of the history read to seed the warmup streak at start. */
+const WARMUP_SEED_ROWS = 10;
+
 /** Notification checks skipped for the rule cache warmup in a row that make the last of them a failure. */
 export const WARMUP_SKIP_LIMIT = 3;
 
@@ -411,12 +414,26 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         const failure = new CheckError('provisioning_unstable', { detail: `the notification check was skipped for the rule cache warmup ${String(state.warmupStreak)} runs in a row` });
         const { skipReason: _skipReason, ...kept } = outcome;
 
+        const fields = { errorClass: failure.errorClass,
+          culprit: failure.culprit,
+          message: failure.message };
+
+        // The stored result must agree with the row, so the copy is failed too; the original is left alone.
         outcome = { ...kept,
           status: 'failed',
-          errorClass: failure.errorClass,
-          culprit: failure.culprit,
-          message: failure.message,
-          failedStage: 'notification_formed' };
+          ...fields,
+          failedStage: 'notification_formed',
+          ...kept.result === undefined
+            ? {}
+            : { result: { ...kept.result,
+                status: 'failed',
+                ...fields,
+                failedStage: 'notification_formed',
+                stages: kept.result.stages.map(stage => stage.name === 'notification_formed'
+                  ? { ...stage,
+                      status: 'failed',
+                      ...fields }
+                  : stage) } } };
       }
     } else if (!keepsStreak(outcome)) {
       state.warmupStreak = 0;
@@ -673,7 +690,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
       try {
         const recent = history.list({ scenario: state.name,
-          limit: LAST_RUNS_LOOKED_AT }).filter(row => !keepsStreak(row));
+          limit: WARMUP_SEED_ROWS }).filter(row => !keepsStreak(row));
         const resetAt = recent.findIndex(row => !isWarmupRun(row));
 
         state.warmupStreak = resetAt === -1 ? recent.length : resetAt;
