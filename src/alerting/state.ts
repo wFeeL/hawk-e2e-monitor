@@ -1,6 +1,7 @@
 import type { AlertStateRow } from '../storage/types.js';
 import { isMonitorAbort } from '../storage/outcome.js';
-import type { DegradedCode, RunRow } from '../storage/types.js';
+import type { DegradedCode } from '../engine/result.js';
+import type { RunRow } from '../storage/types.js';
 
 /** What a transition tells the operator. */
 export type AlertKind = 'degraded' | 'failed' | 'recovered' | 'recovered_degraded' | 'still_failing';

@@ -68,7 +68,7 @@ export async function runEndpointsProbe(deps: ScenarioDeps, options: ProbeOption
     finishedAt: clock.wallTime().toISOString(),
     durationMs: clock.monotonicMs() - t0,
     status: failed === undefined ? 'ok' : 'failed',
-    warnings: stages.flatMap(stage => typeof stage.details?.warning === 'string' ? [stage.details.warning] : []),
+    warnings: stages.flatMap(stage => stage.details?.warning === undefined ? [] : [stage.details.warning]),
     sendMayHaveReached: false,
     stages,
     cleanup: { status: 'skipped' },

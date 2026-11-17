@@ -1,5 +1,6 @@
 import type { sendProbe } from '../../clients/codex-notify.js';
 import type { TelegramClient, TelegramMessage } from '../../clients/telegram.js';
+import type { StageDetails } from '../../engine/result.js';
 import type { StageOutcome, StageSpec } from '../../engine/stages.js';
 import { CheckError, isCheckError } from '../../errors/taxonomy.js';
 import type { ErrorClass } from '../../errors/taxonomy.js';
@@ -353,7 +354,7 @@ export function telegramFormedStage(timeoutMs: number): StageSpec<TelegramContex
         pairWaitMs: settings.pairWaitMs,
         signal });
       const [webhook] = arrivals.telegram;
-      const details: Record<string, unknown> = { unmatched: arrivals.unmatched };
+      const details: StageDetails = { unmatched: arrivals.unmatched };
 
       notification.arrivals = arrivals;
 

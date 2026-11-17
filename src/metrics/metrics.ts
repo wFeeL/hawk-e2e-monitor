@@ -1,7 +1,7 @@
 import perfHooks from 'node:perf_hooks';
 import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
 import { TRANSPORTS } from '../clients/collector.js';
-import { STAGE_NAMES, STAGE_STATUSES } from '../engine/result.js';
+import { DEGRADED_CODES, STAGE_NAMES, STAGE_STATUSES } from '../engine/result.js';
 import type { RunResult } from '../engine/result.js';
 import { CULPRITS, ERROR_CLASSES } from '../errors/taxonomy.js';
 import type { Logger } from '../log/logger.js';
@@ -10,7 +10,7 @@ import { SCENARIO_NAMES } from '../scenarios/names.js';
 import type { ScenarioName } from '../scenarios/names.js';
 import type { History } from '../storage/history.js';
 import { isMonitorAbort, isVerdict } from '../storage/outcome.js';
-import { DEGRADED_CODES, RUN_TRIGGERS } from '../storage/types.js';
+import { RUN_TRIGGERS } from '../storage/types.js';
 import type { RunRow } from '../storage/types.js';
 import { MS_PER_SECOND } from '../time/units.js';
 

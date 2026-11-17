@@ -1,5 +1,6 @@
 import type { Transport } from '../clients/collector.js';
 import type { Culprit, ErrorClass } from '../errors/taxonomy.js';
+import type { ArrivalKind } from '../notifications/types.js';
 
 /** Stages of a run, in execution order. */
 export const STAGE_NAMES = [
@@ -31,6 +32,53 @@ export const STAGE_STATUSES = ['ok', 'failed', 'uncertain', 'skipped'] as const;
 /** How a stage ended. */
 export type StageStatus = (typeof STAGE_STATUSES)[number];
 
+/** Conditions under which an `ok` run still deserves a warning. */
+export const DEGRADED_CODES = [
+  'quota_usage',
+  'single_channel',
+  'accept_uncertain',
+  'js_worker_not_seen',
+  'grouping_pattern',
+] as const;
+
+/** One of `DEGRADED_CODES`. */
+export type DegradedCode = (typeof DEGRADED_CODES)[number];
+
+/** Stage data; the keys read outside the stage that writes them are typed. */
+export interface StageDetails {
+  /** One line the run reports as a warning. */
+  warning?: string;
+  /** Several warnings the run reports. */
+  warnings?: string[];
+  /** Degradation codes the stage names itself. */
+  degraded?: DegradedCode[];
+  /** Why the stage was skipped. */
+  reason?: 'rule_cache_warmup';
+  /** Time left of the rule cache warmup. */
+  warmupRemainingMs?: number;
+  /** How the recount before cleanup went. */
+  recheck?: 'skipped' | 'missing' | 'failed';
+  /** Time the stage waited before it gave up. */
+  waitedMs?: number;
+  /** True when the event was found by the search after the visible stage gave up. */
+  foundBySearch?: boolean;
+  /** True when the event quota is almost used. */
+  quotaLow?: boolean;
+  /** Count of the event seen by the recount before cleanup. */
+  lateTotalCount?: number;
+  /** True when the collector did not confirm the repeated event. */
+  repeatUncertain?: boolean;
+  /** How the poll for the event ended. */
+  pollOutcome?: 'found' | 'not_found' | 'api_error';
+  /** Id of the event the stage deleted or compared. */
+  originalEventId?: string;
+  /** Id of the event named in the webhook. */
+  eventId?: string;
+  /** Latency in ms, or per channel. */
+  latencyMs?: number | Partial<Record<ArrivalKind, number>>;
+  [key: string]: unknown;
+}
+
 /** Recorded outcome of one stage. */
 export interface StageResult {
   /** Stage name. */
@@ -48,7 +96,7 @@ export interface StageResult {
   /** Human-readable text of the error. */
   message?: string;
   /** Stage-specific data. */
-  details?: Record<string, unknown>;
+  details?: StageDetails;
 }
 
 /** Outcome of the cleanup stage. */

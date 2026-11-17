@@ -1,7 +1,7 @@
 import type { StageOutcome, StageSpec } from '../../engine/stages.js';
 import { CheckError } from '../../errors/taxonomy.js';
 import { decodeIntegrationToken, tokenKey } from '../../hawk/token.js';
-import type { DegradedCode } from '../../storage/types.js';
+import type { DegradedCode, StageDetails } from '../../engine/result.js';
 import type { AvailabilityContext } from './context.js';
 
 const LOW_QUOTA_SHARE = 0.1;
@@ -103,7 +103,7 @@ export function apiAvailabilityStage(timeoutMs: number, options: ApiAvailability
         ? { warnings: [],
             degraded: [] }
         : patternFindings(info.groupingPatterns, options.title);
-      const details: Record<string, unknown> = { quota: { eventsCount: quota.eventsCount,
+      const details: StageDetails = { quota: { eventsCount: quota.eventsCount,
         eventsLimit: quota.eventsLimit } };
 
       if (left < LOW_QUOTA_SHARE) {

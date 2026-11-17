@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { STAGE_NAMES } from '../../src/engine/result.js';
+import { DEGRADED_CODES, STAGE_NAMES } from '../../src/engine/result.js';
 
 describe('STAGE_NAMES', () => {
   it('lists the stages in execution order', () => {
@@ -22,5 +22,11 @@ describe('STAGE_NAMES', () => {
       'cleanup',
       'garage_availability',
     ]);
+  });
+});
+
+describe('DEGRADED_CODES', () => {
+  it('names the degradation codes', () => {
+    expect(DEGRADED_CODES).toEqual(['quota_usage', 'single_channel', 'accept_uncertain', 'js_worker_not_seen', 'grouping_pattern']);
   });
 });

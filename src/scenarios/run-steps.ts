@@ -123,8 +123,8 @@ export function stageWarnings(stages: readonly StageResult[]): string[] {
     const { warning, warnings } = stage.details ?? {};
 
     return [
-      ...typeof warning === 'string' ? [warning] : [],
-      ...Array.isArray(warnings) ? warnings.filter((item): item is string => typeof item === 'string') : [],
+      ...warning === undefined ? [] : [warning],
+      ...warnings ?? [],
     ];
   });
 }
