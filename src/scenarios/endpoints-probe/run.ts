@@ -4,11 +4,11 @@ import type { StageSpec } from '../../engine/stages.js';
 import { redactDeep } from '../../errors/redact.js';
 import type { CheckError } from '../../errors/taxonomy.js';
 import { ENDPOINTS_PROBE } from '../names.js';
-import { createRunId } from '../send-and-receive/plan.js';
+import { createRunId } from '../shared/plan.js';
 import { followOutsideSignal } from '../run-steps.js';
 import type { ScenarioDeps } from '../send-and-receive/run.js';
 import { apiAvailabilityStage, collectorAvailabilityStage } from '../send-and-receive/stages.js';
-import { errorOf } from '../send-and-receive/verdict.js';
+import { errorOf } from '../shared/verdict.js';
 import { garageAvailabilityStage } from './stages.js';
 import type { ProbeContext } from './stages.js';
 

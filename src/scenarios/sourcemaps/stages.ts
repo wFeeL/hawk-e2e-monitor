@@ -3,7 +3,7 @@ import type { EventCard } from '../../clients/hawk-api.js';
 import { pollUntil } from '../../engine/poll.js';
 import type { StageOutcome, StageSpec } from '../../engine/stages.js';
 import { CheckError } from '../../errors/taxonomy.js';
-import type { RunPlan } from '../send-and-receive/plan.js';
+import type { RunPlan } from '../shared/plan.js';
 import { checkEventFields, sendEventShape } from '../send-and-receive/stages.js';
 import type { EventShape, ScenarioContext } from '../send-and-receive/stages.js';
 import { SOURCE_NAME, expectedSourceCode } from './map.js';

@@ -3,7 +3,7 @@ import type { HawkApi } from '../../src/clients/hawk-api.js';
 import type { Config } from '../../src/config/load.js';
 import { describeError } from '../../src/errors/messages.js';
 import { runResultFixture } from '../support/run-result.js';
-import { buildTitle } from '../../src/scenarios/send-and-receive/plan.js';
+import { buildTitle } from '../../src/scenarios/shared/plan.js';
 import type { ScenarioName } from '../../src/scenarios/names.js';
 import { openDatabase } from '../../src/storage/database.js';
 import { createdProjects } from '../../src/storage/created-projects.js';

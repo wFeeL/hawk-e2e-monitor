@@ -9,7 +9,7 @@ import { CheckError } from '../../errors/taxonomy.js';
 import { decodeIntegrationToken, tokenKey } from '../../hawk/token.js';
 import type { DegradedCode } from '../../storage/types.js';
 import type { Clock } from '../../time/clock.js';
-import type { RunPlan } from './plan.js';
+import type { RunPlan } from '../shared/plan.js';
 
 const LOW_QUOTA_SHARE = 0.1;
 const SENTINEL = 'e2e-sentinel';

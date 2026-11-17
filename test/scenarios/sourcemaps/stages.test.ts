@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { EventCard } from '../../../src/clients/hawk-api.js';
-import { planRun } from '../../../src/scenarios/send-and-receive/plan.js';
+import { planRun } from '../../../src/scenarios/shared/plan.js';
 import { buildSourceMap, expectedSourceCode } from '../../../src/scenarios/sourcemaps/map.js';
 import { checkSourcemapCard } from '../../../src/scenarios/sourcemaps/stages.js';
 import { testConfig } from '../../support/config.js';

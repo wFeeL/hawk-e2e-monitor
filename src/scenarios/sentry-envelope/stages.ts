@@ -4,7 +4,7 @@ import type { StageOutcome, StageSpec } from '../../engine/stages.js';
 import { CheckError } from '../../errors/taxonomy.js';
 import { decodeIntegrationToken, tokenKey } from '../../hawk/token.js';
 import { SENTRY_ENVELOPE } from '../names.js';
-import type { RunPlan } from '../send-and-receive/plan.js';
+import type { RunPlan } from '../shared/plan.js';
 import type { EventShape, ScenarioContext } from '../send-and-receive/stages.js';
 import { buildEnvelope } from './envelope.js';
 

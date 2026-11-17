@@ -9,11 +9,11 @@ import type { Logger } from '../../log/logger.js';
 import type { Clock } from '../../time/clock.js';
 import { SEND_AND_RECEIVE_EVENT } from '../names.js';
 import { buildRunResult, runSteps, stageWarnings } from '../run-steps.js';
-import { planRun } from './plan.js';
-import type { PlanOptions, RandomLetters } from './plan.js';
+import { planRun } from '../shared/plan.js';
+import type { PlanOptions, RandomLetters } from '../shared/plan.js';
 import { apiAvailabilityStage, cleanupStage, collectorAcceptStage, collectorAvailabilityStage, eventRepeatedStage, eventVisibleStage } from './stages.js';
 import type { ScenarioContext, ScenarioState } from './stages.js';
-import { decideVerdict } from './verdict.js';
+import { decideVerdict } from '../shared/verdict.js';
 
 /** Everything `runSendAndReceive` needs from outside. */
 export interface ScenarioDeps {

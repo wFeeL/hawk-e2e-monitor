@@ -5,7 +5,7 @@ import { runStage } from '../../../src/engine/stages.js';
 import type { StageResult } from '../../../src/engine/result.js';
 import type { StageSpec } from '../../../src/engine/stages.js';
 import { CheckError } from '../../../src/errors/taxonomy.js';
-import { planRun } from '../../../src/scenarios/send-and-receive/plan.js';
+import { planRun } from '../../../src/scenarios/shared/plan.js';
 import { notificationBeforeSend } from '../../../src/scenarios/check-notification/stages.js';
 import { probeText, telegramDeliveredStage, telegramFormedStage, telegramProbeStage, telegramReadyStage } from '../../../src/scenarios/telegram-delivery/stages.js';
 import type { TelegramContext } from '../../../src/scenarios/telegram-delivery/stages.js';

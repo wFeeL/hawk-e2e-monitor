@@ -2,7 +2,7 @@ import type { FoundEvent, HawkApi } from '../clients/hawk-api.js';
 import type { Config } from '../config/load.js';
 import { CheckError } from '../errors/taxonomy.js';
 import type { Logger } from '../log/logger.js';
-import { buildTitle } from '../scenarios/send-and-receive/plan.js';
+import { buildTitle } from '../scenarios/shared/plan.js';
 import { EVENT_SCENARIOS, SENTRY_ENVELOPE } from '../scenarios/names.js';
 import { createdProjects } from '../storage/created-projects.js';
 import type { History } from '../storage/history.js';

@@ -3,7 +3,7 @@ import type { StageName } from '../../src/engine/result.js';
 import type { StageSpec } from '../../src/engine/stages.js';
 import { CheckError } from '../../src/errors/taxonomy.js';
 import { buildRunResult, runSteps } from '../../src/scenarios/run-steps.js';
-import { planRun } from '../../src/scenarios/send-and-receive/plan.js';
+import { planRun } from '../../src/scenarios/shared/plan.js';
 import { systemClock } from '../../src/time/clock.js';
 import { createFakeClock } from '../support/fake-clock.js';
 import { testConfig } from '../support/config.js';

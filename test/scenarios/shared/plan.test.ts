@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { testConfig } from '../../support/config.js';
-import { buildTitle, chooseTransport, createRunId, planRun, shouldRepeat } from '../../../src/scenarios/send-and-receive/plan.js';
+import { buildTitle, chooseTransport, createRunId, planRun, shouldRepeat } from '../../../src/scenarios/shared/plan.js';
 
 describe('chooseTransport', () => {
   it.each([[1, 'http'], [2, 'ws'], [3, 'http'], [4, 'ws']] as const)('alternate: run %i uses %s', (sequence, expected) => {

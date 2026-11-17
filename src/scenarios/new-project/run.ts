@@ -8,12 +8,12 @@ import type { CreatedProjects } from '../../storage/created-projects.js';
 import type { PendingProjects } from '../../storage/pending-projects.js';
 import { NEW_PROJECT } from '../names.js';
 import { buildRunResult, runSteps, stageWarnings } from '../run-steps.js';
-import { planRun } from '../send-and-receive/plan.js';
-import type { PlanOptions } from '../send-and-receive/plan.js';
+import { planRun } from '../shared/plan.js';
+import type { PlanOptions } from '../shared/plan.js';
 import type { ScenarioDeps } from '../send-and-receive/run.js';
 import { apiAvailabilityStage, eventVisibleStage } from '../send-and-receive/stages.js';
 import type { ScenarioState } from '../send-and-receive/stages.js';
-import { decideVerdict } from '../send-and-receive/verdict.js';
+import { decideVerdict } from '../shared/verdict.js';
 import { TOKEN_POLL_MS, cleanupProjectStage, newProjectShape, projectCreatedStage, tokenAcceptedStage } from './stages.js';
 import type { NewProjectContext } from './stages.js';
 

@@ -12,7 +12,7 @@ import { TIMEOUT_LIMITS, createTestScenario } from '../../support/scenario.js';
 import type { TestScenarioOptions } from '../../support/scenario.js';
 import { CheckError } from '../../../src/errors/taxonomy.js';
 import { groom } from '../../support/fake-hawk/grouper.js';
-import { planRun } from '../../../src/scenarios/send-and-receive/plan.js';
+import { planRun } from '../../../src/scenarios/shared/plan.js';
 import { apiAvailabilityStage, BROWSER_USER_AGENT, EVENT_LIMITS, checkCard, checkEventFields, cleanupStage, collectorAcceptStage, collectorAvailabilityStage, eventMessage, eventVisibleStage, isOurEvent, sendEventShape, withinEventLimits } from '../../../src/scenarios/send-and-receive/stages.js';
 import type { ScenarioContext } from '../../../src/scenarios/send-and-receive/stages.js';
 
