@@ -4,9 +4,12 @@ import { CheckError, CULPRIT_OF } from '../errors/taxonomy.js';
 import type { Culprit, ErrorClass } from '../errors/taxonomy.js';
 import type { LateKind } from '../notifications/types.js';
 import type { ScenarioName } from '../scenarios/names.js';
-import type { AlertAttempt, AlertLevelState, AlertMessage, AlertStateRow, DegradedCode, ListOptions, OutboxRow, PruneOptions, RunOutcome, RunRow, RunStart, RunStatus, RunTrigger, RunWithResult, ScenarioStats, SkipReason, SkipRecord, StageRow, StatsWindow } from './types.js';
+import type { AlertAttempt, AlertLevelState, AlertMessage, AlertStateRow, ListOptions, OutboxRow, PruneOptions, RunOutcome, RunRow, RunStart, RunStatus, RunTrigger, RunWithResult, ScenarioStats, SkipReason, SkipRecord, StageRow, StatsWindow } from './types.js';
 import { MS_PER_DAY } from '../time/units.js';
 import { isMonitorAbort, isVerdict } from './outcome.js';
+import { codes, compact, num, required, text } from './rows.js';
+import type { SqlRow } from './rows.js';
+import { createSql } from './sql.js';
 import type { VerdictOptions } from './outcome.js';
 
 const WINDOW_DAYS = 7;
@@ -159,58 +162,6 @@ export interface History {
   close(): void;
 }
 
-/** A row as `node:sqlite` returns it. */
-type SqlRow = Record<string, unknown>;
-
-/**
- * Reads an optional text column.
- * @param row Row as returned by the query.
- * @param name Column.
- * @returns The text, or undefined for NULL.
- */
-function text(row: SqlRow, name: string): string | undefined {
-  const value = row[name];
-
-  return typeof value === 'string' ? value : undefined;
-}
-
-/**
- * Reads an optional integer column.
- * @param row Row as returned by the query.
- * @param name Column.
- * @returns The number, or undefined for NULL.
- */
-function num(row: SqlRow, name: string): number | undefined {
-  const value = row[name];
-
-  return typeof value === 'number' ? value : undefined;
-}
-
-/**
- * Reads a required text column.
- * @param row Row as returned by the query.
- * @param name Column.
- * @returns The text, empty when the column is NULL.
- */
-function required(row: SqlRow, name: string): string {
-  return text(row, name) ?? '';
-}
-
-/**
- * Parses a JSON list of degradation codes.
- * @param value Column value.
- * @returns The codes, empty for anything unreadable.
- */
-function codes(value: string | undefined): DegradedCode[] {
-  try {
-    const parsed = JSON.parse(value ?? '[]') as unknown;
-
-    return Array.isArray(parsed) ? parsed as DegradedCode[] : [];
-  } catch {
-    return [];
-  }
-}
-
 /**
  * Takes the value at a nearest-rank percentile.
  * @param sorted Values in ascending order.
@@ -222,37 +173,12 @@ function nearestRank(sorted: readonly number[], fraction: number): number | null
 }
 
 /**
- * Drops the keys whose value is undefined, so rows compare cleanly.
- * @param row Object with optional fields.
- * @returns The same object without undefined fields.
- */
-function compact<T extends object>(row: T): T {
-  return Object.fromEntries(Object.entries(row).filter(([, value]) => value !== undefined)) as T;
-}
-
-/**
  * Creates the history over an open database.
  * @param db Database from `openDatabase`.
  * @returns History bound to it.
  */
 export function createHistory(db: DatabaseSync): History {
-  const transaction = <T>(body: () => T): T => {
-    db.exec('BEGIN IMMEDIATE');
-
-    try {
-      const value = body();
-
-      db.exec('COMMIT');
-
-      return value;
-    } catch (error) {
-      db.exec('ROLLBACK');
-      throw error;
-    }
-  };
-  const all = (sql: string, ...params: SQLInputValue[]): SqlRow[] => db.prepare(sql).all(...params);
-  const one = (sql: string, ...params: SQLInputValue[]): SqlRow | undefined => db.prepare(sql).get(...params);
-  const run = (sql: string, ...params: SQLInputValue[]): number => Number(db.prepare(sql).run(...params).changes);
+  const { transaction, all, one, run, iterate } = createSql(db);
 
   const stagesOf = (pk: number): StageRow[] => all('SELECT name, status, duration_ms, error_class, culprit FROM stages WHERE run_pk = ? ORDER BY position', pk)
     .map(row => compact({ name: required(row, 'name') as StageName,
@@ -428,7 +354,7 @@ export function createHistory(db: DatabaseSync): History {
   };
 
   const lastVerdict: History['lastVerdict'] = (scenario, options = {}) => {
-    const rows = db.prepare('SELECT * FROM runs WHERE scenario = ? AND status != \'running\' ORDER BY started_at DESC, id DESC').iterate(scenario);
+    const rows = iterate('SELECT * FROM runs WHERE scenario = ? AND status != \'running\' ORDER BY started_at DESC, id DESC', scenario);
 
     for (const row of rows) {
       const errorClass = text(row, 'error_class') as ErrorClass | undefined;
