@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AlertStateRow } from '../../src/storage/history.js';
+import type { AlertStateRow } from '../../src/storage/types.js';
 import type { DegradedCode, RunRow } from '../../src/storage/types.js';
 import { decideAlert } from '../../src/alerting/state.js';
 

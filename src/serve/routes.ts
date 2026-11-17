@@ -7,8 +7,9 @@ import type { MonitorMetrics } from '../metrics/metrics.js';
 import { manualRunHandler } from './manual-runs.js';
 import { HIDDEN_SCENARIOS, SCENARIO_NAMES } from '../scenarios/names.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
-import { DEFAULT_LIST_LIMIT } from '../storage/history.js';
-import type { History, ListOptions } from '../storage/history.js';
+import { DEFAULT_LIST_LIMIT } from '../storage/types.js';
+import type { History } from '../storage/history.js';
+import type { ListOptions } from '../storage/types.js';
 import type { Clock } from '../time/clock.js';
 import { HttpStatus } from '../net/http-status.js';
 

@@ -104,3 +104,164 @@ export interface RunOutcome {
   /** Full result, absent for aborted runs. */
   result?: RunResult;
 }
+
+/** Runs a listing returns when the caller gives no limit. */
+export const DEFAULT_LIST_LIMIT = 20;
+
+/** What `startRun` records. */
+export interface RunStart {
+  /** Random id of the run. */
+  runId: string;
+  /** Scenario. */
+  scenario: ScenarioName;
+  /** Run number within the scenario. */
+  sequence: number;
+  /** What started the run. */
+  trigger: RunTrigger;
+  /** Wall-clock start, ISO. */
+  startedAt: string;
+}
+
+/** A tick that did not start a run. */
+export interface SkipRecord {
+  /** Id given to the row. */
+  runId: string;
+  /** Scenario. */
+  scenario: ScenarioName;
+  /** Number the next real run would get. */
+  sequence: number;
+  /** What would have started the run. */
+  trigger: RunTrigger;
+  /** Time of the tick, ISO. */
+  at: string;
+  /** Why it did not start. */
+  reason: SkipReason;
+}
+
+/** Figures of one scenario over a time window. */
+export interface StatsWindow {
+  /** Runs that ended `ok`. */
+  ok: number;
+  /** Runs that ended `failed`. */
+  failed: number;
+  /** Runs aborted for a reason other than a stop or restart of the monitor. */
+  aborted: number;
+  /** Runs aborted by a stop or restart of the monitor. */
+  monitorAborts: number;
+  /** Runs that were skipped. */
+  skipped: number;
+  /** `ok / (ok + failed + aborted)`; null when the denominator is 0. */
+  successRatio: number | null;
+  /** Median event latency of `ok` runs, nearest rank. */
+  eventLatencyP50Ms: number | null;
+  /** 95th percentile of the event latency of `ok` runs, nearest rank. */
+  eventLatencyP95Ms: number | null;
+  /** Rounded mean duration per stage over stage rows that were not skipped, in finished runs. */
+  stageAvgMs: Partial<Record<StageName, number>>;
+  /** Failed runs whose event the sweep found later. */
+  lateEvents: number;
+  /** Runs that got a notification after they ended. */
+  lateNotifications: number;
+  /** Runs that got a repeated notification after they ended. */
+  lateDuplicateNotifications: number;
+}
+
+/** Statistics of one scenario. */
+export interface ScenarioStats {
+  /** Scenario. */
+  scenario: ScenarioName;
+  /** Last 24 hours by start time. */
+  last24h: StatsWindow;
+  /** Last 7 days by start time. */
+  last7d: StatsWindow;
+  /** Latest run of any status. */
+  lastRun?: Pick<RunRow, 'runId' | 'startedAt' | 'status'>;
+}
+
+/** Alert state of a scenario as stored. */
+export interface AlertStateRow {
+  /** Scenario. */
+  scenario: ScenarioName;
+  /** Level. */
+  state: AlertLevelState;
+  /** Failed runs in a row. */
+  failureStreak: number;
+  /** Class of the last failure. */
+  lastClass?: string;
+  /** Stage of the last failure. */
+  lastStage?: string;
+  /** Run of the last failure. */
+  lastRunId?: string;
+  /** Start of the run that opened the episode. */
+  episodeStartedAt?: string;
+  /** Failed runs in the episode. */
+  episodeFailures: number;
+  /** Degradation codes of the last `ok` run. */
+  degraded: DegradedCode[];
+  /** Last change, ISO. */
+  updatedAt: string;
+}
+
+/** An alert waiting for delivery. */
+export interface OutboxRow {
+  /** Database key. */
+  id: number;
+  /** Scenario. */
+  scenario: ScenarioName;
+  /** Run that caused the alert. */
+  runId?: string;
+  /** Text to send. */
+  text: string;
+  /** When it was queued, ISO. */
+  createdAt: string;
+  /** Delivery attempts so far. */
+  attempts: number;
+  /** Earliest next attempt, ISO. */
+  nextAttemptAt: string;
+}
+
+/** What `alertAttempt` records. */
+export interface AlertAttempt {
+  /** Delivery time. */
+  sentAt?: string;
+  /** Earliest next attempt. */
+  nextAttemptAt?: string;
+  /** Time the message was given up on. */
+  droppedAt?: string;
+  /** Text of the failure. */
+  error?: string;
+}
+
+/** A run row with its full result. */
+export type RunWithResult = RunRow & {
+  /** Result as the scenario returned it. */
+  result?: RunResult;
+};
+
+/** Filter and size of `list`. */
+export interface ListOptions {
+  /** Only runs of this scenario. */
+  scenario?: ScenarioName;
+  /** Leaves out the runs of these scenarios. */
+  exceptScenarios?: readonly ScenarioName[];
+  /** Most rows to return. */
+  limit: number;
+}
+
+/** What `prune` is limited to. */
+export interface PruneOptions {
+  /** Only runs and delivered alerts of this scenario; all of them by default. */
+  scenario?: ScenarioName;
+  /** Only runs and delivered alerts of scenarios that are not listed, such as ones the code no longer knows; ignored with `scenario`. */
+  exceptScenarios?: readonly ScenarioName[];
+}
+
+/** A message to queue together with a state change. */
+export interface AlertMessage {
+  /** Text to send. */
+  text: string;
+  /** Run that caused the message. */
+  runId?: string;
+  /** Time of the change, ISO. */
+  at: string;
+}
