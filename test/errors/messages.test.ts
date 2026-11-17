@@ -185,7 +185,8 @@ describe('describeError', () => {
 
   it('provisioning classes name what changed', () => {
     expect(describeError('provisioning_conflict', { detail: 'rule 1 vanished' })).toBe('The notification rule is being changed in parallel: rule 1 vanished');
-    expect(describeError('provisioning_unstable', { detail: 'channels.loop.isEnabled' })).toBe('The notification rule is changed again on every run: channels.loop.isEnabled');
+    expect(describeError('provisioning_unstable', { detail: 'channels.loop.isEnabled' })).toBe('The notification rule is changed again on every run; another monitor with the same INSTANCE_ID may be moving it: channels.loop.isEnabled');
+    expect(describeError('provisioning_unstable', {})).toBe('The notification rule is changed again on every run; another monitor with the same INSTANCE_ID may be moving it');
   });
 
   it('notification_timeout tells the two conclusions apart', () => {
