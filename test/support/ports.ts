@@ -1,4 +1,4 @@
-import { closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, unlinkSync, writeSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,30 +9,14 @@ const PORT_COUNT = 10_000;
 const MAX_TRIES = 200;
 const LOCK_DIR = join(tmpdir(), 'hawk-e2e-monitor-ports');
 
-const own = new Set<string>();
-let exitHooked = false;
-
-/**
- * Removes the lock files this process created.
- */
-function releaseAll(): void {
-  for (const path of own) {
-    try {
-      unlinkSync(path);
-    } catch {
-      // Someone removed it already.
-    }
-  }
-}
-
 /**
  * Tells whether a process with this id exists.
  * @param pid Process id read from a lock file.
- * @returns False only when the system says there is no such process.
+ * @returns False when the system says there is no such process, or when the file holds no valid id.
  */
 function isAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) {
-    return true;
+    return false;
   }
 
   try {
@@ -47,33 +31,77 @@ function isAlive(pid: number): boolean {
 /**
  * Creates the lock file of a port for this process.
  * @param path File that marks the port as taken.
- * @returns True when the lock is ours.
+ * @returns True when the lock is ours; false when the file exists, whoever holds it.
  * @throws Error for a failure other than an existing file.
  */
 function lockFile(path: string): boolean {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  try {
+    const fd = openSync(path, 'wx');
+
+    writeSync(fd, String(process.pid));
+    closeSync(fd);
+
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * Counts the lock files that exist.
+ * @returns Number of files in the lock directory; 0 when the directory is missing.
+ */
+export function countPortLocks(): number {
+  try {
+    return readdirSync(LOCK_DIR).length;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return 0;
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * Removes the lock files of processes that are gone.
+ * Only the vitest main process calls this, before and after a run; a worker never takes a lock over.
+ * @returns How many files it removed.
+ */
+export function sweepPortLocks(): number {
+  let removed = 0;
+  let names: string[];
+
+  try {
+    names = readdirSync(LOCK_DIR);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return 0;
+    }
+
+    throw error;
+  }
+
+  for (const name of names) {
+    const path = join(LOCK_DIR, name);
+
     try {
-      const fd = openSync(path, 'wx');
-
-      writeSync(fd, String(process.pid));
-      closeSync(fd);
-
-      return true;
+      if (!isAlive(Number(readFileSync(path, 'utf8')))) {
+        unlinkSync(path);
+        removed += 1;
+      }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         throw error;
       }
-
-      // An empty file is a lock that is being written; treat its owner as alive.
-      if (isAlive(Number(readFileSync(path, 'utf8')))) {
-        return false;
-      }
-
-      unlinkSync(path);
     }
   }
 
-  return false;
+  return removed;
 }
 
 /**
@@ -114,11 +142,6 @@ async function isFree(port: number): Promise<boolean> {
  * @throws Error when no candidate could be taken.
  */
 export async function reservedPort(): Promise<number> {
-  if (!exitHooked) {
-    exitHooked = true;
-    process.once('exit', releaseAll);
-  }
-
   mkdirSync(LOCK_DIR, { recursive: true });
 
   const start = Math.floor(Math.random() * PORT_COUNT);
@@ -128,13 +151,10 @@ export async function reservedPort(): Promise<number> {
     const path = join(LOCK_DIR, `${String(port)}.lock`);
 
     if (lockFile(path)) {
-      own.add(path);
-
       if (await isFree(port)) {
         return port;
       }
 
-      own.delete(path);
       unlinkSync(path);
     }
   }
