@@ -18,6 +18,9 @@ const SELF_CHECK_MS = 60_000;
 const HUNGS_BEFORE_EXIT = 3;
 const LAST_RUNS_LOOKED_AT = 5;
 
+/** Rows of the history read to seed the warmup streak at start. */
+const WARMUP_SEED_ROWS = 10;
+
 /** Notification checks skipped for the rule cache warmup in a row that make the last of them a failure. */
 export const WARMUP_SKIP_LIMIT = 3;
 
@@ -687,7 +690,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
       try {
         const recent = history.list({ scenario: state.name,
-          limit: LAST_RUNS_LOOKED_AT }).filter(row => !keepsStreak(row));
+          limit: WARMUP_SEED_ROWS }).filter(row => !keepsStreak(row));
         const resetAt = recent.findIndex(row => !isWarmupRun(row));
 
         state.warmupStreak = resetAt === -1 ? recent.length : resetAt;

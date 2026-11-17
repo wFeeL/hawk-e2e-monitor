@@ -1343,6 +1343,68 @@ describe('warmup streak', () => {
     expect(row.message).toContain('4 runs in a row');
   });
 
+  it('a restart row between two warmup skips does not reset the seeded streak', async () => {
+    const history = createHistory(openDatabase(':memory:'));
+
+    seedRun(history, 1, SEEDED_SKIP);
+    seedRun(history, 2, { status: 'aborted',
+      degraded: [],
+      errorClass: 'monitor_restarted',
+      culprit: 'monitor' });
+    seedRun(history, 3, SEEDED_SKIP);
+
+    const parts = setup({ scenarios: [NOTIFY],
+      history });
+
+    parts.scheduler.start();
+    await settle(parts.clock);
+
+    const row = await skipCall(parts, 0);
+
+    expect(row).toMatchObject({ status: 'failed',
+      errorClass: 'provisioning_unstable' });
+    expect(row.message).toContain('3 runs in a row');
+  });
+
+  it('a hung run resets the streak', async () => {
+    const parts = setup({ scenarios: [NOTIFY] });
+
+    parts.scheduler.start();
+    await settle(parts.clock);
+    await skipCall(parts, 0);
+    await manualRun(parts);
+    await skipCall(parts, 1);
+    // This run never settles; the watchdog ends it.
+    await manualRun(parts);
+    await parts.clock.advance(WATCHDOG_MS + 1);
+    expect(parts.history.list({ scenario: NOTIFY,
+      limit: 10 }).some(row => row.errorClass === 'run_hung')).toBe(true);
+    // The scenario stays busy while the cleanup of the abandoned run may still be going.
+    await parts.clock.advance(CLEANUP_MS);
+    await manualRun(parts);
+
+    expect(await skipCall(parts, 3)).toMatchObject({ status: 'skipped' });
+  });
+
+  it.each(['run_hung', 'monitor_internal'] as const)('a stored %s run resets the seeded streak', async (errorClass) => {
+    const history = createHistory(openDatabase(':memory:'));
+
+    seedRun(history, 1, SEEDED_SKIP);
+    seedRun(history, 2, SEEDED_SKIP);
+    seedRun(history, 3, { status: 'aborted',
+      degraded: [],
+      errorClass,
+      culprit: 'monitor' });
+
+    const parts = setup({ scenarios: [NOTIFY],
+      history });
+
+    parts.scheduler.start();
+    await settle(parts.clock);
+
+    expect(await skipCall(parts, 0)).toMatchObject({ status: 'skipped' });
+  });
+
   it('a restart does not count skips behind an ok run', async () => {
     const history = createHistory(openDatabase(':memory:'));
 
