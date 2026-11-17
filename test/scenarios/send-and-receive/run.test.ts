@@ -9,7 +9,7 @@ import { TIMEOUT_LIMITS, createTestDeps } from '../../support/scenario.js';
 import type { TestDepsOptions } from '../../support/scenario.js';
 import { systemClock } from '../../../src/time/clock.js';
 import { runSendAndReceive } from '../../../src/scenarios/send-and-receive/run.js';
-import type { ScenarioDeps } from '../../../src/scenarios/send-and-receive/run.js';
+import type { ScenarioDeps } from '../../../src/scenarios/shared/deps.js';
 import type { PlanOptions } from '../../../src/scenarios/shared/plan.js';
 
 const LATE_EVENT_WARNING = 'The event appeared only after the event_visible deadline and was removed by cleanup';

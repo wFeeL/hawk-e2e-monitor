@@ -4,7 +4,7 @@ import { SENTRY_ENVELOPE } from '../names.js';
 import { buildRunResult, runSteps, stageWarnings } from '../run-steps.js';
 import { planRun } from '../shared/plan.js';
 import type { PlanOptions } from '../shared/plan.js';
-import type { ScenarioDeps } from '../send-and-receive/run.js';
+import type { ScenarioDeps } from '../shared/deps.js';
 import { apiAvailabilityStage, cleanupStage, collectorAvailabilityStage, eventVisibleStage } from '../send-and-receive/stages.js';
 import type { ScenarioContext, ScenarioState } from '../send-and-receive/stages.js';
 import { decideVerdict } from '../shared/verdict.js';

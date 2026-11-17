@@ -9,7 +9,7 @@ import { cleanupProjectStage } from '../../../src/scenarios/new-project/stages.j
 import { systemClock } from '../../../src/time/clock.js';
 import { createNewProjectContext, runNewProject } from '../../../src/scenarios/new-project/run.js';
 import type { NewProjectDeps } from '../../../src/scenarios/new-project/run.js';
-import { scenarioSecrets } from '../../../src/scenarios/send-and-receive/run.js';
+import { scenarioSecrets } from '../../../src/scenarios/shared/deps.js';
 import { openDatabase } from '../../../src/storage/database.js';
 import { createdProjects } from '../../../src/storage/created-projects.js';
 import type { CreatedProjects } from '../../../src/storage/created-projects.js';

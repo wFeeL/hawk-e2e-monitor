@@ -6,7 +6,7 @@ import type { CheckError } from '../../errors/taxonomy.js';
 import { ENDPOINTS_PROBE } from '../names.js';
 import { createRunId } from '../shared/plan.js';
 import { followOutsideSignal } from '../run-steps.js';
-import type { ScenarioDeps } from '../send-and-receive/run.js';
+import type { ScenarioDeps } from '../shared/deps.js';
 import { apiAvailabilityStage, collectorAvailabilityStage } from '../send-and-receive/stages.js';
 import { errorOf } from '../shared/verdict.js';
 import { garageAvailabilityStage } from './stages.js';

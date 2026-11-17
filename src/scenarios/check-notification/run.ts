@@ -11,7 +11,7 @@ import type { Receiver } from '../../receiver/server.js';
 import { planRun } from '../shared/plan.js';
 import type { PlanOptions } from '../shared/plan.js';
 import { abortedStage, followOutsideSignal, toCleanupResult } from '../run-steps.js';
-import type { ScenarioDeps } from '../send-and-receive/run.js';
+import type { ScenarioDeps } from '../shared/deps.js';
 import { apiAvailabilityStage, cleanupStage, collectorAcceptStage, collectorAvailabilityStage, eventRepeatedStage, eventVisibleStage } from '../send-and-receive/stages.js';
 import type { ScenarioState } from '../send-and-receive/stages.js';
 import { notificationBeforeSend, notificationFormedStage, notificationSetupStage, thresholdBeforeRepeat, thresholdFormedStage } from './stages.js';

@@ -10,7 +10,7 @@ import { createLogger } from '../log/logger.js';
 import { resolvePublicAddress } from '../notifications/address.js';
 import type { PublicAddress } from '../notifications/address.js';
 import { createProvisioner } from '../notifications/provisioning.js';
-import { scenarioSecrets } from '../scenarios/send-and-receive/run.js';
+import { scenarioSecrets } from '../scenarios/shared/deps.js';
 import { TELEGRAM_DELIVERY } from '../scenarios/names.js';
 import { MATCH_CHANGED_KEY, TELEGRAM_MATCH_CHANGED_KEY } from '../storage/keys.js';
 import { systemClock, timeoutSignal } from '../time/clock.js';

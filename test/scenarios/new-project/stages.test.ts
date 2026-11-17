@@ -4,7 +4,7 @@ import { createMutableRedactor } from '../../../src/errors/redact.js';
 import { createNewProjectContext } from '../../../src/scenarios/new-project/run.js';
 import type { NewProjectDeps } from '../../../src/scenarios/new-project/run.js';
 import { projectCreatedStage, tokenAcceptedStage } from '../../../src/scenarios/new-project/stages.js';
-import { scenarioSecrets } from '../../../src/scenarios/send-and-receive/run.js';
+import { scenarioSecrets } from '../../../src/scenarios/shared/deps.js';
 import { createdProjects } from '../../../src/storage/created-projects.js';
 import { pendingProjects } from '../../../src/storage/pending-projects.js';
 import { openDatabase } from '../../../src/storage/database.js';
