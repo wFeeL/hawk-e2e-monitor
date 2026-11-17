@@ -28,7 +28,7 @@ export const WORKSPACE_QUOTA: GraphqlOperation = {
   idempotent: true,
 };
 
-// The three fragments and the two queries below are the ones of the Garage web client (hawk.garage, src/api/fragments.ts and src/api/events/queries.ts), word for word.
+// The three fragments and the two queries below copy the Garage web client word for word, so the API sees the queries a browser sends.
 const USER_FRAGMENT = `
   fragment User on User {
     id
