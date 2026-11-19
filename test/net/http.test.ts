@@ -229,14 +229,15 @@ describe('httpRequest', () => {
 
 describe('networkFailureToCheckError', () => {
   it('takes class and code from the failure and the host from the url', async () => {
-    const error = await failure(get('http://e2e-monitor-test.invalid/', { timeoutMs: 3000 }));
-    const checkError = networkFailureToCheckError(error, { url: 'http://e2e-monitor-test.invalid/',
+    const url = `http://127.0.0.1:${String(await reservedPort())}/`;
+    const error = await failure(get(url));
+    const checkError = networkFailureToCheckError(error, { url,
       waitedMs: 5 });
 
     expect(checkError).toBeInstanceOf(CheckError);
     expect(checkError.errorClass).toBe(error.failure.errorClass);
     expect(checkError.facts).toMatchObject({ code: error.failure.code,
-      host: 'e2e-monitor-test.invalid',
+      host: '127.0.0.1',
       waitedMs: 5 });
     expect(checkError.cause).toBe(error);
   });
