@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { lookup } from 'node:dns/promises';
 import { createServer as createHttpsServer } from 'node:https';
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
@@ -154,7 +155,12 @@ describe('httpRequest', () => {
     expect(error.cause).toBeDefined();
   });
 
-  it('unknown host is dns_error', async () => {
+  it('unknown host is dns_error', async (context) => {
+    // A VPN with fake-IP DNS or a resolver that rewrites NXDOMAIN gives every name an address.
+    const resolved = await lookup('e2e-monitor-test.invalid').then(answer => answer.address, () => undefined);
+
+    context.skip(resolved !== undefined, `the local resolver answers ${String(resolved)} for a .invalid name`);
+
     const error = await failure(get('http://e2e-monitor-test.invalid/', { timeoutMs: 3000 }));
 
     // Without DNS in the environment the resolver answers EAI_AGAIN.
