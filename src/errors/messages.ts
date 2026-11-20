@@ -87,6 +87,19 @@ function withDetail(base: string, detail: string | undefined): string {
 }
 
 /**
+ * Builds the text of `tunnel_reconnected`.
+ * @param facts Facts of the message; `detail` holds the counter before and after.
+ * @returns English text.
+ */
+function tunnelReconnectedText(facts: MessageFacts): string {
+  const what = facts.channel === 'threshold' ? 'No threshold notification arrived' : 'No notification arrived';
+  const within = ifSet(facts.waitedMs, ms => ` within ${formatDuration(ms)}`) ?? '';
+  const counter = ifSet(facts.detail, detail => ` (${detail})`) ?? '';
+
+  return `${what}${within} and the tunnel reconnected to Cloudflare meanwhile${counter}; while it was down Cloudflare answered 530, so the notification was probably lost on the way, though Hawk may also be at fault`;
+}
+
+/**
  * Builds the text of `notification_timeout`, which names the conclusion from `detail`.
  * @param facts Facts of the message; `detail` is `webhook_only` when the loop channel is off.
  * @returns English text.
@@ -215,6 +228,8 @@ export function describeError(errorClass: ErrorClass, facts: MessageFacts): stri
       return withDetail('Tunnel gave no working public address', facts.detail);
     case 'receiver_unreachable':
       return withDetail('Receiver is not reachable at the public address', facts.detail);
+    case 'tunnel_reconnected':
+      return tunnelReconnectedText(facts);
     case 'notification_endpoint_rejected':
       return withDetail(`Hawk rejected the address of ${ifSet(facts.channel, name => `the ${name}`) ?? 'a notification'} channel`, facts.detail);
     case 'provisioning_conflict':

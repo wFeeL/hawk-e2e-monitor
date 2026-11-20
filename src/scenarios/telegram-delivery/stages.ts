@@ -7,7 +7,7 @@ import type { ErrorClass } from '../../errors/taxonomy.js';
 import { probeReceiver } from '../../notifications/address.js';
 import { formatDuration } from '../../time/format.js';
 import { MS_PER_SECOND } from '../../time/units.js';
-import { checkWebhook } from '../check-notification/stages.js';
+import { checkWebhook, tunnelReconnect } from '../check-notification/stages.js';
 import type { NotificationContext } from '../check-notification/stages.js';
 
 const LONG_POLL_MAX_S = 10;
@@ -362,6 +362,18 @@ export function telegramFormedStage(timeoutMs: number): StageSpec<TelegramContex
         const waitedMs = Math.round(clock.monotonicMs() - startedMs);
 
         details.waitedMs = waitedMs;
+
+        const reconnect = await tunnelReconnect(context, waitedMs, signal);
+
+        if (reconnect.error !== undefined) {
+          return { status: 'failed',
+            error: reconnect.error,
+            details };
+        }
+
+        if (reconnect.warning !== undefined) {
+          details.warning = reconnect.warning;
+        }
 
         try {
           if (context.address === undefined) {

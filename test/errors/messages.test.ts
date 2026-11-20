@@ -92,6 +92,26 @@ describe('api_unexpected_response', () => {
   });
 });
 
+describe('tunnel_reconnected', () => {
+  const tail = 'while it was down Cloudflare answered 530, so the notification was probably lost on the way, though Hawk may also be at fault';
+
+  it('names the wait, the counter and the doubt about Hawk', () => {
+    expect(describeError('tunnel_reconnected', { waitedMs: 120_000,
+      detail: 'registrations 3 → 4' })).toBe(`No notification arrived within 2m 0s and the tunnel reconnected to Cloudflare meanwhile (registrations 3 → 4); ${tail}`);
+  });
+
+  it('names the threshold channel', () => {
+    expect(describeError('tunnel_reconnected', { channel: 'threshold',
+      waitedMs: 120_000,
+      detail: 'registrations 3 → 4' })).toBe(`No threshold notification arrived within 2m 0s and the tunnel reconnected to Cloudflare meanwhile (registrations 3 → 4); ${tail}`);
+  });
+
+  it('works without facts and with a detail only', () => {
+    expect(describeError('tunnel_reconnected', {})).toBe(`No notification arrived and the tunnel reconnected to Cloudflare meanwhile; ${tail}`);
+    expect(describeError('tunnel_reconnected', { detail: 'x' })).toBe(`No notification arrived and the tunnel reconnected to Cloudflare meanwhile (x); ${tail}`);
+  });
+});
+
 describe('describeError', () => {
   it('every class has a non-empty message without "undefined"', () => {
     for (const errorClass of ERROR_CLASSES) {

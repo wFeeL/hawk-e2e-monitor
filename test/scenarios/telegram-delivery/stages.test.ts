@@ -11,6 +11,7 @@ import { probeText, telegramDeliveredStage, telegramFormedStage, telegramProbeSt
 import type { TelegramContext } from '../../../src/scenarios/telegram-delivery/stages.js';
 import type { Clock } from '../../../src/time/clock.js';
 import { systemClock } from '../../../src/time/clock.js';
+import { httpAddress } from '../../support/address.js';
 import { TEST_RECEIVER_SECRET } from '../../support/env.js';
 import { createFakeClock } from '../../support/fake-clock.js';
 import type { FakeClock } from '../../support/fake-clock.js';
@@ -857,6 +858,22 @@ describe('telegramFormedStage', () => {
 
     expect(await run(telegramFormedStage(STAGE_MS), context)).toMatchObject({ status: 'failed',
       errorClass: 'notification_timeout' });
+  });
+
+  it('a grown tunnel counter with no webhook is tunnel_reconnected', async () => {
+    const { context, parts } = await world();
+
+    context.address = httpAddress(parts.receiver.port, 'tunnel');
+    context.tunnelRegistrations = () => Promise.resolve(4);
+    context.notification.registrationsAtSetup = 3;
+    register(context);
+
+    const result = await run(telegramFormedStage(STAGE_MS), context);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'tunnel_reconnected',
+      culprit: 'network' });
+    expect(result.message).toContain('registrations 3 → 4');
   });
 
   it('is skipped in the rule cache warmup, with the details the scheduler reads', async () => {

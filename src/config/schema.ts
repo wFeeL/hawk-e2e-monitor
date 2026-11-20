@@ -19,7 +19,7 @@ const DEFAULT_RUN_TIMEOUT_MS = 480_000;
 const DEFAULT_RECEIVER_PORT = 8091;
 const DEFAULT_NOTIFICATION_TIMEOUT_MS = 120_000;
 const DEFAULT_NOTIFICATION_PAIR_WAIT_MS = 15_000;
-const DEFAULT_NOTIFICATION_SETUP_TIMEOUT_MS = 30_000;
+const DEFAULT_NOTIFICATION_SETUP_TIMEOUT_MS = 45_000;
 const DEFAULT_RULE_CACHE_WARMUP_MS = 65_000;
 
 /** Pause the scheduler adds after the rule cache warmup, so the first check lands past it. */
@@ -360,10 +360,10 @@ function checkNotificationTimeout(env: z.output<typeof baseSchema>, ctx: z.Refin
 
   const total = env.COLLECTOR_AVAILABILITY_TIMEOUT_MS + env.API_AVAILABILITY_TIMEOUT_MS + env.NOTIFICATION_SETUP_TIMEOUT_MS
     + env.COLLECTOR_ACCEPT_TIMEOUT_MS
-    + Math.max(env.EVENT_VISIBLE_TIMEOUT_MS, env.NOTIFICATION_TIMEOUT_MS + env.HTTP_TIMEOUT_MS)
+    + Math.max(env.EVENT_VISIBLE_TIMEOUT_MS, env.NOTIFICATION_TIMEOUT_MS + 2 * env.HTTP_TIMEOUT_MS)
     + env.EVENT_REPEATED_TIMEOUT_MS
     // The stage that waits for the threshold notification after the repeat.
-    + env.NOTIFICATION_TIMEOUT_MS + env.HTTP_TIMEOUT_MS;
+    + env.NOTIFICATION_TIMEOUT_MS + 2 * env.HTTP_TIMEOUT_MS;
 
   if (total > env.RUN_TIMEOUT_MS) {
     ctx.addIssue({ code: 'custom',
