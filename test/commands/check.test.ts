@@ -261,7 +261,8 @@ describe('runCheckCommand with check-notification', () => {
     const { code, stdout, stderr } = await runNotification({ preProvision: false,
       env: { LOG_LEVEL: 'debug' } }, (config, deps) => ({ config,
       deps: { ...deps,
-        resolveAddress: () => Promise.resolve(httpAddress(parts?.receiver.port ?? 0, 'tunnel')) } }));
+        resolveAddress: () => Promise.resolve(httpAddress(parts?.receiver.port ?? 0, 'tunnel')),
+        tunnelRegistrations: () => Promise.resolve(1) } }));
     const output = `${stdout}${stderr}`;
 
     expect(code).toBe(1);

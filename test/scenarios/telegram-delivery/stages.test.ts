@@ -6,7 +6,7 @@ import type { StageResult } from '../../../src/engine/result.js';
 import type { StageSpec } from '../../../src/engine/stages.js';
 import { CheckError } from '../../../src/errors/taxonomy.js';
 import { planRun } from '../../../src/scenarios/shared/plan.js';
-import { notificationBeforeSend } from '../../../src/scenarios/check-notification/stages.js';
+import { UNREADABLE_REGISTRATIONS, notificationBeforeSend } from '../../../src/scenarios/check-notification/stages.js';
 import { probeText, telegramDeliveredStage, telegramFormedStage, telegramProbeStage, telegramReadyStage } from '../../../src/scenarios/telegram-delivery/stages.js';
 import type { TelegramContext } from '../../../src/scenarios/telegram-delivery/stages.js';
 import type { Clock } from '../../../src/time/clock.js';
@@ -19,6 +19,7 @@ import { startFakeCodexNotify } from '../../support/fake-codex-notify.js';
 import type { FakeCodexNotify } from '../../support/fake-codex-notify.js';
 import { startFakeHawk } from '../../support/fake-hawk/index.js';
 import type { FakeHawk } from '../../support/fake-hawk/index.js';
+import { startDeadPort } from '../../support/dead-port.js';
 import { createNotificationTestScenario } from '../../support/scenario.js';
 import type { NotificationTestScenario } from '../../support/scenario.js';
 import { startFakeTelegram } from '../../support/fake-telegram.js';
@@ -874,6 +875,26 @@ describe('telegramFormedStage', () => {
       errorClass: 'tunnel_reconnected',
       culprit: 'network' });
     expect(result.message).toContain('registrations 3 → 4');
+  });
+
+  it('an unreadable tunnel counter and a failed probe keep receiver_unreachable and warn', async () => {
+    const { context } = await world();
+    const dead = await startDeadPort();
+
+    try {
+      context.address = httpAddress(dead.port, 'tunnel');
+      context.tunnelRegistrations = () => Promise.resolve(undefined);
+      context.notification.registrationsAtSetup = 3;
+      register(context);
+
+      const result = await run(telegramFormedStage(STAGE_MS), context);
+
+      expect(result.errorClass).toBe('receiver_unreachable');
+      expect(result.details?.warning).toBe(UNREADABLE_REGISTRATIONS);
+    } finally {
+      dead.server.closeAllConnections();
+      dead.server.close();
+    }
   });
 
   it('is skipped in the rule cache warmup, with the details the scheduler reads', async () => {
