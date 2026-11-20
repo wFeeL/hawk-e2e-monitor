@@ -75,10 +75,13 @@ cp .env.example .env
 
 ```sh
 docker compose up -d --build
-docker compose ps                  # monitor становится healthy примерно за 15 с
-docker compose logs -f monitor     # первые прогоны начинаются сразу
+docker compose ps
+docker compose logs -f monitor
 docker compose exec monitor node dist/main.js history --limit 10
 ```
+
+Контейнер monitor становится healthy примерно за 15 с, первые прогоны
+начинаются сразу.
 
 Если конфигурация неверна, монитор не стартует и пишет в лог, какая переменная
 не так.
@@ -185,7 +188,7 @@ sequenceDiagram
 
 ### Ошибки и диагностика
 
-Упавший прогон получает один из 58 классов ошибки, например
+Упавший прогон получает один из 59 классов ошибки, например
 `collector_unavailable`, `quota_exhausted`, `event_not_found`,
 `notification_timeout`. К классу прилагаются понятное сообщение и вероятный
 виновник: `hawk`, `monitor`, `config` или `network`. В результате сохраняются
@@ -229,7 +232,12 @@ sequenceDiagram
 ```sh
 npm ci
 npm run build
-cp .env.example .env   # заполнить, как в быстром старте
+cp .env.example .env
+```
+
+Заполните `.env`, как в быстром старте, и запустите проверку:
+
+```sh
 node --env-file-if-exists=.env dist/main.js check send-and-receive-event
 ```
 
@@ -249,10 +257,11 @@ cloudflared tunnel --no-autoupdate --protocol http2 --url http://127.0.0.1:8091 
 
 Затем задайте в `.env` `RECEIVER_SECRET` и
 `TUNNEL_METRICS_URL=http://127.0.0.1:20241` (или `PUBLIC_BASE_URL` для
-постоянного адреса) и запустите:
+постоянного адреса) и запустите проверку. Команда `provision` необязательна:
+она заводит правила и ждет 65 с, пока Hawk их перечитает.
 
 ```sh
-node --env-file-if-exists=.env dist/main.js provision    # необязательно: заводит правила и ждет 65 с, пока Hawk их перечитает
+node --env-file-if-exists=.env dist/main.js provision
 node --env-file-if-exists=.env dist/main.js check check-notification
 ```
 
@@ -274,12 +283,13 @@ curl -X POST -H "Authorization: Bearer $RUN_TOKEN" "http://127.0.0.1:8090/runs/s
 > правила монитора на свой туннель, и монитор ложно обвинит Hawk. Для ручных
 > прогонов задавайте свой `INSTANCE_ID`.
 
-Тесты:
+Тесты: `npm test` гоняет юнит-тесты против фейкового Hawk без сети,
+`test:e2e` проверяет Hawk из `.env`.
 
 ```sh
-npm test                                   # юнит-тесты против фейкового Hawk, без сети
+npm test
 set -a && . ./.env && set +a
-E2E_HAWK=1 npm run test:e2e                # проверки против Hawk из .env
+E2E_HAWK=1 npm run test:e2e
 ```
 
 ## Настройка
@@ -350,8 +360,11 @@ send-and-receive-event, check-notification, sourcemaps и sentry-envelope.
 шестью правилами алертов. Alertmanager в комплект не входит, так что эти
 правила видны только в Prometheus и Grafana. Уведомляют @codex_bot и heartbeat.
 
+Скопируйте `grafana.env.example` в `.env.grafana`, задайте в нем
+`GF_SECURITY_ADMIN_PASSWORD` и поднимите профиль:
+
 ```sh
-cp grafana.env.example .env.grafana   # задать GF_SECURITY_ADMIN_PASSWORD
+cp grafana.env.example .env.grafana
 docker compose --profile observability up -d
 ```
 
@@ -483,9 +496,15 @@ check-notification, нужны `RECEIVER_SECRET` и публичный адре�
   сообщение, но не то, что оно дошло до чата.
 - telegram-delivery зависит от Bot-to-Bot Communication Mode (Telegram Bot API
   10.0): без него бот не читает сообщения другого бота.
-- Туннель подключается к Cloudflare по HTTP/2 через исходящий TCP 443. QUIC
-  (UDP) не используется: его часто режут VPN и корпоративные сети, и туннель
-  теряет связь, а Cloudflare отвечает 530.
+- Quick tunnel держит одно соединение с Cloudflare по HTTP/2 через исходящий
+  TCP 443, и сеть не должна его рвать. Некоторые VPN и корпоративные сети
+  закрывают долгие соединения. Пока cloudflared переподключается (10-15 с),
+  Cloudflare отвечает 530. Проверку приемника монитор повторяет и такой разрыв
+  пережидает. Если уведомление не пришло, а туннель за это время
+  переподключался, прогон падает с `tunnel_reconnected` (виновник `network`):
+  уведомление, скорее всего, потерялось по дороге, хотя мог ошибиться и Hawk.
+  При частых разрывах исключите трафик cloudflared из VPN или задайте
+  постоянный адрес в `PUBLIC_BASE_URL`.
 
 TODO:
 
