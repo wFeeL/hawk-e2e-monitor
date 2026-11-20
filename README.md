@@ -244,7 +244,7 @@ node --env-file-if-exists=.env dist/main.js check send-and-receive-event
 check-notification нужен публичный адрес приемника. Поднимите туннель:
 
 ```sh
-cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8091 --metrics 127.0.0.1:20241
+cloudflared tunnel --no-autoupdate --protocol http2 --url http://127.0.0.1:8091 --metrics 127.0.0.1:20241
 ```
 
 Затем задайте в `.env` `RECEIVER_SECRET` и
@@ -483,7 +483,9 @@ check-notification, нужны `RECEIVER_SECRET` и публичный адре�
   сообщение, но не то, что оно дошло до чата.
 - telegram-delivery зависит от Bot-to-Bot Communication Mode (Telegram Bot API
   10.0): без него бот не читает сообщения другого бота.
-- Для quick tunnel монитору нужен исходящий доступ к Cloudflare.
+- Туннель подключается к Cloudflare по HTTP/2 через исходящий TCP 443. QUIC
+  (UDP) не используется: его часто режут VPN и корпоративные сети, и туннель
+  теряет связь, а Cloudflare отвечает 530.
 
 TODO:
 
