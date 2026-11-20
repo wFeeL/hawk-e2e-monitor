@@ -51,7 +51,7 @@ type Step = Array<StageSpec<NotificationContext>>;
  * @param settings Notification settings; the counter is read only when the address comes from the tunnel.
  * @returns The reader, or undefined when the address is fixed or the metrics address is unknown.
  */
-export function registrationsReader(deps: NotificationDeps, settings: ReturnType<typeof notificationSettings>): NotificationContext['tunnelRegistrations'] {
+export function registrationsReader(deps: Pick<NotificationDeps, 'clock' | 'config' | 'tunnelRegistrations'>, settings: ReturnType<typeof notificationSettings>): NotificationContext['tunnelRegistrations'] {
   if (deps.tunnelRegistrations !== undefined) {
     return deps.tunnelRegistrations;
   }

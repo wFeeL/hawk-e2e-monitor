@@ -9,7 +9,8 @@ import { createProvisioner } from '../../../src/notifications/provisioning.js';
 import type { Receiver } from '../../../src/receiver/server.js';
 import { httpAddress } from '../../support/address.js';
 import { startDeadPort } from '../../support/dead-port.js';
-import { TEST_RECEIVER_SECRET } from '../../support/env.js';
+import { TEST_RECEIVER_SECRET, validEnv } from '../../support/env.js';
+import { expectOk } from '../../support/result.js';
 import { createFakeClock } from '../../support/fake-clock.js';
 import { startFakeHawk } from '../../support/fake-hawk/index.js';
 import type { CollectorReplyOverride, FakeHawk } from '../../support/fake-hawk/index.js';
@@ -17,7 +18,8 @@ import { createNotificationTestDeps, createTestDeps } from '../../support/scenar
 import type { NotificationTestDeps, NotificationTestOptions } from '../../support/scenario.js';
 import type { PlanOptions } from '../../../src/scenarios/shared/plan.js';
 import { runSendAndReceive } from '../../../src/scenarios/send-and-receive/run.js';
-import { runCheckNotification } from '../../../src/scenarios/check-notification/run.js';
+import { loadConfig, notificationSettings } from '../../../src/config/load.js';
+import { registrationsReader, runCheckNotification } from '../../../src/scenarios/check-notification/run.js';
 import type { NotificationDeps } from '../../../src/scenarios/check-notification/run.js';
 
 const SECOND_SUBMISSION = 2;
@@ -582,7 +584,8 @@ describe('secrets in the output', () => {
 
     hawk.api.knobs.unresolvableHosts = ['127.0.0.1'];
 
-    const result = await go(parts, { resolveAddress: () => Promise.resolve(tunnel) });
+    const result = await go(parts, { resolveAddress: () => Promise.resolve(tunnel),
+      tunnelRegistrations: () => Promise.resolve(1) });
     const output = JSON.stringify([result, parts.logger.lines]);
 
     expect(result.errorClass).toBe('tunnel_unavailable');
@@ -641,5 +644,58 @@ describe('send-and-receive-event', () => {
     expect(result.stages.some(stage => stage.name.startsWith('notification'))).toBe(false);
     expect(result.notification).toBeUndefined();
     expect(result.provisioning).toBeUndefined();
+  });
+});
+
+/** What `registrationsReader` is given. */
+interface ReaderParts {
+  /** The part of the dependencies it reads. */
+  deps: Parameters<typeof registrationsReader>[0];
+  /** Notification settings. */
+  settings: ReturnType<typeof notificationSettings>;
+}
+
+describe('registrationsReader', () => {
+  /**
+   * Builds the part of the dependencies the reader looks at, from a config with the given address variables.
+   * @param overrides Environment overrides.
+   * @param tunnelRegistrations Reader given by the caller.
+   * @returns Dependencies and settings.
+   */
+  function readerParts(overrides: Record<string, string | undefined>, tunnelRegistrations?: NotificationDeps['tunnelRegistrations']): ReaderParts {
+    const config = expectOk(loadConfig(validEnv(overrides))).config;
+
+    return { deps: { config,
+      clock: createFakeClock(),
+      ...tunnelRegistrations === undefined ? {} : { tunnelRegistrations } },
+    settings: notificationSettings(config) };
+  }
+
+  it('builds a reader when the address comes from the tunnel', () => {
+    const { deps, settings } = readerParts({ PUBLIC_BASE_URL: undefined,
+      TUNNEL_METRICS_URL: 'http://127.0.0.1:9100' });
+
+    expect(registrationsReader(deps, settings)).toBeTypeOf('function');
+  });
+
+  it('builds none for a fixed address', () => {
+    const { deps, settings } = readerParts({ PUBLIC_BASE_URL: 'https://hooks.example.com',
+      TUNNEL_METRICS_URL: 'http://127.0.0.1:9100' });
+
+    expect(registrationsReader(deps, settings)).toBeUndefined();
+  });
+
+  it('builds none without a metrics address', () => {
+    const { deps, settings } = readerParts({ PUBLIC_BASE_URL: 'https://hooks.example.com',
+      TUNNEL_METRICS_URL: undefined });
+
+    expect(registrationsReader(deps, settings)).toBeUndefined();
+  });
+
+  it('returns the reader the caller gave', () => {
+    const given = (): Promise<number | undefined> => Promise.resolve(1);
+    const { deps, settings } = readerParts({ PUBLIC_BASE_URL: 'https://hooks.example.com' }, given);
+
+    expect(registrationsReader(deps, settings)).toBe(given);
   });
 });

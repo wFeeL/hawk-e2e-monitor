@@ -372,9 +372,10 @@ interface TimedStage {
 /**
  * Starts a tiny server that answers the probe with a status and a body by a script.
  * @param answer Called per request with its number from 1; undefined means the request is never answered.
+ * @param delayMs Pause before every answer.
  * @returns Tunnel-sourced address of the server and the number of requests seen.
  */
-async function statusServer(answer: (hit: number) => StatusAnswer | undefined): Promise<ProbeServer> {
+async function statusServer(answer: (hit: number) => StatusAnswer | undefined, delayMs = 0): Promise<ProbeServer> {
   let hits = 0;
   const server = createServer((req, res) => {
     hits += 1;
@@ -383,8 +384,10 @@ async function statusServer(answer: (hit: number) => StatusAnswer | undefined): 
     const reply = answer(hits);
 
     if (reply !== undefined) {
-      res.statusCode = reply.status;
-      res.end(reply.body);
+      setTimeout(() => {
+        res.statusCode = reply.status;
+        res.end(reply.body);
+      }, delayMs);
     }
   });
 
@@ -443,7 +446,54 @@ describe('notificationSetupStage through a tunnel', () => {
 
     expect(result.status).toBe('ok');
     expect(server.hits()).toBe(4);
+    expect(result.details?.probes).toBe(4);
     expect(parts.context.notification.provisioning?.action).toBe('created');
+  });
+
+  it('counts one probe when the tunnel answers at once', async () => {
+    const parts = await scenario({ preProvision: false,
+      env: TUNNEL_ENV });
+    const server = await statusServer(() => ({ status: 200,
+      body: parts.receiver.nonce }));
+
+    parts.context.resolveAddress = () => Promise.resolve(server.address);
+
+    const result = await run(notificationSetupStage(3000), parts.context);
+
+    expect(result.status).toBe('ok');
+    expect(result.details?.probes).toBe(1);
+  });
+
+  it('counts one probe for a fixed address that answers', async () => {
+    const parts = await scenario({ preProvision: false });
+    const result = await run(notificationSetupStage(TIMEOUT_MS), parts.context);
+
+    expect(result.details?.probes).toBe(1);
+  });
+
+  it('starts no probe that could end after the window', async () => {
+    const parts = await scenario({ preProvision: false,
+      env: { HTTP_TIMEOUT_MS: '1000' } });
+    // The first answer comes after 250 ms; a second probe would start at 450 ms and, cut to the poll pause, end at 650 ms, past the 600 ms window.
+    const server = await statusServer((hit) => {
+      if (hit === 1) {
+        return { status: 530,
+          body: 'gap' };
+      }
+
+      return undefined;
+    }, 250);
+
+    parts.context.resolveAddress = () => Promise.resolve(server.address);
+    parts.context.addressPollMs = 200;
+
+    const { result, ms } = await timed(notificationSetupStage(2600), parts.context);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'receiver_unreachable' });
+    expect(result.message).toContain('HTTP 530');
+    expect(server.hits()).toBe(1);
+    expect(ms).toBeLessThan(500);
   });
 
   it('bridges a refused connection until the port listens', async () => {
@@ -947,6 +997,18 @@ describe('notificationFormedStage through a tunnel', () => {
 
     expect(result.status).toBe('ok');
     expect(reader).not.toHaveBeenCalled();
+  });
+
+  it('an unreadable counter and a failed probe keep receiver_unreachable and warn', async () => {
+    const { parts } = await silent({ before: 3,
+      after: undefined });
+
+    parts.context.address = httpAddress(await deadPort(), 'tunnel');
+
+    const result = await run(notificationFormedStage(FORMED_TIMEOUT_MS), parts.context);
+
+    expect(result.errorClass).toBe('receiver_unreachable');
+    expect(result.details?.warning).toBe(UNREADABLE_REGISTRATIONS);
   });
 
   it('growth wins over a failed probe', async () => {
