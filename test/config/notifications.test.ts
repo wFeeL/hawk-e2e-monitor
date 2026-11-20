@@ -68,7 +68,7 @@ describe('check-notification variables', () => {
       loop: true,
       timeoutMs: 120_000,
       pairWaitMs: 15_000,
-      setupTimeoutMs: 30_000,
+      setupTimeoutMs: 45_000,
       ruleCacheWarmupMs: 65_000,
     });
   });
@@ -134,27 +134,27 @@ describe('check-notification variables', () => {
 
 describe('check-notification combinations', () => {
   it('the default timeouts pass both timeout formulas', () => {
-    // check-notification: 15000 + 15000 + 30000 + 10000 + max(120000, 125000) + 120000 + 125000 = 440000; send-and-receive-event: 280000.
+    // check-notification: 15000 + 15000 + 45000 + 10000 + max(120000, 125000) + 120000 + 125000 = 455000; send-and-receive-event: 280000.
     expectOk(loadConfig(validEnv()));
   });
 
   it('RUN_TIMEOUT_MS must cover the check-notification stages', () => {
-    expectOk(loadConfig(validEnv({ RUN_TIMEOUT_MS: '440000' })));
-    expect(expectErrors(loadConfig(validEnv({ RUN_TIMEOUT_MS: '439999' })))).toEqual([{ variable: 'RUN_TIMEOUT_MS',
-      message: 'must be at least the sum of the timeouts of the check-notification stages (440000 ms)' }]);
+    expectOk(loadConfig(validEnv({ RUN_TIMEOUT_MS: '455000' })));
+    expect(expectErrors(loadConfig(validEnv({ RUN_TIMEOUT_MS: '454999' })))).toEqual([{ variable: 'RUN_TIMEOUT_MS',
+      message: 'must be at least the sum of the timeouts of the check-notification stages (455000 ms)' }]);
   });
 
   it('a long NOTIFICATION_TIMEOUT_MS raises the check-notification sum', () => {
     expect(expectErrors(loadConfig(validEnv({ RUN_TIMEOUT_MS: '500000',
       NOTIFICATION_TIMEOUT_MS: '200000',
       NOTIFICATION_PAIR_WAIT_MS: '1000' })))).toEqual([{ variable: 'RUN_TIMEOUT_MS',
-      message: 'must be at least the sum of the timeouts of the check-notification stages (600000 ms)' }]);
+      message: 'must be at least the sum of the timeouts of the check-notification stages (615000 ms)' }]);
   });
 
   it('the wait for the threshold notification after the repeat is part of the sum', () => {
-    // Only the last stage grows with NOTIFICATION_TIMEOUT_MS here: 15000 + 15000 + 30000 + 10000 + 130000 + 120000 + 130000.
-    expect(expectErrors(loadConfig(validEnv({ RUN_TIMEOUT_MS: '449999',
-      NOTIFICATION_TIMEOUT_MS: '125000' }))).map(error => error.message)).toContain('must be at least the sum of the timeouts of the check-notification stages (450000 ms)');
+    // Only the last stage grows with NOTIFICATION_TIMEOUT_MS here: 15000 + 15000 + 45000 + 10000 + 130000 + 120000 + 130000.
+    expect(expectErrors(loadConfig(validEnv({ RUN_TIMEOUT_MS: '464999',
+      NOTIFICATION_TIMEOUT_MS: '125000' }))).map(error => error.message)).toContain('must be at least the sum of the timeouts of the check-notification stages (465000 ms)');
   });
 
   it('the send-and-receive-event sum still applies', () => {

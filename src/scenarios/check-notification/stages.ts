@@ -237,21 +237,27 @@ export function notificationBeforeSend(context: NotificationContext): () => void
 }
 
 /**
- * Waits until the receiver answers through a new address, trying once per pause.
+ * Waits until the receiver answers through an address, trying once per pause.
  * @param context Context of the stage.
- * @param address The new address.
+ * @param address The address to check.
+ * @param deadlineMs `clock.monotonicMs()` value after which no new try starts; undefined polls until the signal aborts.
  * @param signal Timeout of the stage.
  * @returns Resolves when a self-check passes.
- * @throws CheckError of the last self-check when the timeout ends first.
+ * @throws CheckError of the last self-check when the deadline or the timeout ends first.
  */
-async function waitForAddress(context: NotificationContext, address: PublicAddress, signal: AbortSignal): Promise<void> {
+async function waitForAddress(context: NotificationContext, address: PublicAddress, deadlineMs: number | undefined, signal: AbortSignal): Promise<void> {
   const { config, clock, receiver, settings } = context;
   const pauseMs = context.addressPollMs ?? DEFAULT_ADDRESS_POLL_MS;
   let last: CheckError | undefined;
 
   for (;;) {
+    const remaining = deadlineMs === undefined ? config.httpTimeoutMs : deadlineMs - clock.monotonicMs();
+
+    // The monotonic clock is fractional and a request timeout must be a whole number of milliseconds.
+    const probeTimeoutMs = Math.ceil(Math.min(config.httpTimeoutMs, Math.max(remaining, pauseMs)));
+
     try {
-      await probeReceiver(address, settings.receiverSecret, receiver.nonce, { httpTimeoutMs: config.httpTimeoutMs,
+      await probeReceiver(address, settings.receiverSecret, receiver.nonce, { httpTimeoutMs: probeTimeoutMs,
         clock,
         attempts: 1,
         retry: config.retry }, signal);
@@ -263,6 +269,10 @@ async function waitForAddress(context: NotificationContext, address: PublicAddre
       }
 
       last = error;
+    }
+
+    if (deadlineMs !== undefined && deadlineMs - clock.monotonicMs() < pauseMs) {
+      throw last;
     }
 
     try {
@@ -284,6 +294,7 @@ export function notificationSetupStage(timeoutMs: number): StageSpec<Notificatio
     timeoutMs,
     run: async (context, signal): Promise<StageOutcome> => {
       const { config, clock, notification, provisioner, receiver, settings } = context;
+      const startedMs = clock.monotonicMs();
       const address = await context.resolveAddress(signal);
 
       context.address = address;
@@ -294,8 +305,13 @@ export function notificationSetupStage(timeoutMs: number): StageSpec<Notificatio
 
       const previous = context.lastHostname?.value;
 
-      if (previous !== undefined && previous !== address.hostname) {
-        await waitForAddress(context, address, signal);
+      // Provisioning runs in the same stage, so the probe leaves it two request timeouts.
+      const windowMs = timeoutMs - 2 * config.httpTimeoutMs;
+
+      if (address.source === 'tunnel' && windowMs > 0) {
+        await waitForAddress(context, address, startedMs + windowMs, signal);
+      } else if (previous !== undefined && previous !== address.hostname) {
+        await waitForAddress(context, address, undefined, signal);
       } else {
         await probeReceiver(address, settings.receiverSecret, receiver.nonce, { httpTimeoutMs: config.httpTimeoutMs,
           clock,

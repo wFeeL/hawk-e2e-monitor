@@ -132,11 +132,11 @@ describe('telegramSettings', () => {
 
 describe('telegram-delivery watchdog', () => {
   it('sums the stage limits, the probe and the tail', () => {
-    // Defaults: 15000 + 15000 * 2 + 30000 + 10000, then the longest of 120000, 125000 and 130000,
+    // Defaults: 15000 + 15000 * 2 + 45000 + 10000, then the longest of 120000, 125000 and 130000,
     // then 5000 + 30000 + 2 * 5000, then 30000 cleanup and 30000 grace.
     expect(scenarioSettings(load(), 'telegram-delivery')).toEqual({
       intervalMs: 3_600_000,
-      watchdogMs: 320_000,
+      watchdogMs: 335_000,
       cleanupMs: 30_000,
       alertAfterFailures: 1,
       retentionDays: 30,
@@ -158,10 +158,10 @@ describe('telegram-delivery watchdog', () => {
   it('the interval of the chosen scenario must exceed its watchdog', () => {
     expect(messagesOf({ SCENARIOS: 'telegram-delivery',
       PUBLIC_BASE_URL: 'https://hooks.example.com',
-      TELEGRAM_DELIVERY_INTERVAL_MS: '320000' }, 'TELEGRAM_DELIVERY_INTERVAL_MS')[0]).toContain('320000 ms');
+      TELEGRAM_DELIVERY_INTERVAL_MS: '335000' }, 'TELEGRAM_DELIVERY_INTERVAL_MS')[0]).toContain('335000 ms');
     load({ SCENARIOS: 'telegram-delivery',
       PUBLIC_BASE_URL: 'https://hooks.example.com',
-      TELEGRAM_DELIVERY_INTERVAL_MS: '320001' });
+      TELEGRAM_DELIVERY_INTERVAL_MS: '335001' });
     // Not chosen, so not judged.
     load({ TELEGRAM_DELIVERY_INTERVAL_MS: '1000' });
   });
