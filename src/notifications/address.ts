@@ -7,6 +7,9 @@ import { HttpStatus } from '../net/http-status.js';
 
 const PROBE_PATH = '/hooks/probe/';
 
+/** Longest wait for the tunnel metrics when reading the registration counter. */
+export const REGISTRATIONS_TIMEOUT_MS = 2000;
+
 /** Where Hawk can reach the receiver. */
 export interface PublicAddress {
   /** Address without a trailing slash. */
@@ -176,5 +179,50 @@ export async function probeReceiver(address: PublicAddress, secret: string, expe
 
   if (response.text !== expectedNonce) {
     throw new CheckError('receiver_unreachable', { detail: `${shown} answered with another nonce, so the address leads to a different service` });
+  }
+}
+
+/**
+ * Reads the counter cloudflared increments on every registration of its connection.
+ * @param text Body of the `/metrics` answer.
+ * @returns The counter of `registerConnection`, or undefined when the line is missing or not a count.
+ */
+export function parseTunnelRegistrations(text: string): number | undefined {
+  const lines = text.matchAll(/^cloudflared_tunnel_tunnel_register_success\{([^}]*)\}\s+(\S+)/gmu);
+
+  for (const [, labels = '', value = ''] of lines) {
+    if (labels.includes('rpcName="registerConnection"')) {
+      const count = Number(value);
+
+      return Number.isFinite(count) && count >= 0 ? count : undefined;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Reads the registration counter from the metrics of the tunnel.
+ * @param metricsUrl Metrics address of the tunnel.
+ * @param deps Time limit, clock and pauses.
+ * @param signal Aborts the request.
+ * @returns The counter, or undefined when the endpoint is silent, fails or has no counter.
+ * @throws Error for a failure other than the network.
+ */
+export async function readTunnelRegistrations(metricsUrl: string, deps: AddressDeps, signal: AbortSignal): Promise<number | undefined> {
+  // The metrics endpoint is local to the tunnel; a slow answer counts as unreadable.
+  const limits = { ...deps,
+    httpTimeoutMs: Math.min(deps.httpTimeoutMs, REGISTRATIONS_TIMEOUT_MS) };
+
+  try {
+    const response = await get(`${withoutTrailingSlash(metricsUrl)}/metrics`, limits, 1, signal);
+
+    return response.status === HttpStatus.ok ? parseTunnelRegistrations(response.text) : undefined;
+  } catch (error) {
+    if (error instanceof NetworkError) {
+      return undefined;
+    }
+
+    throw error;
   }
 }

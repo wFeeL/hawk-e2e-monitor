@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -9,7 +10,7 @@ import type { FakeTunnelMetrics, TunnelAnswer } from '../support/fake-tunnel.js'
 import { memoryLogger } from '../support/logger.js';
 import { reservedPort } from '../support/ports.js';
 import { systemClock } from '../../src/time/clock.js';
-import { probeReceiver, resolvePublicAddress } from '../../src/notifications/address.js';
+import { REGISTRATIONS_TIMEOUT_MS, parseTunnelRegistrations, probeReceiver, readTunnelRegistrations, resolvePublicAddress } from '../../src/notifications/address.js';
 import type { PublicAddress } from '../../src/notifications/address.js';
 
 const SECRET = 'address-secret-0123456789-abcdefgh';
@@ -282,5 +283,97 @@ describe('probeReceiver', () => {
     await failure(probeReceiver(address, SECRET, 'n', { ...DEPS,
       attempts: 3 }, signal));
     expect(hits).toBe(4);
+  });
+});
+
+describe('parseTunnelRegistrations', () => {
+  const fixture = readFileSync(new URL('../fixtures/cloudflared-metrics-2026.10.1.txt', import.meta.url), 'utf8');
+
+  it('reads the counter from a real answer of cloudflared 2026.10.1', () => {
+    expect(parseTunnelRegistrations(fixture)).toBe(1);
+  });
+
+  it('accepts other labels in any order', () => {
+    expect(parseTunnelRegistrations('cloudflared_tunnel_tunnel_register_success{foo="x",rpcName="registerConnection"} 7')).toBe(7);
+  });
+
+  it('reads an exponent', () => {
+    expect(parseTunnelRegistrations('cloudflared_tunnel_tunnel_register_success{rpcName="registerConnection"} 1e+06')).toBe(1_000_000);
+  });
+
+  it.each([
+    ['another rpc', 'cloudflared_tunnel_tunnel_register_success{rpcName="unregisterConnection"} 3'],
+    ['empty text', ''],
+    ['NaN', 'cloudflared_tunnel_tunnel_register_success{rpcName="registerConnection"} NaN'],
+    ['negative', 'cloudflared_tunnel_tunnel_register_success{rpcName="registerConnection"} -1'],
+    ['a comment', '# cloudflared_tunnel_tunnel_register_success{rpcName="registerConnection"} 3'],
+  ])('gives undefined for %s', (_name, text) => {
+    expect(parseTunnelRegistrations(text)).toBeUndefined();
+  });
+});
+
+/** A server for the metrics path. */
+interface MetricsServer {
+  /** Base URL. */
+  url: string;
+  /** Paths requested so far. */
+  paths: string[];
+}
+
+describe('readTunnelRegistrations', () => {
+  const fixture = readFileSync(new URL('../fixtures/cloudflared-metrics-2026.10.1.txt', import.meta.url), 'utf8');
+
+  /**
+   * Starts a server for the metrics path.
+   * @param status Status to answer.
+   * @param body Body to answer; undefined never answers.
+   * @returns Base URL and the paths requested.
+   */
+  async function metrics(status: number, body: string | undefined): Promise<MetricsServer> {
+    const paths: string[] = [];
+    const server = createServer((req, res) => {
+      paths.push(req.url ?? '');
+      req.resume();
+
+      if (body !== undefined) {
+        res.statusCode = status;
+        res.end(body);
+      }
+    });
+
+    servers.push(server);
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', resolve);
+    });
+
+    return { url: `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`,
+      paths };
+  }
+
+  it('reads the counter from /metrics', async () => {
+    const fake = await metrics(200, fixture);
+
+    expect(await readTunnelRegistrations(`${fake.url}/`, DEPS, signal)).toBe(1);
+    expect(fake.paths).toEqual(['/metrics']);
+  });
+
+  it('gives undefined for a failing answer', async () => {
+    const fake = await metrics(500, 'broken');
+
+    expect(await readTunnelRegistrations(fake.url, DEPS, signal)).toBeUndefined();
+    expect(fake.paths).toEqual(['/metrics']);
+  });
+
+  it('gives undefined for a refused port', async () => {
+    expect(await readTunnelRegistrations(`http://127.0.0.1:${String(await reservedPort())}`, DEPS, signal)).toBeUndefined();
+  });
+
+  it('gives undefined when the endpoint never answers, within the reader timeout', async () => {
+    const fake = await metrics(200, undefined);
+    const start = performance.now();
+
+    expect(await readTunnelRegistrations(fake.url, { ...DEPS,
+      httpTimeoutMs: 10_000 }, signal)).toBeUndefined();
+    expect(performance.now() - start).toBeLessThan(REGISTRATIONS_TIMEOUT_MS + 500);
   });
 });

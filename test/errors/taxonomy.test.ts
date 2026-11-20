@@ -26,6 +26,7 @@ const EXPECTED_CULPRITS: readonly (readonly [ErrorClass, Culprit])[] = [
   ['notification_endpoint_rejected', 'config'],
   ['provisioning_conflict', 'monitor'],
   ['provisioning_unstable', 'monitor'],
+  ['tunnel_reconnected', 'network'],
   ['notification_timeout', 'hawk'],
   ['notification_mismatch', 'hawk'],
   ['duplicate_notification', 'hawk'],
@@ -53,7 +54,7 @@ const EXPECTED_CULPRITS: readonly (readonly [ErrorClass, Culprit])[] = [
 
 describe('taxonomy', () => {
   it('culprit table covers every class', () => {
-    expect(ERROR_CLASSES).toHaveLength(58);
+    expect(ERROR_CLASSES).toHaveLength(59);
 
     for (const errorClass of ERROR_CLASSES) {
       expect(CULPRIT_OF[errorClass]).toBeDefined();
