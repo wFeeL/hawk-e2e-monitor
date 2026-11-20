@@ -96,7 +96,7 @@ export function watchdogOf(scenario: ScenarioWithEvent, parts: WatchdogParts): n
     case TELEGRAM_DELIVERY:
       // The API stage and `telegram_ready` share one limit; the group waits for the longest of its three stages, then the probe.
       return parts.collectorAvailability + parts.apiAvailability * 2 + parts.notificationSetup + parts.collectorAccept
-        + Math.max(parts.eventVisible, parts.notificationTimeout + parts.http, parts.telegramDelivery + 2 * parts.http)
+        + Math.max(parts.eventVisible, parts.notificationTimeout + 2 * parts.http, parts.telegramDelivery + 2 * parts.http)
         + parts.http + parts.telegramProbe + 2 * parts.http + tail;
   }
 }

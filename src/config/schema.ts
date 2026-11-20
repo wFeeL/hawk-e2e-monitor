@@ -360,10 +360,10 @@ function checkNotificationTimeout(env: z.output<typeof baseSchema>, ctx: z.Refin
 
   const total = env.COLLECTOR_AVAILABILITY_TIMEOUT_MS + env.API_AVAILABILITY_TIMEOUT_MS + env.NOTIFICATION_SETUP_TIMEOUT_MS
     + env.COLLECTOR_ACCEPT_TIMEOUT_MS
-    + Math.max(env.EVENT_VISIBLE_TIMEOUT_MS, env.NOTIFICATION_TIMEOUT_MS + env.HTTP_TIMEOUT_MS)
+    + Math.max(env.EVENT_VISIBLE_TIMEOUT_MS, env.NOTIFICATION_TIMEOUT_MS + 2 * env.HTTP_TIMEOUT_MS)
     + env.EVENT_REPEATED_TIMEOUT_MS
     // The stage that waits for the threshold notification after the repeat.
-    + env.NOTIFICATION_TIMEOUT_MS + env.HTTP_TIMEOUT_MS;
+    + env.NOTIFICATION_TIMEOUT_MS + 2 * env.HTTP_TIMEOUT_MS;
 
   if (total > env.RUN_TIMEOUT_MS) {
     ctx.addIssue({ code: 'custom',

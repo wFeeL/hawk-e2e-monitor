@@ -30,6 +30,8 @@ export interface NotificationState {
   provisioning?: ProvisionResult;
   /** Threshold POSTs of the run that had arrived when the repeat was about to be sent. */
   thresholdBeforeRepeat?: Arrival[];
+  /** Registrations of the tunnel connection counted when `notification_setup` ended. */
+  registrationsAtSetup?: number;
 }
 
 /** Host of the address a process used for the last run. */
@@ -56,8 +58,55 @@ export interface NotificationContext extends ScenarioContext {
   lastHostname?: LastHostname;
   /** Pause between self-checks while waiting for a new address, 2000 ms by default. */
   addressPollMs?: number;
+  /** Reads the registration counter of the tunnel; absent when the address does not come from the tunnel. */
+  tunnelRegistrations?: (signal: AbortSignal) => Promise<number | undefined>;
   /** Shared state of the notification part. */
   notification: NotificationState;
+}
+
+/** What `tunnelReconnect` found. */
+export interface ReconnectVerdict {
+  /** `tunnel_reconnected` when the counter grew. */
+  error?: CheckError;
+  /** Why the counter could not be compared. */
+  warning?: string;
+}
+
+/** Warning when the counter of tunnel registrations could not be read. */
+export const UNREADABLE_REGISTRATIONS = 'The tunnel registration counter could not be read, so a tunnel reconnect cannot be told from a Hawk failure in this run';
+
+/**
+ * Tells whether the tunnel reconnected since `notification_setup`, after a wait that ended with nothing.
+ * @param context Context of the stage.
+ * @param waitedMs How long the wait lasted.
+ * @param signal Aborts the read.
+ * @param channel Channel that did not arrive, when the stage waits for one.
+ * @returns `error` when the counter grew, `warning` when it cannot be compared, nothing otherwise.
+ */
+export async function tunnelReconnect(context: NotificationContext, waitedMs: number, signal: AbortSignal, channel?: ArrivalKind): Promise<ReconnectVerdict> {
+  if (context.address?.source !== 'tunnel' || context.tunnelRegistrations === undefined) {
+    return {};
+  }
+
+  const before = context.notification.registrationsAtSetup;
+
+  if (before === undefined) {
+    return { warning: UNREADABLE_REGISTRATIONS };
+  }
+
+  const after = await context.tunnelRegistrations(signal);
+
+  if (after === undefined) {
+    return { warning: UNREADABLE_REGISTRATIONS };
+  }
+
+  if (after > before) {
+    return { error: new CheckError('tunnel_reconnected', { waitedMs,
+      detail: `registrations ${String(before)} → ${String(after)}`,
+      ...channel === undefined ? {} : { channel } }) };
+  }
+
+  return {};
 }
 
 /** An event of a webhook body. */
@@ -323,14 +372,26 @@ export function notificationSetupStage(timeoutMs: number): StageSpec<Notificatio
         context.lastHostname.value = address.hostname;
       }
 
+      const details: StageDetails = {};
+
+      // Read before provisioning, which may spend most of the time left to the stage.
+      if (address.source === 'tunnel' && context.tunnelRegistrations !== undefined) {
+        notification.registrationsAtSetup = await context.tunnelRegistrations(signal);
+
+        if (notification.registrationsAtSetup === undefined) {
+          details.warning = UNREADABLE_REGISTRATIONS;
+        }
+      }
+
       const result = await provisioner.provision(address, signal);
 
       notification.provisioning = result;
+      details.provisioning = { action: result.action,
+        deleted: result.deleted,
+        matchChanged: result.matchChanged };
 
       return { status: 'ok',
-        details: { provisioning: { action: result.action,
-          deleted: result.deleted,
-          matchChanged: result.matchChanged } } };
+        details };
     },
   };
 }
@@ -382,6 +443,18 @@ export function notificationFormedStage(timeoutMs: number): StageSpec<Notificati
         const { address } = context;
 
         details.waitedMs = waitedMs;
+
+        const reconnect = await tunnelReconnect(context, waitedMs, signal);
+
+        if (reconnect.error !== undefined) {
+          return { status: 'failed',
+            error: reconnect.error,
+            details };
+        }
+
+        if (reconnect.warning !== undefined) {
+          details.warning = reconnect.warning;
+        }
 
         try {
           if (address === undefined) {
@@ -518,10 +591,24 @@ export function thresholdFormedStage(timeoutMs: number): StageSpec<NotificationC
       const [arrival] = arrivals.threshold;
 
       if (arrival === undefined) {
+        const waitedMs = Math.round(clock.monotonicMs() - startedMs);
+        const details: StageDetails = { unmatched: arrivals.unmatched };
+        const reconnect = await tunnelReconnect(context, waitedMs, signal, 'threshold');
+
+        if (reconnect.error !== undefined) {
+          return { status: 'failed',
+            error: reconnect.error,
+            details };
+        }
+
+        if (reconnect.warning !== undefined) {
+          details.warning = reconnect.warning;
+        }
+
         return { status: 'failed',
           error: new CheckError('notification_timeout', { channel: 'threshold',
-            waitedMs: Math.round(clock.monotonicMs() - startedMs) }),
-          details: { unmatched: arrivals.unmatched } };
+            waitedMs }),
+          details };
       }
 
       if (webhookRepetitionId(arrival.rawBody) === null) {

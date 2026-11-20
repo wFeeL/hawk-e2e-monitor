@@ -7,6 +7,7 @@ import type { RunResult } from '../../engine/result.js';
 import { resolvePublicAddress } from '../../notifications/address.js';
 import { createProvisioner } from '../../notifications/provisioning.js';
 import { notificationBeforeSend, notificationSetupStage } from '../check-notification/stages.js';
+import { registrationsReader } from '../check-notification/run.js';
 import type { NotificationDeps } from '../check-notification/run.js';
 import type { NotificationState } from '../check-notification/stages.js';
 import { TELEGRAM_DELIVERY } from '../names.js';
@@ -55,6 +56,7 @@ export async function runTelegramDelivery(deps: TelegramDeliveryDeps, options: P
     warmupMs: settings.ruleCacheWarmupMs,
     ...deps.lastMatchChangeAtWallMs === undefined ? {} : { lastMatchChangeAtWallMs: deps.lastMatchChangeAtWallMs },
     ...deps.onMatchChange === undefined ? {} : { onMatchChange: deps.onMatchChange } });
+  const tunnelRegistrations = registrationsReader(deps, settings);
   const state: ScenarioState = { sendMayHaveReached: false };
   const notification: NotificationState = { warmup: false };
   const telegram: TelegramState = { offset: 0,
@@ -76,6 +78,7 @@ export async function runTelegramDelivery(deps: TelegramDeliveryDeps, options: P
     addSecret: deps.addSecret,
     ...deps.lastHostname === undefined ? {} : { lastHostname: deps.lastHostname },
     ...deps.addressPollMs === undefined ? {} : { addressPollMs: deps.addressPollMs },
+    ...tunnelRegistrations === undefined ? {} : { tunnelRegistrations },
     notification,
     telegramClient: deps.telegramClient ?? createTelegramClient({ apiUrl: bot.apiUrl,
       token: bot.botToken,
@@ -99,7 +102,7 @@ export async function runTelegramDelivery(deps: TelegramDeliveryDeps, options: P
         [notificationSetupStage(settings.setupTimeoutMs)],
         [collectorAcceptStage(timeouts.collectorAccept, notificationBeforeSend(context))],
         [eventVisibleStage(timeouts.eventVisible),
-          telegramFormedStage(settings.timeoutMs + http),
+          telegramFormedStage(settings.timeoutMs + 2 * http),
           telegramDeliveredStage(bot.deliveryTimeoutMs + 2 * http)],
         [telegramProbeStage(http + bot.probeTimeoutMs + 2 * http)],
       ],

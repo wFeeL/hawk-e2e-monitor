@@ -3,7 +3,7 @@ import type { StageSpec } from '../../engine/stages.js';
 import type { RunResult, StageResult } from '../../engine/result.js';
 import { redactDeep } from '../../errors/redact.js';
 import { notificationSettings } from '../../config/load.js';
-import { resolvePublicAddress } from '../../notifications/address.js';
+import { readTunnelRegistrations, resolvePublicAddress } from '../../notifications/address.js';
 import type { PublicAddress } from '../../notifications/address.js';
 import { createProvisioner } from '../../notifications/provisioning.js';
 import type { Provisioner } from '../../notifications/provisioning.js';
@@ -27,6 +27,8 @@ export interface NotificationDeps extends ScenarioDeps {
   receiver: Receiver;
   /** Keeps the notification rule right; built from the configuration by default. */
   provisioner?: Provisioner;
+  /** Reads the registration counter of the tunnel; built from the settings by default, for tests. */
+  tunnelRegistrations?: (signal: AbortSignal) => Promise<number | undefined>;
   /** Finds the public address; reads the settings by default. */
   resolveAddress?: (signal: AbortSignal) => Promise<PublicAddress>;
   /** Wall-clock time of the last change of the rule matching, read by a one-off command; absent when unknown. */
@@ -42,6 +44,30 @@ export interface NotificationDeps extends ScenarioDeps {
 }
 
 type Step = Array<StageSpec<NotificationContext>>;
+
+/**
+ * Finds how the stages read the registration counter of the tunnel.
+ * @param deps Dependencies of the run.
+ * @param settings Notification settings; the counter is read only when the address comes from the tunnel.
+ * @returns The reader, or undefined when the address is fixed or the metrics address is unknown.
+ */
+export function registrationsReader(deps: NotificationDeps, settings: ReturnType<typeof notificationSettings>): NotificationContext['tunnelRegistrations'] {
+  if (deps.tunnelRegistrations !== undefined) {
+    return deps.tunnelRegistrations;
+  }
+
+  const metricsUrl = settings.tunnelMetricsUrl;
+
+  if (settings.publicBaseUrl !== undefined || metricsUrl === undefined) {
+    return undefined;
+  }
+
+  const { config, clock } = deps;
+
+  return async signal => readTunnelRegistrations(metricsUrl, { httpTimeoutMs: config.httpTimeoutMs,
+    clock,
+    retry: config.retry }, signal);
+}
 
 /**
  * Runs the scenario once: stages in order with `event_visible` and `notification_formed` in parallel, then cleanup.
@@ -63,6 +89,7 @@ export async function runCheckNotification(deps: NotificationDeps, options: Plan
     warmupMs: settings.ruleCacheWarmupMs,
     ...deps.lastMatchChangeAtWallMs === undefined ? {} : { lastMatchChangeAtWallMs: deps.lastMatchChangeAtWallMs },
     ...deps.onMatchChange === undefined ? {} : { onMatchChange: deps.onMatchChange } });
+  const tunnelRegistrations = registrationsReader(deps, settings);
   const state: ScenarioState = { sendMayHaveReached: false };
   const notification: NotificationState = { warmup: false };
   const context: NotificationContext = { config,
@@ -81,6 +108,7 @@ export async function runCheckNotification(deps: NotificationDeps, options: Plan
     addSecret: deps.addSecret,
     ...deps.lastHostname === undefined ? {} : { lastHostname: deps.lastHostname },
     ...deps.addressPollMs === undefined ? {} : { addressPollMs: deps.addressPollMs },
+    ...tunnelRegistrations === undefined ? {} : { tunnelRegistrations },
     notification };
   const startedAt = clock.wallTime().toISOString();
   const t0 = clock.monotonicMs();
@@ -97,9 +125,9 @@ export async function runCheckNotification(deps: NotificationDeps, options: Plan
     [apiAvailabilityStage(timeouts.apiAvailability, { title: plan.title })],
     [notificationSetupStage(settings.setupTimeoutMs)],
     [collectorAcceptStage(timeouts.collectorAccept, notificationBeforeSend(context))],
-    [eventVisibleStage(timeouts.eventVisible), notificationFormedStage(settings.timeoutMs + config.httpTimeoutMs)],
+    [eventVisibleStage(timeouts.eventVisible), notificationFormedStage(settings.timeoutMs + 2 * config.httpTimeoutMs)],
     [eventRepeatedStage(timeouts.eventRepeated, thresholdBeforeRepeat(context))],
-    [thresholdFormedStage(settings.timeoutMs + config.httpTimeoutMs)],
+    [thresholdFormedStage(settings.timeoutMs + 2 * config.httpTimeoutMs)],
   ];
   const stages: StageResult[] = [];
 

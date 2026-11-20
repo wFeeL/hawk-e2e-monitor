@@ -137,9 +137,9 @@ describe('probe configuration', () => {
         EVENT_VISIBLE_TIMEOUT_MS: '60000',
         EVENT_REPEATED_TIMEOUT_MS: '60000',
         CLEANUP_TIMEOUT_MS: '90000',
-        // The check-notification stages add up to 565000 ms, the wait for the threshold notification included.
-        RUN_TIMEOUT_MS: '565000',
-        CHECK_INTERVAL_MS: '700000' };
+        // The check-notification stages add up to 605000 ms, the wait for the threshold notification included.
+        RUN_TIMEOUT_MS: '605000',
+        CHECK_INTERVAL_MS: '730000' };
 
       expectOk(loadConfig(validEnv(env)));
       expectOk(loadConfig(validEnv({ ...env,
@@ -152,6 +152,7 @@ describe('probe configuration', () => {
 
     it('does not compare GARAGE_TIMEOUT_MS with HTTP_TIMEOUT_MS without GARAGE_URL', () => {
       expectOk(loadConfig(validEnv({ HTTP_TIMEOUT_MS: '9000',
+        RUN_TIMEOUT_MS: '500000',
         CLEANUP_TIMEOUT_MS: '60000',
         GARAGE_TIMEOUT_MS: '5000' })));
     });
@@ -171,11 +172,13 @@ describe('probe configuration', () => {
     it('wants GARAGE_TIMEOUT_MS above HTTP_TIMEOUT_MS only with GARAGE_URL', () => {
       expectOk(loadConfig(validEnv({ ...PROBE,
         HTTP_TIMEOUT_MS: '9000',
+        RUN_TIMEOUT_MS: '500000',
         CLEANUP_TIMEOUT_MS: '60000',
         GARAGE_TIMEOUT_MS: '5000' })));
       expect(messagesOf({ ...PROBE,
         GARAGE_URL: 'http://garage.example.test',
         HTTP_TIMEOUT_MS: '9000',
+        RUN_TIMEOUT_MS: '500000',
         CLEANUP_TIMEOUT_MS: '60000',
         GARAGE_TIMEOUT_MS: '5000',
         PROBE_INTERVAL_MS: '90000' }, 'GARAGE_TIMEOUT_MS')[0]).toContain('HTTP_TIMEOUT_MS');

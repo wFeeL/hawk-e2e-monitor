@@ -20,7 +20,7 @@ import { createNotificationTestScenario } from '../../support/scenario.js';
 import type { NotificationTestOptions, NotificationTestScenario } from '../../support/scenario.js';
 import { systemClock } from '../../../src/time/clock.js';
 import { collectorAcceptStage, eventRepeatedStage, eventVisibleStage } from '../../../src/scenarios/shared/delivery.js';
-import { checkNotificationAgainstEvent, notificationBeforeSend, notificationFormedStage, notificationSetupStage, thresholdBeforeRepeat, thresholdFormedStage } from '../../../src/scenarios/check-notification/stages.js';
+import { UNREADABLE_REGISTRATIONS, checkNotificationAgainstEvent, notificationBeforeSend, notificationFormedStage, notificationSetupStage, thresholdBeforeRepeat, thresholdFormedStage } from '../../../src/scenarios/check-notification/stages.js';
 import type { NotificationContext } from '../../../src/scenarios/check-notification/stages.js';
 
 const TIMEOUT_MS = 3000;
@@ -103,6 +103,24 @@ interface WebhookOverrides {
   eventId?: string;
   /** Type of the notification. */
   type?: string;
+}
+
+/** A run where nothing arrives. */
+interface SilentRun {
+  /** The scenario. */
+  parts: NotificationTestScenario;
+  /** Spy that stands for the counter reader. */
+  reader: ReturnType<typeof vi.fn>;
+}
+
+/** What a tunnel test makes of the counter. */
+interface CounterOptions {
+  /** Counter at the end of setup; absent means no baseline. */
+  before?: number;
+  /** What the reader returns. */
+  after: number | undefined;
+  /** Source of the address, `tunnel` by default. */
+  source?: 'config' | 'tunnel';
 }
 
 /** A tiny server that answers probes by a script. */
@@ -500,6 +518,58 @@ describe('notificationSetupStage through a tunnel', () => {
   });
 });
 
+describe('notificationSetupStage counter baseline', () => {
+  it.each([[5, undefined], [undefined, UNREADABLE_REGISTRATIONS]])('records the counter at the end through a tunnel: reader %s', async (value, warning) => {
+    const parts = await scenario({ preProvision: false,
+      env: { HTTP_TIMEOUT_MS: '300' } });
+    const server = await statusServer(() => ({ status: 200,
+      body: parts.receiver.nonce }));
+
+    parts.context.resolveAddress = () => Promise.resolve(server.address);
+    parts.context.tunnelRegistrations = () => Promise.resolve(value);
+
+    const result = await run(notificationSetupStage(3000), parts.context);
+
+    expect(result.status).toBe('ok');
+    expect(parts.context.notification.registrationsAtSetup).toBe(value);
+    expect(result.details?.warning).toBe(warning);
+  });
+
+  it('reads the counter after the probe and before the rule is changed', async () => {
+    const parts = await scenario({ preProvision: false,
+      env: { HTTP_TIMEOUT_MS: '300' } });
+    const server = await statusServer(() => ({ status: 200,
+      body: parts.receiver.nonce }));
+    let versionAtRead: number | undefined;
+
+    parts.context.resolveAddress = () => Promise.resolve(server.address);
+    parts.context.tunnelRegistrations = () => {
+      versionAtRead = hawk.rules.version(hawk.projectId);
+
+      return Promise.resolve(2);
+    };
+
+    const before = hawk.rules.version(hawk.projectId);
+
+    await run(notificationSetupStage(3000), parts.context);
+
+    expect(versionAtRead).toBe(before);
+  });
+
+  it('does not read the counter for a fixed address', async () => {
+    const parts = await scenario({ preProvision: false });
+    const reader = vi.fn(() => Promise.resolve(1));
+
+    parts.context.tunnelRegistrations = reader;
+
+    const result = await run(notificationSetupStage(TIMEOUT_MS), parts.context);
+
+    expect(result.status).toBe('ok');
+    expect(reader).not.toHaveBeenCalled();
+    expect(parts.context.notification.registrationsAtSetup).toBeUndefined();
+  });
+});
+
 describe('notificationBeforeSend', () => {
   it('registers the run before the event is sent and notes no warmup for an unchanged rule', async () => {
     const parts = await scenario();
@@ -786,6 +856,134 @@ describe('notificationFormedStage', () => {
       expect(result.details?.unmatched).toBe(1);
       expect(result.details?.warnings).toEqual(['1 notification(s) with a valid secret but another run id arrived while waiting']);
     });
+  });
+});
+
+describe('notificationFormedStage through a tunnel', () => {
+  /**
+   * Makes a run where nothing arrives, with a tunnel address and a fake counter.
+   * @param options Counter at setup, what the reader returns, and the address source.
+   * @param options.before Counter at the end of setup.
+   * @param options.after What the reader returns.
+   * @param options.source Source of the address.
+   * @returns Scenario and the reader spy.
+   */
+  async function silent(options: CounterOptions): Promise<SilentRun> {
+    const parts = await scenario({ env: { NOTIFICATION_TIMEOUT_MS: '400' } });
+    const reader = vi.fn(() => Promise.resolve(options.after));
+
+    hawk.notifier.knobs.off = true;
+    await sendEvent(parts.context);
+    parts.context.address = httpAddress(parts.receiver.port, options.source ?? 'tunnel');
+    parts.context.tunnelRegistrations = reader;
+
+    if (options.before !== undefined) {
+      parts.context.notification.registrationsAtSetup = options.before;
+    }
+
+    return { parts,
+      reader };
+  }
+
+  it('a grown counter makes it tunnel_reconnected', async () => {
+    const { parts } = await silent({ before: 3,
+      after: 4 });
+    const result = await run(notificationFormedStage(FORMED_TIMEOUT_MS), parts.context);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'tunnel_reconnected',
+      culprit: 'network' });
+    expect(result.message).toContain('registrations 3 → 4');
+  });
+
+  it('the same counter keeps notification_timeout', async () => {
+    const { parts } = await silent({ before: 3,
+      after: 3 });
+    const result = await run(notificationFormedStage(FORMED_TIMEOUT_MS), parts.context);
+
+    expect(result.errorClass).toBe('notification_timeout');
+    expect(result.details?.warning).toBeUndefined();
+  });
+
+  it('an unreadable counter keeps notification_timeout and warns', async () => {
+    const { parts } = await silent({ before: 3,
+      after: undefined });
+    const result = await run(notificationFormedStage(FORMED_TIMEOUT_MS), parts.context);
+
+    expect(result.errorClass).toBe('notification_timeout');
+    expect(result.details?.warning).toBe(UNREADABLE_REGISTRATIONS);
+  });
+
+  it('no baseline keeps notification_timeout, warns and does not read', async () => {
+    const { parts, reader } = await silent({ after: 9 });
+    const result = await run(notificationFormedStage(FORMED_TIMEOUT_MS), parts.context);
+
+    expect(result.errorClass).toBe('notification_timeout');
+    expect(result.details?.warning).toBe(UNREADABLE_REGISTRATIONS);
+    expect(reader).not.toHaveBeenCalled();
+  });
+
+  it('a fixed address never reads the counter', async () => {
+    const { parts, reader } = await silent({ before: 3,
+      after: 9,
+      source: 'config' });
+    const result = await run(notificationFormedStage(FORMED_TIMEOUT_MS), parts.context);
+
+    expect(result.errorClass).toBe('notification_timeout');
+    expect(result.details?.warning).toBeUndefined();
+    expect(reader).not.toHaveBeenCalled();
+  });
+
+  it('an arrived notification ignores the counter', async () => {
+    const parts = await scenario();
+    const reader = vi.fn(() => Promise.resolve(9));
+
+    await sendEvent(parts.context);
+    parts.context.address = httpAddress(parts.receiver.port, 'tunnel');
+    parts.context.tunnelRegistrations = reader;
+    parts.context.notification.registrationsAtSetup = 3;
+
+    const result = await run(notificationFormedStage(FORMED_TIMEOUT_MS), parts.context);
+
+    expect(result.status).toBe('ok');
+    expect(reader).not.toHaveBeenCalled();
+  });
+
+  it('growth wins over a failed probe', async () => {
+    const { parts } = await silent({ before: 3,
+      after: 4 });
+
+    parts.context.address = httpAddress(await deadPort(), 'tunnel');
+
+    const result = await run(notificationFormedStage(FORMED_TIMEOUT_MS), parts.context);
+
+    expect(result.errorClass).toBe('tunnel_reconnected');
+  });
+});
+
+describe('thresholdFormedStage through a tunnel', () => {
+  it('a grown counter makes it tunnel_reconnected for the threshold channel', async () => {
+    const parts = await scenario({ repeat: true,
+      env: { NOTIFICATION_TIMEOUT_MS: '300',
+        NOTIFICATION_PAIR_WAIT_MS: '100' } });
+
+    hawk.rules.remove(hawk.projectId, hawk.rules.list(hawk.projectId).find(rule => rule.whatToReceive === 'SEEN_MORE' && rule.including.length === 1)?.id ?? '');
+
+    const { context } = parts;
+
+    await sendEvent(context);
+    await run(eventVisibleStage(TIMEOUT_MS), context);
+    await run(eventRepeatedStage(TIMEOUT_MS, thresholdBeforeRepeat(context)), context);
+    context.address = httpAddress(parts.receiver.port, 'tunnel');
+    context.tunnelRegistrations = () => Promise.resolve(4);
+    context.notification.registrationsAtSetup = 3;
+
+    const result = await run(thresholdFormedStage(FORMED_TIMEOUT_MS), context);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'tunnel_reconnected',
+      culprit: 'network' });
+    expect(result.message).toContain('No threshold notification arrived');
   });
 });
 
