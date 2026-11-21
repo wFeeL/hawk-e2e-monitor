@@ -62,7 +62,7 @@ describe('retry configuration', () => {
   it('shows both variables in the startup summary', () => {
     const { values } = describeConfig(expectOk(loadConfig(validEnv())).env);
 
-    expect(values).toMatchObject({ RETRY_ATTEMPTS: '3',
-      RETRY_DELAYS_MS: '[200,500]' });
+    expect(values).toMatchObject({ RETRY_ATTEMPTS: 3,
+      RETRY_DELAYS_MS: [200, 500] });
   });
 });

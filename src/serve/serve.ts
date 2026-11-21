@@ -94,6 +94,11 @@ export interface ServeHandle {
    * @returns Resolves when the process can exit.
    */
   stop(): Promise<void>;
+  /**
+   * Gives up the lease at once and synchronously, for a process that is about to exit without `stop`.
+   * Never throws and may be called again.
+   */
+  releaseLease(): void;
 }
 
 /**
@@ -284,10 +289,23 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
 
     pruneHistory(history, config, now);
 
+    const freeLease = (): void => {
+      try {
+        releaseLease(history, ownLease());
+      } catch (error) {
+        logger.error('could not free the lease', { error });
+      }
+    };
+    // A crash exit skips `stop`, and a lease left behind would keep the next start waiting.
+    const exitFreeingLease = (code: number): void => {
+      freeLease();
+      exit(code);
+    };
+
     const renew = leaseRenewer({ history,
       lease: ownLease,
       logger,
-      exit,
+      exit: exitFreeingLease,
       databasePath: monitoring.databasePath });
 
     const workers: Array<Promise<void>> = [
@@ -361,7 +379,7 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
       }, (row, result) => {
         metrics.onRunFinished(row, result);
       }],
-      exit });
+      exit: exitFreeingLease });
     const sweeper = createSweeper({ api,
       history,
       clock,
@@ -436,6 +454,7 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
       port: app.port,
       ...built.receiverPort === undefined ? {} : { receiverPort: built.receiverPort },
       scheduler,
+      releaseLease: freeLease,
       stop: () => {
         stopPromise ??= closeAll(closers, logger);
 

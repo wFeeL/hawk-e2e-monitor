@@ -6,7 +6,7 @@ import { runHistoryCommand } from './commands/history.js';
 import { runProvisionCommand } from './commands/provision.js';
 import { runRunCommand } from './commands/run.js';
 import type { Config } from './config/load.js';
-import { formatConfigErrors, loadConfig } from './config/load.js';
+import { formatConfigErrors, loadConfig, loadHistoryConfig } from './config/load.js';
 import { describeConfig } from './config/describe.js';
 import type { ParsedEnv } from './config/schema.js';
 import { createLogger } from './log/logger.js';
@@ -28,13 +28,26 @@ const STOP_SIGNALS = ['SIGTERM', 'SIGINT'] as const;
 async function serve(config: Config, env: ParsedEnv): Promise<number> {
   const logger = createLogger({ level: config.logLevel });
 
+  let app: ServeHandle | undefined;
+
+  // A lease left behind would make the restarted process wait for it to expire.
+  const freeLease = (): void => {
+    try {
+      app?.releaseLease();
+    } catch {
+      // The process is ending anyway.
+    }
+  };
+
   process.on('unhandledRejection', (reason: unknown) => {
     logger.error('unhandled rejection', { error: reason });
+    freeLease();
     // eslint-disable-next-line n/no-process-exit -- a fatal error ends the process and the container restarts it
     process.exit(1);
   });
   process.on('uncaughtException', (error: Error) => {
     logger.error('uncaught exception', { error });
+    freeLease();
     // eslint-disable-next-line n/no-process-exit -- a fatal error ends the process and the container restarts it
     process.exit(1);
   });
@@ -54,7 +67,6 @@ async function serve(config: Config, env: ParsedEnv): Promise<number> {
     logger.warn('ALERT_NOTIFY_URL is not set: alerts are written to the log and not delivered');
   }
 
-  let app: ServeHandle | undefined;
   const starting = new AbortController();
   let stopRequested = false;
   let pendingSignal = '';
@@ -105,7 +117,8 @@ async function serve(config: Config, env: ParsedEnv): Promise<number> {
       return 0;
     }
 
-    logger.error('startup failed', { error });
+    // The message was printed above; a stack of a startup error says nothing more.
+    logger.error('startup failed', { error: error.message });
 
     return 1;
   }
@@ -146,12 +159,37 @@ async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<nu
     return 2;
   }
 
-  const result = loadConfig(env);
+  if (command.kind === 'help') {
+    process.stdout.write(command.text);
+
+    return 0;
+  }
+
+  if (command.kind === 'version') {
+    process.stdout.write(`${SERVICE_VERSION}\n`);
+
+    return 0;
+  }
+
+  if (command.kind === 'history') {
+    // History only reads the database file, so it does not ask for the Hawk settings.
+    const history = loadHistoryConfig(env);
+
+    if (!history.ok) {
+      process.stderr.write(formatConfigErrors(history.errors));
+
+      return configErrorExitCode();
+    }
+
+    return runHistoryCommand(command, history.config, io);
+  }
+
+  const result = loadConfig(env, { command: command.kind });
 
   if (!result.ok) {
     process.stderr.write(formatConfigErrors(result.errors));
 
-    return configErrorExitCode(command);
+    return configErrorExitCode();
   }
 
   switch (command.kind) {
@@ -161,8 +199,6 @@ async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<nu
       return runProvisionCommand(command, result.config, io);
     case 'run':
       return runRunCommand(command, result.config, io);
-    case 'history':
-      return runHistoryCommand(command, result.config, io);
     default:
       return serve(result.config, result.env);
   }

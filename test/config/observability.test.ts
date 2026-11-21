@@ -78,7 +78,7 @@ describe('heartbeat and manual run configuration', () => {
     expect(summary.values.RUN_TOKEN).toBe('***');
     expect(JSON.stringify(summary)).not.toContain('3f1c2a9e');
     expect(JSON.stringify(summary)).not.toContain(TOKEN);
-    expect(summary.values.HEARTBEAT_INTERVAL_MS).toBe('60000');
-    expect(summary.values.MANUAL_MIN_INTERVAL_MS).toBe('60000');
+    expect(summary.values.HEARTBEAT_INTERVAL_MS).toBe(60_000);
+    expect(summary.values.MANUAL_MIN_INTERVAL_MS).toBe(60_000);
   });
 });

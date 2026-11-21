@@ -1,7 +1,9 @@
 import type { z } from 'zod';
-import { ENV_SHAPE, envSchema } from './schema.js';
+import { ENV_SHAPE, envSchema, fieldsSchema } from './schema.js';
 import type { LogLevel, ParsedEnv, TransportMode } from './schema.js';
+import type { Command } from '../cli.js';
 import type { RetryPolicy } from '../net/retry.js';
+import { CHECK_NOTIFICATION, TELEGRAM_DELIVERY } from '../scenarios/names.js';
 import type { ScenarioName } from '../scenarios/names.js';
 
 /** Address of the internal HTTP server (health, readiness). */
@@ -277,11 +279,156 @@ function toConfigError(issue: z.core.$ZodIssue, input: Readonly<Record<string, s
 }
 
 /**
+ * Drops errors that repeat a variable and a text already listed.
+ * @param errors Errors in the order they were found.
+ * @returns The first of each kind, in the same order.
+ */
+function uniqueErrors(errors: readonly ConfigError[]): ConfigError[] {
+  const seen = new Set<string>();
+
+  return errors.filter((error) => {
+    const key = `${error.variable}\u0000${error.message}`;
+
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+
+    return true;
+  });
+}
+
+/** What the Hawk validator accepts as the address of the Telegram channel. */
+export const NOTIFY_URL_PATTERN = /^https:\/\/notify\.bot\.codex\.so\/u\/[A-Za-z0-9]+$/u;
+const BOT_TOKEN_PATTERN = /^\d+:[\w-]{30,}$/u;
+
+/**
+ * Finds what is wrong with the bot token and the notify address of `telegram-delivery`.
+ * @param botToken Token as given.
+ * @param notifyUrl Notify address as given.
+ * @returns One error per variable that is missing or malformed, without its value.
+ */
+function telegramErrors(botToken: string | undefined, notifyUrl: string | undefined): ConfigError[] {
+  const errors: ConfigError[] = [];
+
+  if (botToken === undefined) {
+    errors.push({ variable: 'TELEGRAM_BOT_TOKEN',
+      message: 'is required for telegram-delivery' });
+  } else if (!BOT_TOKEN_PATTERN.test(botToken)) {
+    errors.push({ variable: 'TELEGRAM_BOT_TOKEN',
+      message: 'must be a bot token: digits, a colon and at least 30 characters' });
+  }
+
+  if (notifyUrl === undefined) {
+    errors.push({ variable: 'TELEGRAM_NOTIFY_URL',
+      message: 'is required for telegram-delivery' });
+  } else if (!NOTIFY_URL_PATTERN.test(notifyUrl)) {
+    errors.push({ variable: 'TELEGRAM_NOTIFY_URL',
+      message: 'must be a notify address of the form https://notify.bot.codex.so/u/<token>' });
+  }
+
+  return errors;
+}
+
+/** The settings `history` reads: it opens the database file and knows nothing of Hawk. */
+export interface HistoryConfig {
+  /** Path of the SQLite file. */
+  databasePath: string;
+  /** Scenarios the statistics cover by default. */
+  scenarios: ScenarioName[];
+}
+
+/** Successful `loadHistoryConfig` result. */
+export interface LoadHistoryConfigOk {
+  /** Discriminant. */
+  ok: true;
+  /** The two settings. */
+  config: HistoryConfig;
+}
+
+/** Outcome of `loadHistoryConfig`. */
+export type LoadHistoryConfigResult = LoadConfigFailure | LoadHistoryConfigOk;
+
+/**
+ * Reads only `DATABASE_PATH` and `SCENARIOS`, so `history` works without the Hawk credentials.
+ * @param env Raw environment; empty strings count as missing.
+ * @returns The two settings or every problem found.
+ */
+export function loadHistoryConfig(env: Readonly<Record<string, string | undefined>>): LoadHistoryConfigResult {
+  const read = (name: 'DATABASE_PATH' | 'SCENARIOS'): string | undefined => env[name] === '' ? undefined : env[name];
+  const databasePath = ENV_SHAPE.DATABASE_PATH.safeParse(read('DATABASE_PATH'));
+  const scenarios = ENV_SHAPE.SCENARIOS.safeParse(read('SCENARIOS'));
+  const errors: ConfigError[] = [];
+
+  if (!databasePath.success) {
+    errors.push({ variable: 'DATABASE_PATH',
+      message: databasePath.error.issues[0]?.message ?? 'is invalid' });
+  }
+
+  if (!scenarios.success) {
+    errors.push({ variable: 'SCENARIOS',
+      message: scenarios.error.issues[0]?.message ?? 'is invalid' });
+  }
+
+  if (!databasePath.success || !scenarios.success) {
+    return { ok: false,
+      errors };
+  }
+
+  return { ok: true,
+    config: { databasePath: databasePath.data,
+      scenarios: scenarios.data } };
+}
+
+/** What `loadConfig` may be told about its caller. */
+export interface LoadOptions {
+  /** Command about to run; `serve` also needs the settings of the notification scenarios it will start. */
+  command?: Command['kind'];
+}
+
+/**
+ * Finds what `serve` needs for the notification scenarios it will start, so it can be reported with the other errors.
+ * @param input Raw variables, empty strings already removed.
+ * @returns Missing or malformed settings; empty when the scenarios need nothing or the scenario list is itself invalid.
+ */
+function serveRequirements(input: Readonly<Record<string, string | undefined>>): ConfigError[] {
+  const listed = ENV_SHAPE.SCENARIOS.safeParse(input.SCENARIOS);
+
+  if (!listed.success) {
+    return [];
+  }
+
+  const scenarios = listed.data;
+  const receiverFor = scenarios.includes(CHECK_NOTIFICATION) ? CHECK_NOTIFICATION : scenarios.includes(TELEGRAM_DELIVERY) ? TELEGRAM_DELIVERY : undefined;
+  const errors: ConfigError[] = [];
+
+  if (receiverFor !== undefined) {
+    if (input.RECEIVER_SECRET === undefined) {
+      errors.push({ variable: 'RECEIVER_SECRET',
+        message: `is required for ${receiverFor}` });
+    }
+
+    if (input.PUBLIC_BASE_URL === undefined && input.TUNNEL_METRICS_URL === undefined) {
+      errors.push({ variable: 'PUBLIC_BASE_URL',
+        message: `set PUBLIC_BASE_URL or TUNNEL_METRICS_URL for ${receiverFor}` });
+    }
+  }
+
+  if (scenarios.includes(TELEGRAM_DELIVERY)) {
+    errors.push(...telegramErrors(input.TELEGRAM_BOT_TOKEN, input.TELEGRAM_NOTIFY_URL));
+  }
+
+  return errors;
+}
+
+/**
  * Validates environment variables and builds the configuration.
  * @param env Raw environment; empty strings count as missing.
+ * @param options What the caller is about to run.
  * @returns Configuration or all errors found.
  */
-export function loadConfig(env: Readonly<Record<string, string | undefined>>): LoadConfigResult {
+export function loadConfig(env: Readonly<Record<string, string | undefined>>, options: LoadOptions = {}): LoadConfigResult {
   const input: Record<string, string | undefined> = {};
 
   for (const name of Object.keys(ENV_SHAPE)) {
@@ -290,11 +437,20 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): L
     input[name] = value === '' ? undefined : value;
   }
 
-  const parsed = envSchema.safeParse(input);
+  // The checks that compare variables run only when every variable is fine on its own, so one bad value yields one line.
+  const fields = fieldsSchema.safeParse(input);
+  const parsed = fields.success ? envSchema.safeParse(input) : fields;
+
+  const missing = options.command === 'serve' ? serveRequirements(input) : [];
 
   if (!parsed.success) {
     return { ok: false,
-      errors: parsed.error.issues.map(issue => toConfigError(issue, input)) };
+      errors: uniqueErrors([...parsed.error.issues.map(issue => toConfigError(issue, input)), ...missing]) };
+  }
+
+  if (missing.length > 0) {
+    return { ok: false,
+      errors: uniqueErrors(missing) };
   }
 
   const values = parsed.data;
@@ -427,10 +583,6 @@ export function notificationSettings(config: Config): NotificationConfig & Requi
     receiverSecret: notifications.receiverSecret };
 }
 
-/** What the Hawk validator accepts as the address of the Telegram channel. */
-export const NOTIFY_URL_PATTERN = /^https:\/\/notify\.bot\.codex\.so\/u\/[A-Za-z0-9]+$/u;
-const BOT_TOKEN_PATTERN = /^\d+:[\w-]{30,}$/u;
-
 /**
  * Checks the settings that only a chosen `telegram-delivery` needs.
  * @param config Loaded configuration.
@@ -440,23 +592,7 @@ const BOT_TOKEN_PATTERN = /^\d+:[\w-]{30,}$/u;
 export function telegramSettings(config: Config): TelegramDeliveryConfig & Required<Pick<TelegramDeliveryConfig, 'botToken' | 'notifyUrl'>> {
   const settings = config.scenarios.telegramDelivery;
   const { botToken, notifyUrl } = settings;
-  const errors: ConfigError[] = [];
-
-  if (botToken === undefined) {
-    errors.push({ variable: 'TELEGRAM_BOT_TOKEN',
-      message: 'is required for telegram-delivery' });
-  } else if (!BOT_TOKEN_PATTERN.test(botToken)) {
-    errors.push({ variable: 'TELEGRAM_BOT_TOKEN',
-      message: 'must be a bot token: digits, a colon and at least 30 characters' });
-  }
-
-  if (notifyUrl === undefined) {
-    errors.push({ variable: 'TELEGRAM_NOTIFY_URL',
-      message: 'is required for telegram-delivery' });
-  } else if (!NOTIFY_URL_PATTERN.test(notifyUrl)) {
-    errors.push({ variable: 'TELEGRAM_NOTIFY_URL',
-      message: 'must be a notify address of the form https://notify.bot.codex.so/u/<token>' });
-  }
+  const errors = telegramErrors(botToken, notifyUrl);
 
   if (botToken === undefined || notifyUrl === undefined || errors.length > 0) {
     throw new ConfigFailure(errors);
