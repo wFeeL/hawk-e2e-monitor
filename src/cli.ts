@@ -3,6 +3,14 @@ import { SCENARIO_NAMES, SCENARIO_TRAITS } from './scenarios/names.js';
 import type { ScenarioName } from './scenarios/names.js';
 import { DEFAULT_LIST_LIMIT } from './storage/types.js';
 
+/** Ask the running service to run scenarios now. */
+export interface RunCommand {
+  /** Discriminant. */
+  kind: 'run';
+  /** Scenarios to run in this order; empty means every enabled one. */
+  scenarios: ScenarioName[];
+}
+
 /** Start the service. */
 export interface ServeCommand {
   /** Discriminant. */
@@ -52,12 +60,13 @@ export interface UsageCommand {
 }
 
 /** Parsed command line. */
-export type Command = CheckCommand | HistoryCommand | ProvisionCommand | ServeCommand | UsageCommand;
+export type Command = CheckCommand | HistoryCommand | ProvisionCommand | RunCommand | ServeCommand | UsageCommand;
 
 /** Usage text printed for an unknown command. */
 export const USAGE = [
   'Usage: hawk-e2e-monitor [serve]',
   ...SCENARIO_NAMES.map(name => `       hawk-e2e-monitor check ${name}${SCENARIO_TRAITS[name].sendsEvents ? ' [--sequence <n>] [--transport http|ws] [--repeat]' : ''}`),
+  '       hawk-e2e-monitor run [<scenario> ...]',
   '       hawk-e2e-monitor provision [--no-wait]',
   '       hawk-e2e-monitor history [--scenario <name>] [--limit <n>] [--stats]',
   '',
@@ -221,6 +230,32 @@ function parseHistory(flags: readonly string[]): HistoryCommand | UsageCommand {
 }
 
 /**
+ * Parses the arguments after `run`.
+ * @param names Scenario names; may be empty.
+ * @returns Run command, or usage naming the problem.
+ */
+function parseRun(names: readonly string[]): RunCommand | UsageCommand {
+  const scenarios: ScenarioName[] = [];
+
+  for (const name of names) {
+    const known = SCENARIO_NAMES.find(candidate => candidate === name);
+
+    if (known === undefined) {
+      return invalid(`unknown scenario "${name}"`);
+    }
+
+    if (scenarios.includes(known)) {
+      return invalid(`${known} given twice`);
+    }
+
+    scenarios.push(known);
+  }
+
+  return { kind: 'run',
+    scenarios };
+}
+
+/**
  * Parses arguments after the script name.
  * @param args Command line arguments.
  * @returns `serve` for no arguments or `serve`, `check` or `provision` with their options, usage text otherwise.
@@ -232,6 +267,10 @@ export function parseCommand(args: readonly string[]): Command {
 
   if (args[0] === 'check') {
     return parseCheck(args.slice(1));
+  }
+
+  if (args[0] === 'run') {
+    return parseRun(args.slice(1));
   }
 
   if (args[0] === 'provision') {
