@@ -1,6 +1,9 @@
 import { Buffer } from 'node:buffer';
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { buildSchema, executeSync, parse } from 'graphql';
+import type { GraphQLSchema } from 'graphql';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createFakeProjects } from './projects.js';
@@ -11,6 +14,7 @@ import type { FakeStore, StoredEvent } from './store.js';
 import { objectIdLike } from './store.js';
 import { PLAIN_TYPE } from './content-types.js';
 
+const SCHEMA_FIXTURE = new URL('../../fixtures/hawk-api.graphql', import.meta.url);
 const JSON_TYPE = 'application/json; charset=utf-8';
 const DEFAULT_EVENTS_LIMIT = 10_000;
 const UNAUTHENTICATED_MESSAGE = 'You must be signed in to view this resource.';
@@ -122,6 +126,58 @@ interface Outcome {
   status: number;
   /** Response JSON. */
   json: unknown;
+}
+
+/** The part of an answer the projection reads. */
+interface AnswerJson {
+  /** Complete data the fake built. */
+  data?: unknown;
+}
+
+let fixtureSchema: GraphQLSchema | undefined;
+
+/**
+ * Reads the schema of the API once.
+ * Non-null markers are dropped: the fake leaves out fields no query asks for, and a field a query does ask for must
+ * show up as missing in the answer, not as an error that hides its parent.
+ * @returns Schema built from the fixture.
+ */
+function schemaOfFixture(): GraphQLSchema {
+  fixtureSchema ??= buildSchema(readFileSync(SCHEMA_FIXTURE, 'utf8').replaceAll('!', ''));
+
+  return fixtureSchema;
+}
+
+/**
+ * Cuts a successful answer down to what the received document asks for, the way a real server does.
+ * A field the monitor stopped asking for then disappears from the answer, and a test notices.
+ * @param outcome Complete answer built from the operation name.
+ * @param query Document the monitor sent.
+ * @param name Operation name.
+ * @param variables Operation variables.
+ * @returns The projected answer; other outcomes unchanged.
+ */
+function projectOnQuery(outcome: Outcome, query: unknown, name: string, variables: Record<string, unknown>): Outcome {
+  const { json } = outcome;
+  const data = typeof json === 'object' && json !== null ? (json as AnswerJson).data : undefined;
+
+  if (outcome.status !== 200 || typeof query !== 'string' || typeof data !== 'object' || data === null) {
+    return outcome;
+  }
+
+  try {
+    return { status: 200,
+      json: executeSync({ schema: schemaOfFixture(),
+        document: parse(query),
+        operationName: name,
+        rootValue: data,
+        variableValues: variables }) };
+  } catch (error) {
+    // Apollo answers a document it cannot parse with HTTP 400.
+    return { status: 400,
+      json: { errors: [{ message: error instanceof Error ? error.message : String(error),
+        extensions: { code: 'GRAPHQL_PARSE_FAILED' } }] } };
+  }
 }
 
 /**
@@ -598,7 +654,8 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
       const variables = typeof body.variables === 'object' && body.variables !== null
         ? body.variables as Record<string, unknown>
         : {};
-      const outcome = answer(request, name, variables);
+      const answered = answer(request, name, variables);
+      const outcome = answered === 'hang' ? answered : projectOnQuery(answered, body.query, name, variables);
 
       if (outcome !== 'hang') {
         respond(response, outcome.status, JSON_TYPE, JSON.stringify(outcome.json));

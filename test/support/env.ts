@@ -1,10 +1,14 @@
 import { Buffer } from 'node:buffer';
 
-const TEST_ID = '00000000-0000-4000-8000-000000000001';
+/** Integration id inside `TEST_INTEGRATION_TOKEN`. */
+export const TEST_INTEGRATION_ID = '00000000-0000-4000-8000-000000000001';
+
+/** Secret inside `TEST_INTEGRATION_TOKEN`; it differs from the id so that a test notices a mix-up of the two. */
+export const TEST_INTEGRATION_SECRET = '11111111-2222-4333-8444-555555555555';
 
 /** Valid integration token for config tests: base64 of a JSON with `integrationId` and `secret`. */
-export const TEST_INTEGRATION_TOKEN = Buffer.from(JSON.stringify({ integrationId: TEST_ID,
-  secret: TEST_ID })).toString('base64');
+export const TEST_INTEGRATION_TOKEN = Buffer.from(JSON.stringify({ integrationId: TEST_INTEGRATION_ID,
+  secret: TEST_INTEGRATION_SECRET })).toString('base64');
 
 /** Valid 24-character hex project id for config tests. */
 export const TEST_PROJECT_ID = '0123456789abcdef01234567';

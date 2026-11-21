@@ -185,7 +185,7 @@ async function hawkFor(): Promise<FakeHawk> {
 
   // A short interval projects far more events than a real plan; a high limit keeps that warning out of the way.
   hawk.api.knobs.workspace = { isBlocked: false,
-    eventsLimit: 1_000_000_000_000,
+    eventsLimit: 2_000_000_000,
     billingPeriodEventsCount: 0 };
   cleanups.push(async () => hawk.close());
 

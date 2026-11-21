@@ -350,12 +350,26 @@ describe('send over WebSocket', () => {
     expect(outcome.cause.errorClass).toBe('collector_unavailable');
     expect(outcome.cause.facts).toMatchObject({ code: 'WS_CLOSED',
       url: collector.wsUrl });
+    expect(outcome.attempts).toBe(1);
+    expect(collector.wsMessages).toBe(1);
+  });
+
+  it('a socket that closes after the message stores the event once', async () => {
+    collector.knobs.ws = 'close_after_message';
+
+    uncertain(await clientFor().send(message('sent once'), 'ws', signal));
+
+    expect(store.all(PROJECT_ID)).toHaveLength(1);
   });
 
   it('ws silent is uncertain with TIMEOUT', async () => {
     collector.knobs.ws = 'silent';
 
-    expect(uncertain(await clientFor(100).send(message(), 'ws', signal)).cause.facts.code).toBe('TIMEOUT');
+    const outcome = uncertain(await clientFor(100).send(message(), 'ws', signal));
+
+    expect(outcome.cause.facts.code).toBe('TIMEOUT');
+    expect(outcome.attempts).toBe(1);
+    expect(collector.wsMessages).toBe(1);
   });
 
   it('a plain-text 400 over HTTP reads as a failed handler', async () => {
