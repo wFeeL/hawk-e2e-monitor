@@ -301,6 +301,42 @@ describe('sweepOnce', () => {
     expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
   });
 
+  it('goes on after a page that looks short when Hawk says there is more', async () => {
+    for (let index = 0; index < 50; index += 1) {
+      leftover(runIdOf(index));
+    }
+
+    let calls = 0;
+    const report = await sweeper({ api: { ...api,
+      findEventsPage: async (projectId, search, signal) => {
+        calls += 1;
+
+        const page = await api.findEventsPage(projectId, search, signal);
+
+        if (calls === 1) {
+          return { events: page.events.slice(0, 49),
+            more: true };
+        }
+
+        return page;
+      } } }).sweepOnce(SIGNAL);
+
+    expect(report).toMatchObject({ pages: 2,
+      removed: 50 });
+  });
+
+  it('goes on after a full page even without a cursor', async () => {
+    for (let index = 0; index < 60; index += 1) {
+      leftover(runIdOf(index));
+    }
+
+    const report = await sweeper({ api: { ...api,
+      findEventsPage: async (projectId, search, signal) => ({ ...await api.findEventsPage(projectId, search, signal),
+        more: false }) } }).sweepOnce(SIGNAL);
+
+    expect(report.removed).toBe(60);
+  });
+
   it('stops when a full page had nothing to remove', async () => {
     for (let index = 0; index < 55; index += 1) {
       leftover(runIdOf(index), { ageMs: 1000 });
@@ -390,10 +426,11 @@ describe('the timer', () => {
   function counting(sweepIntervalMs: number): Counting {
     let searches = 0;
     const clock = createFakeClock();
-    const counter = { findEvents: () => {
+    const counter = { findEventsPage: () => {
       searches += 1;
 
-      return Promise.resolve([]);
+      return Promise.resolve({ events: [],
+        more: false });
     } } as unknown as HawkApi;
     const base = testConfig();
     const instance = createSweeper({ api: counter,

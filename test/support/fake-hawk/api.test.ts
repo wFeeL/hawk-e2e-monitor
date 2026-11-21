@@ -65,6 +65,14 @@ interface WorkspaceShape {
   projects: Array<Record<'id', string>>;
 }
 
+/** The portion of search results. */
+interface PortionShape {
+  /** Rows of the page. */
+  dailyEvents: DailyEventShape[];
+  /** Cursor of the next page, null when nothing more matches. */
+  nextCursor: unknown;
+}
+
 /** One row of `dailyEvents`. */
 interface DailyEventShape {
   /** Row id. */
@@ -82,7 +90,7 @@ interface ProjectShape {
   /** Event card or null. */
   event: EventShape | null;
   /** Search results. */
-  dailyEventsPortion: Record<'dailyEvents', DailyEventShape[]>;
+  dailyEventsPortion: PortionShape;
   /** Notification rules. */
   notifications: NotificationRule[];
 }
@@ -504,6 +512,24 @@ describe('fake api search pages', () => {
       search: '[e2e:page]' }, accessToken)).project.dailyEventsPortion.dailyEvents;
 
     expect(rows).toHaveLength(50);
+  });
+
+  it('FindEvents names a cursor only when more than 50 events match', async () => {
+    const { api, store } = await start();
+    const { accessToken } = await login(api);
+
+    for (let index = 0; index < 50; index += 1) {
+      store.ingest(PROJECT, 'errors/nodejs', { title: `[e2e:cursor] item ${String(index)}` });
+    }
+
+    const ask = async (): Promise<unknown> => dataOf(await gql(api, 'ProjectDailyEvents', { projectId: PROJECT,
+      search: '[e2e:cursor]' }, accessToken)).project.dailyEventsPortion.nextCursor;
+
+    expect(await ask()).toBeNull();
+    store.ingest(PROJECT, 'errors/nodejs', { title: '[e2e:cursor] item 50' });
+    expect(await ask()).toEqual({ groupingTimestampBoundary: expect.any(Number) as number,
+      sortValueBoundary: expect.any(Number) as number,
+      idBoundary: expect.any(String) as string });
   });
 
   it('FindEvents and EventCard show the timestamp of the event in seconds', async () => {

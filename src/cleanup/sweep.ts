@@ -375,7 +375,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
         signal.throwIfAborted();
 
         // Hawk parses the search as a regex, so no brackets; the title prefix is checked on the results.
-        const events = await api.findEvents(projectId, `e2e:${config.instanceId}`, signal);
+        const { events, more } = await api.findEventsPage(projectId, `e2e:${config.instanceId}`, signal);
         const removedBefore = report.removed;
 
         report.pages += 1;
@@ -391,7 +391,9 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
           report.skipped += outcome.removed ? 0 : 1;
         }
 
-        if (events.length < PAGE_SIZE || report.removed === removedBefore) {
+        // Hawk names a cursor only when more rows match, and one group seen on two days is two rows and one event here,
+        // so a page can look short; a full page goes on even without a cursor, in case Hawk stops sending it.
+        if ((!more && events.length < PAGE_SIZE) || report.removed === removedBefore) {
           break;
         }
       }

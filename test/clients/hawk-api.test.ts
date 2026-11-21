@@ -327,6 +327,28 @@ describe('hawk api queries', () => {
     expect(found?.totalCount).toBe(2);
   });
 
+  it('findEventsPage says there is more when Hawk names a cursor', async () => {
+    for (let index = 0; index < 51; index += 1) {
+      hawk.store.ingest(hawk.projectId, 'errors/nodejs', eventPayload(`[e2e:fake] page item ${String(index)}`));
+    }
+
+    const page = await apiFor().findEventsPage(hawk.projectId, 'page item', signal);
+
+    expect(page.events).toHaveLength(50);
+    expect(page.more).toBe(true);
+  });
+
+  it('findEventsPage says there is no more for a page without a cursor', async () => {
+    for (let index = 0; index < 50; index += 1) {
+      hawk.store.ingest(hawk.projectId, 'errors/nodejs', eventPayload(`[e2e:fake] page item ${String(index)}`));
+    }
+
+    const page = await apiFor().findEventsPage(hawk.projectId, 'page item', signal);
+
+    expect(page.events).toHaveLength(50);
+    expect(page.more).toBe(false);
+  });
+
   it('findEvents includes the foreign event', async () => {
     hawk.api.knobs.foreignEvent = true;
 
