@@ -605,6 +605,29 @@ describe('provision', () => {
     expect(error.facts.detail).toBe('isEnabled');
   });
 
+  it('two monitors with one instance id and different addresses raise provisioning_conflict', async () => {
+    const first = provisioner();
+    const second = provisioner();
+
+    await first.provision(address('one.example.com'), signal);
+    await second.provision(address('two.example.com'), signal);
+
+    const error = await checkErrorOf(first.provision(address('one.example.com'), signal));
+
+    expect(error.errorClass).toBe('provisioning_conflict');
+    expect(error.message).toContain(`another monitor with INSTANCE_ID ${INSTANCE} rewrites the rules; give each monitor its own INSTANCE_ID`);
+  });
+
+  it('a changed address of this process alone is not a conflict', async () => {
+    const same = provisioner();
+
+    await same.provision(address('one.example.com'), signal);
+    await same.provision(address('two.example.com'), signal);
+    await same.provision(address('one.example.com'), signal);
+
+    expect(ours()).toHaveLength(1);
+  });
+
   it('warmupRemainingMs counts down on the fake clock', async () => {
     const same = provisioner();
 

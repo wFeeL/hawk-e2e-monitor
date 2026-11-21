@@ -157,6 +157,15 @@ export function ruleProjection(rule: NotificationRule | NotificationRuleInput): 
 }
 
 /**
+ * Serializes the addresses a rule delivers to.
+ * @param rule Stored rule or input.
+ * @returns JSON of the channel addresses in a fixed order.
+ */
+function endpointsOf(rule: NotificationRule | NotificationRuleInput): string {
+  return JSON.stringify(CHANNEL_NAMES.map(name => channelOf(rule.channels, name).endpoint));
+}
+
+/**
  * Finds the first matching field in which two rules differ.
  * @param stored Rule in Hawk.
  * @param wanted Wanted rule.
@@ -315,6 +324,8 @@ export function createProvisioner(deps: ProvisionerDeps): Provisioner {
   const { api, clock, projectId } = deps;
   let lastMatchChangeAtMs = restoredChange(deps, clock);
   let previousMatchChanged = false;
+  // Addresses this process wrote last, per kind: a rule that differs in addresses only after we wrote ours was rewritten by someone else.
+  const written = new Map<RuleKind, string>();
 
   // Set before the request goes out: an update that fails halfway may still have changed the rule.
   const markMatchChange = (): void => {
@@ -367,6 +378,7 @@ export function createProvisioner(deps: ProvisionerDeps): Provisioner {
         try {
           const ruleId = await mutate(async () => api.createNotificationRule(wanted, signal));
 
+          written.set(kind, endpointsOf(wanted));
           outcome = { action: 'created',
             ruleId,
             matchChanged: true };
@@ -386,6 +398,10 @@ export function createProvisioner(deps: ProvisionerDeps): Provisioner {
           ruleId: first.id,
           matchChanged: false };
       } else {
+        if (endpointsOf(first) !== endpointsOf(wanted) && written.get(kind) === endpointsOf(wanted)) {
+          throw new CheckError('provisioning_conflict', { detail: `another monitor with INSTANCE_ID ${deps.instanceId} rewrites the rules; give each monitor its own INSTANCE_ID` });
+        }
+
         if (matchDifference(first, wanted) !== undefined) {
           markMatchChange();
         }
@@ -404,6 +420,8 @@ export function createProvisioner(deps: ProvisionerDeps): Provisioner {
 
           continue;
         }
+
+        written.set(kind, endpointsOf(wanted));
 
         const difference = matchDifference(first, wanted);
 
