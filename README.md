@@ -1,11 +1,8 @@
 # hawk-e2e-monitor
 
-Синтетический E2E-мониторинг для [Hawk](https://hawk.so). Сервис работает
-отдельно от Hawk и по расписанию проходит путь пользователя: отправляет
-тестовое событие в коллектор, ждет, пока воркеры его обработают и оно появится
-в проекте через API, и проверяет, что Hawk прислал уведомление. О сбое монитор
-пишет в Telegram через @codex_bot: какой этап упал, вероятный виновник и время
-каждого этапа.
+Синтетический E2E-мониторинг для [Hawk](https://hawk.so). Монитор ведет себя
+как обычный пользователь Hawk и по расписанию запускает сценарии из таблицы
+ниже. Каждый сценарий и есть e2e-тест одного пользовательского пути.
 
 | Сценарий | Что проверяет | По умолчанию |
 |---|---|---|
@@ -36,6 +33,10 @@
 Hawk шлет уведомления только на публичные адреса, поэтому compose поднимает для
 приемника quick tunnel cloudflared (аккаунт Cloudflare не нужен).
 
+Свой Hawk на том же хосте в Docker на Linux должен слушать адрес моста docker:
+`host.docker.internal` ведет туда, и Hawk, опубликованный только на
+`127.0.0.1`, из контейнера недоступен.
+
 ## Быстрый старт
 
 Нужны Docker 25+ с Compose 2.24+ (или podman 5 с `podman compose`).
@@ -58,22 +59,17 @@ cp .env.example .env
 | `RECEIVER_SECRET`, `RUN_TOKEN` | случайные строки от 32 символов: `openssl rand -hex 24` |
 | `ALERT_NOTIFY_URL` | адрес от @codex_bot для алертов, см. [Алерты](#алерты) |
 
-Значения с `$` берите в одинарные кавычки. Запуск:
+Запуск:
 
 ```sh
 docker compose up -d --build
 docker compose ps
 ```
 
-Через ~15 с monitor станет healthy, и начнутся прогоны. При ошибке в
-конфигурации монитор не стартует и называет переменную в
-`docker compose logs monitor`. После правки `.env` нужен `docker compose up -d`,
-`restart` новые значения не подхватит.
-
 Монитор занимает на хосте порт `127.0.0.1:8090`; если он занят, задайте в `.env`
-`MONITOR_INTERNAL_PORT`. Свой Hawk на том же хосте в Docker на Linux должен
-слушать адрес моста docker: `host.docker.internal` ведет туда, и Hawk,
-опубликованный только на `127.0.0.1`, из контейнера недоступен.
+`MONITOR_INTERNAL_PORT`.
+
+## Команды
 
 Команды монитора удобно звать через alias (с podman вместо `docker compose`
 пишите `podman compose`):
@@ -87,29 +83,44 @@ hem history --stats
 ```
 
 `hem run` просит работающий монитор сразу прогнать все включенные сценарии
-(или названные) и печатает строку на каждый. Вручную сценарий можно запускать
-раз в минуту. Код выхода 0, если все прогоны `ok`, 1, если хотя бы один не
-прошел, 2, если монитор не удалось спросить. Строки endpoints-probe в общей
-истории скрыты, их показывает `hem history --scenario endpoints-probe`.
+(или названные) и печатает строку на каждый:
 
-## Проверить, что монитор ловит сбои
+```text
+send-and-receive-event  ok  5.7 s
+check-notification      ok  5.2 s
+sourcemaps              ok  6.2 s
+sentry-envelope         ok  5.7 s
+endpoints-probe         ok  33 ms
+```
 
-Для учений нужны заполненный `ALERT_NOTIFY_URL` и, чтобы видеть графики,
-профиль `observability` (см. [Метрики](#метрики-grafana-и-heartbeat)). В
-Grafana смотрите панели «Status by scenario» и «Failures by stage and class».
+Вручную сценарий можно запускать раз в минуту (интервал задает
+`MANUAL_MIN_INTERVAL_MS`, 0 снимает ограничение). Строки endpoints-probe в
+общей истории скрыты, их показывает `hem history --scenario endpoints-probe`.
 
-**Пропал путь уведомлений.** Гасим туннель:
+## Имитация сбоев
+
+Нужны заполненный `ALERT_NOTIFY_URL` и, чтобы видеть графики, профиль
+`observability` (см. [Метрики](#метрики-grafana-и-heartbeat)). В Grafana
+смотрите панели «Status by scenario» и «Failures by stage and class».
+
+**Дропаем туннель сообщений:**
 
 ```sh
 docker compose stop tunnel
 hem run check-notification
 ```
 
-Прогон падает на `notification_setup` с `tunnel_unavailable`, в Telegram
-приходит FAILED с этапом, классом и виновником, в Grafana сценарий краснеет.
-Без ручного запуска endpoints-probe покажет сбой в течение 90 с (этап
-`receiver_availability` в `hem history --scenario endpoints-probe`), а алерт
-пришлет после трех красных проб подряд, через 3-4,5 мин. Чиним:
+Что ожидается:
+
+- прогон падает на этапе `notification_setup` с классом `tunnel_unavailable`;
+- в Telegram приходит FAILED с этапом, классом и виновником;
+- в Grafana сценарий краснеет;
+- без ручного запуска сбой заметит endpoints-probe: красная проба появится в
+  течение 90 с (этап `receiver_availability` в
+  `hem history --scenario endpoints-probe`), алерт придет после трех красных
+  проб подряд, через 3-4,5 мин.
+
+Чиним:
 
 ```sh
 docker compose start tunnel
@@ -122,19 +133,23 @@ hem run check-notification
 прогон снова упал, повторите еще через минуту. После успешного прогона приходит
 RECOVERED.
 
-**Коллектор Hawk недоступен.** Временно поставьте в `.env`
-`HAWK_COLLECTOR_URL=http://127.0.0.1:59999` (там никто не слушает) и выполните:
+**Имитируем недоступный коллектор Hawk.** Временно поставьте в `.env`
+`HAWK_COLLECTOR_URL=http://127.0.0.1:59999` (там никто не слушает), затем:
 
 ```sh
 docker compose up -d
 hem run send-and-receive-event
 ```
 
-Перед `hem run` дождитесь `healthy` в `docker compose ps`. Прогон падает на
-`collector_availability` с `collector_unavailable` и виновником `hawk`, так же
-как при настоящем падении коллектора. Верните прежнее
-значение (для hawk.so пустое), снова `docker compose up -d` и `hem run`, придет
-RECOVERED.
+Что ожидается:
+
+- прогон падает на этапе `collector_availability` с классом
+  `collector_unavailable` и виновником `hawk`, так же как при настоящем падении
+  коллектора;
+- в Telegram приходит FAILED.
+
+Верните прежнее значение (для hawk.so пустое), снова `docker compose up -d` и
+`hem run`: придет RECOVERED.
 
 Остановленные воркеры и рестарты коллектора можно устроить только на своем
 Hawk: монитор работает с ним так же, достаточно поменять адреса в `.env`.
@@ -272,6 +287,23 @@ sequenceDiagram
 той же причиной новых сообщений не дают. Недоставленный алерт монитор
 повторяет до 24 часов.
 
+Так выглядит сообщение о сбое:
+
+```text
+🔴 FAILED send-and-receive-event
+instance prod | outage
+
+event_visible failed after 2m 0s
+class event_not_found | culprit hawk
+Event did not appear within 2m 0s: API answered 20 times, failed 3 times
+
+run #12 raaaaaaaaaaaaaaaa
+started 2026-03-10 12:00:00 UTC
+
+event latency 2.1 s
+before: collector_availability 120 ms, api_availability 340 ms, collector_accept 80 ms
+```
+
 ### Метрики, Grafana и heartbeat
 
 `GET /metrics` отдает прогоны и падения по сценарию, этапу, классу и
@@ -313,9 +345,11 @@ Heartbeat ловит случай, когда остановился сам мо
   подряд контейнер перезапускается.
 - Контейнер tunnel, который остался `unhealthy` (cloudflared жив, но без
   связи), Docker сам не перезапускает: `docker compose restart tunnel`.
-
-Прогон шлет одно событие (два при повторе), ~5000 в месяц на сценарий; монитор
-их удаляет, так что квоту они почти не тратят.
+- Сеть, которая рвет долгие соединения (некоторые VPN), обрывает quick tunnel,
+  и приемник какое-то время отвечает 530. Короткие окна монитор пережидает, а
+  уведомление, пропавшее за время переподключения, помечает
+  `tunnel_reconnected` с виновником `network`. Выход: исключить cloudflared из
+  VPN или задать постоянный адрес в `PUBLIC_BASE_URL`.
 
 ## telegram-delivery
 
@@ -367,9 +401,18 @@ http|ws` и `--repeat`. Для check-notification поднимите
 `cloudflared tunnel --no-autoupdate --protocol http2 --url http://127.0.0.1:8091 --metrics 127.0.0.1:20241`
 и задайте `TUNNEL_METRICS_URL=http://127.0.0.1:20241`. Рядом с Docker-монитором
 берите другой `INSTANCE_ID`, иначе два монитора перепишут друг другу правила.
-Тесты: `npm test` (без сети) и `E2E_HAWK=1 npm run test:e2e` (против Hawk из
-`.env`, после `set -a && . ./.env && set +a`). e2e-набору нужны тот же туннель с
-`TUNNEL_METRICS_URL` и свой `INSTANCE_ID`, как для `check`.
+
+### Тесты
+
+```sh
+npm test
+E2E_HAWK=1 npm run test:e2e
+```
+
+`npm test` гоняет юнит-тесты против фейкового Hawk, сеть ему не нужна.
+`test:e2e` идет против Hawk из `.env` (перед ним `set -a && . ./.env && set +a`),
+ему нужны тот же туннель с `TUNNEL_METRICS_URL` и свой `INSTANCE_ID`, как для
+`check`.
 
 ## Настройка
 
@@ -384,7 +427,7 @@ http|ws` и `--repeat`. Для check-notification поднимите
 | Расписание | `SCENARIOS`, `CHECK_INTERVAL_MS`, `PROBE_INTERVAL_MS`, `SOURCEMAPS_INTERVAL_MS`, `SENTRY_ENVELOPE_INTERVAL_MS`, `TELEGRAM_DELIVERY_INTERVAL_MS` |
 | Таймауты и повторы | `HTTP_TIMEOUT_MS`, `RUN_TIMEOUT_MS`, `*_TIMEOUT_MS` этапов, `RETRY_ATTEMPTS`, `RETRY_DELAYS_MS` |
 | Уведомления | `RECEIVER_SECRET`, `PUBLIC_BASE_URL` или `TUNNEL_METRICS_URL`, `NOTIFY_LOOP` |
-| Алерты и ручной запуск | `ALERT_NOTIFY_URL`, `ALERT_AFTER_FAILURES`, `PROBE_ALERT_AFTER_FAILURES`, `RUN_TOKEN` |
+| Алерты и ручной запуск | `ALERT_NOTIFY_URL`, `ALERT_AFTER_FAILURES`, `PROBE_ALERT_AFTER_FAILURES`, `RUN_TOKEN`, `MANUAL_MIN_INTERVAL_MS` |
 | Наблюдаемость | `HEARTBEAT_URL`, `GARAGE_URL` |
 | Telegram | `TELEGRAM_*`, см. [telegram-delivery](#telegram-delivery) |
 
@@ -395,40 +438,6 @@ http|ws` и `--repeat`. Для check-notification поднимите
 `e2e-<INSTANCE_ID>-<runId>`: удалить их API Hawk не позволяет. new-project
 создает и удаляет проект, только для своего Hawk.
 
-## О тестовом задании
+## Лицензия
 
-Репозиторий сделан как тестовое задание для CodeX.
-
-Проверено:
-
-- юнит-тесты против фейкового Hawk на случайных портах и с фейковыми часами;
-- все сценарии против локального Hawk, собранного из репозиториев CodeX, в
-  том числе с остановленными воркерами, рестартами коллектора и API, убитым
-  монитором;
-- против hawk.so: все сценарии, кроме new-project; compose в podman 5.7 и
-  Docker Desktop на macOS.
-
-Ограничения:
-
-- Нужен доступ к Hawk: отдельный проект, его токен и админ воркспейса, см.
-  [Что нужно от Hawk](#что-нужно-от-hawk).
-- Таймауты фиксированные, пороги деградации по собранным длительностям сервис
-  не считает.
-- Монитор видит, что @codex_bot принял алерт, но не то, что он дошел до чата.
-- Quick tunnel держит одно соединение с Cloudflare (TCP 443). Сети, которые
-  рвут долгие соединения (некоторые VPN), дают окна с ответом 530: монитор
-  пережидает их при проверке приемника, а пропавшее за время переподключения
-  уведомление помечает `tunnel_reconnected` (виновник `network`, хотя мог
-  ошибиться и Hawk). Выход: исключить cloudflared из VPN или задать постоянный
-  адрес в `PUBLIC_BASE_URL`.
-- telegram-delivery зависит от Bot-to-Bot Communication Mode (Telegram Bot API
-  10.0).
-
-TODO:
-
-- [x] send-and-receive-event, check-notification
-- [x] постоянная работа: расписание, история, алерты, compose
-- [x] наблюдаемость: метрики, Grafana, heartbeat, ручной запуск, endpoints-probe
-- [x] доставка в Telegram, правило с порогом, source maps, Sentry, новый проект
-- [ ] пороги деградации по собранным длительностям этапов
-- [ ] общий цикл шагов для check-notification (сейчас он повторяет `runSteps`)
+[MIT](LICENSE)
