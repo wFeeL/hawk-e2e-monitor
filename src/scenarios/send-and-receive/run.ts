@@ -39,8 +39,6 @@ export async function runSendAndReceive(deps: ScenarioDeps, options: PlanOptions
       [eventVisibleStage(timeouts.eventVisible)],
       [eventRepeatedStage(timeouts.eventRepeated)],
     ],
-    // A failed send that may have reached the collector still needs the search and the cleanup.
-    keepGoing: failed => failed.name === 'collector_accept' && state.sendMayHaveReached,
     cleanup: cleanupStage(timeouts.cleanup) });
 
   return buildRunResult({ scenario: SEND_AND_RECEIVE_EVENT,

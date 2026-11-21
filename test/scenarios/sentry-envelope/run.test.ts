@@ -5,7 +5,7 @@ import { outcomeOf } from '../../../src/storage/outcome.js';
 import { runSentryEnvelope } from '../../../src/scenarios/sentry-envelope/run.js';
 import { startFakeHawk } from '../../support/fake-hawk/index.js';
 import type { FakeHawk } from '../../support/fake-hawk/index.js';
-import { createTestDeps } from '../../support/scenario.js';
+import { TIMEOUT_LIMITS, createTestDeps } from '../../support/scenario.js';
 import type { TestDepsOptions } from '../../support/scenario.js';
 
 let hawk: FakeHawk;
@@ -46,6 +46,21 @@ function stageOf(result: RunResult, name: StageName): StageResult {
 
   return found;
 }
+
+describe('an envelope send that never returns', () => {
+  it('marks the event as possibly sent and leaves the search to the cleanup', async () => {
+    const { deps } = createTestDeps(hawk, { env: { SCENARIOS: 'sentry-envelope',
+      ...TIMEOUT_LIMITS } });
+    const result = await runSentryEnvelope({ ...deps,
+      collector: { ...deps.collector,
+        sendEnvelope: async () => new Promise<never>(() => undefined) } }, { sequence: 1 });
+
+    expect(stageOf(result, 'collector_accept').status).toBe('failed');
+    expect(stageOf(result, 'event_visible').status).toBe('skipped');
+    expect(stageOf(result, 'cleanup').details).toMatchObject({ found: false });
+    expect(result.sendMayHaveReached).toBe(true);
+  });
+});
 
 describe('a healthy run', () => {
   it('posts the envelope, finds the event that came through the Sentry path and removes it', async () => {

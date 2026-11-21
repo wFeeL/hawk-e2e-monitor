@@ -105,6 +105,33 @@ function seconds(iso: string): number {
   return Date.parse(iso) / 1000;
 }
 
+describe('duration buckets', () => {
+  /**
+   * Reads the upper bounds of a histogram after one run was counted.
+   * @param name Name of the histogram.
+   * @returns Bounds in the order they are printed.
+   */
+  async function bounds(name: string): Promise<string[]> {
+    const { metrics, families } = fixture();
+
+    metrics.onRunFinished(row(), runResultFixture({ stages: [stageFixture('collector_availability', 'ok', 200)] }));
+
+    const family = (await families()).find(item => item.name === name);
+
+    return (family?.values ?? []).filter(series => series.metricName === `${name}_bucket`)
+      .map(series => String(series.labels.le))
+      .filter((bound, index, all) => all.indexOf(bound) === index);
+  }
+
+  it('reach 600 s for a run, the longest a scenario may take', async () => {
+    expect(await bounds('hawk_e2e_run_duration_seconds')).toEqual(['1', '5', '15', '30', '60', '120', '180', '300', '450', '600', '+Inf']);
+  });
+
+  it('start at 10 ms for a stage', async () => {
+    expect((await bounds('hawk_e2e_stage_duration_seconds')).slice(0, 4)).toEqual(['0.01', '0.025', '0.05', '0.1']);
+  });
+});
+
 describe('onRunFinished', () => {
   it('counts a failed run with its stage, class and culprit', async () => {
     const { metrics, read } = fixture();

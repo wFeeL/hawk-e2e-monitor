@@ -146,9 +146,8 @@ export async function runCheckNotification(deps: NotificationDeps, options: Plan
         const [first] = results;
 
         stages.push(...results);
-        // A failed send that may have reached the collector still needs the search and the cleanup.
         // A failed notification does not stop the repeat; a failed search does.
-        skipRest = first?.status === 'failed' && !(first.name === 'collector_accept' && state.sendMayHaveReached);
+        skipRest = first?.status === 'failed';
       }
     }
 

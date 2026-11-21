@@ -28,7 +28,9 @@ function bucketsOf(list: string): number[] {
   return list.split(' ').map(Number);
 }
 
-const STAGE_BUCKETS = bucketsOf('0.1 0.25 0.5 1 2.5 5 10 20 30 60 120 300');
+const STAGE_BUCKETS = bucketsOf('0.01 0.025 0.05 0.1 0.25 0.5 1 2.5 5 10 20 30 60 120 300');
+// A run lasts from seconds to the ten-minute watchdog, so the bounds reach 600 s.
+const RUN_BUCKETS = bucketsOf('1 5 15 30 60 120 180 300 450 600');
 const LATENCY_BUCKETS = bucketsOf('0.25 0.5 1 2 5 10 20 30 60 120 180');
 
 /** Value of the `status` label of `runs_total`. */
@@ -184,7 +186,7 @@ export function createMetrics(options: MetricsOptions): MonitorMetrics {
   const runDuration = new Histogram({ name: `${PREFIX}run_duration_seconds`,
     help: 'Duration of a run.',
     labelNames: ['scenario'],
-    buckets: STAGE_BUCKETS,
+    buckets: RUN_BUCKETS,
     registers });
   const stageDuration = new Histogram({ name: `${PREFIX}stage_duration_seconds`,
     help: 'Duration of a stage.',

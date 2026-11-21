@@ -23,12 +23,17 @@ export function collectorAcceptStage(timeoutMs: number, beforeSend?: () => void)
       beforeSend?.();
 
       const startedMs = clock.monotonicMs();
+
+      // A send that never returns leaves the flag up, so the cleanup still looks for the event.
+      state.sendMayHaveReached = true;
+
       const outcome = await collector.send(shapeOf(context).message(context), plan.transport, signal);
 
       state.sendOutcome = outcome;
 
       switch (outcome.kind) {
         case 'accepted':
+          state.sendMayHaveReached = false;
           state.acceptedAtMs = clock.monotonicMs();
 
           return { status: 'ok',
@@ -42,6 +47,8 @@ export function collectorAcceptStage(timeoutMs: number, beforeSend?: () => void)
             details: { attempts: outcome.attempts,
               warning: `The collector did not confirm the event (${outcome.cause.message}); SDKs of users may see an error` } };
         case 'rejected':
+          state.sendMayHaveReached = false;
+
           return { status: 'failed',
             error: outcome.error,
             details: { attempts: outcome.attempts } };

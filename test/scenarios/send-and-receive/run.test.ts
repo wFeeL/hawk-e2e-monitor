@@ -592,6 +592,19 @@ describe('late duplicate', () => {
     expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
   });
 
+  it('a send that never returns still marks the event as possibly sent and leaves the search to the cleanup', async () => {
+    const { deps } = createTestDeps(hawk, { env: TIMEOUT_LIMITS });
+    const result = await runSendAndReceive({ ...deps,
+      collector: { ...deps.collector,
+        send: async () => new Promise<never>(() => undefined) } }, { sequence: 1 });
+
+    expect(stageOf(result, 'collector_accept')).toMatchObject({ status: 'failed',
+      errorClass: 'monitor_internal' });
+    expect(stageOf(result, 'event_visible').status).toBe('skipped');
+    expect(stageOf(result, 'cleanup').details).toMatchObject({ found: false });
+    expect(result.sendMayHaveReached).toBe(true);
+  });
+
   it('the pause before the recheck is wide enough for a copy that arrives during it', async () => {
     const waitMs = 50;
     const { deps } = createTestDeps(hawk, { env: { LATE_DUPLICATE_WAIT_MS: String(waitMs) } });

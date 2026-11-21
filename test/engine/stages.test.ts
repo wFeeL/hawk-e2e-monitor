@@ -65,6 +65,33 @@ describe('runStage', () => {
       culprit: 'hawk' });
   });
 
+  it.each([
+    ['a cyclic object', () => {
+      const loop: Record<string, unknown> = {};
+
+      loop.self = loop;
+
+      return loop;
+    }],
+    ['a bigint', () => 10n],
+    ['a cyclic object without a prototype', () => {
+      const loop = Object.create(null) as Record<string, unknown>;
+
+      loop.self = loop;
+
+      return loop;
+    }],
+  ])('a body that throws %s still ends as monitor_internal', async (_name, make) => {
+    const clock = createFakeClock();
+    const result = await runStage({ name: 'cleanup',
+      timeoutMs: 1000,
+      run: () => Promise.reject(make()) }, undefined, { clock,
+      runSignal: neverAbort() });
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'monitor_internal' });
+  });
+
   it('failed without an error is monitor_internal', async () => {
     const clock = createFakeClock();
     const result = await runStage({ name: 'cleanup',

@@ -59,14 +59,27 @@ const DEFAULT_GRACE_MS = 1000;
 /**
  * Turns an unknown thrown value into text.
  * @param error Anything thrown.
- * @returns Message of an `Error`, a string itself, otherwise JSON.
+ * @returns Message of an `Error`, a string itself, otherwise JSON, then `String(error)`, then a fixed text when nothing can print it.
  */
 function describeThrown(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
   }
 
-  return typeof error === 'string' ? error : JSON.stringify(error) ?? 'unknown error';
+  if (typeof error === 'string') {
+    return error;
+  }
+
+  // A cyclic object or a BigInt breaks JSON.stringify, and an object without a prototype breaks String; the stage must still end.
+  try {
+    return JSON.stringify(error) ?? 'unknown error';
+  } catch {
+    try {
+      return String(error);
+    } catch {
+      return 'unprintable error';
+    }
+  }
 }
 
 /**
