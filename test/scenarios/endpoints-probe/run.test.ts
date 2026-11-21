@@ -1,7 +1,15 @@
+import { createServer } from 'node:http';
+import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { RunResult, StageResult } from '../../../src/engine/result.js';
+import { createMutableRedactor } from '../../../src/errors/redact.js';
+import { CheckError } from '../../../src/errors/taxonomy.js';
+import { probeReceiver } from '../../../src/notifications/address.js';
 import { runEndpointsProbe } from '../../../src/scenarios/endpoints-probe/run.js';
 import type { ProbeOptions } from '../../../src/scenarios/endpoints-probe/run.js';
+import type { ReceiverCheck } from '../../../src/scenarios/endpoints-probe/stages.js';
+import { httpAddress } from '../../support/address.js';
 import { startFakeHawk } from '../../support/fake-hawk/index.js';
 import type { FakeHawk } from '../../support/fake-hawk/index.js';
 import { BUNDLE_PATH, startFakeGarage } from '../../support/fake-garage.js';
@@ -171,5 +179,146 @@ describe('runEndpointsProbe', () => {
     expect(result.status).toBe('failed');
     expect(text).not.toContain(hawk.password);
     expect(text).not.toContain(hawk.token);
+  });
+});
+
+/**
+ * Builds a receiver check that answers well unless a part is replaced.
+ * @param replace Parts of the check to swap for others.
+ * @returns A check with every part filled.
+ */
+function receiverCheck(replace: Partial<ReceiverCheck> = {}): ReceiverCheck {
+  return { findAddress: async () => Promise.resolve(httpAddress(1)),
+    probe: async () => Promise.resolve(),
+    tunnelWaited: () => true,
+    addSecret: () => undefined,
+    ...replace };
+}
+
+describe('runEndpointsProbe with a receiver check', () => {
+  let receiver: Server | undefined;
+
+  afterEach(async () => {
+    const closing = receiver;
+
+    receiver = undefined;
+
+    if (closing) {
+      closing.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        closing.close(() => {
+          resolve();
+        });
+      });
+    }
+  });
+
+  /**
+   * Runs the probe with a receiver check.
+   * @param check Check to give.
+   * @param deps Other replacements of the dependencies.
+   * @returns Result of the run.
+   */
+  async function probeWith(check: ReceiverCheck | undefined, deps: Partial<Parameters<typeof runEndpointsProbe>[0]> = {}): Promise<RunResult> {
+    const { deps: base } = createTestDeps(hawk);
+
+    return runEndpointsProbe({ ...base,
+      ...deps,
+      ...check === undefined ? {} : { receiverCheck: check } }, { sequence: 1 });
+  }
+
+  it('adds receiver_availability last, ok when the address is found and the receiver answers', async () => {
+    const result = await probeWith(receiverCheck());
+
+    expect(result.status).toBe('ok');
+    expect(result.stages.map(stage => [stage.name, stage.status])).toEqual([
+      ['collector_availability', 'ok'],
+      ['api_availability', 'ok'],
+      ['receiver_availability', 'ok'],
+    ]);
+  });
+
+  it('adds no such stage without a receiver check', async () => {
+    const result = await probeWith(undefined);
+
+    expect(result.stages.map(stage => stage.name)).not.toContain('receiver_availability');
+  });
+
+  it('fails at receiver_availability with tunnel_unavailable when the tunnel gives no address', async () => {
+    const result = await probeWith(receiverCheck({ findAddress: async () => Promise.reject(new CheckError('tunnel_unavailable', { detail: 'no tunnel' })) }));
+
+    expect(result).toMatchObject({ status: 'failed',
+      failedStage: 'receiver_availability',
+      errorClass: 'tunnel_unavailable',
+      culprit: 'monitor' });
+  });
+
+  it('keeps receiver_unreachable and masks the host of an address that answers 530', async () => {
+    receiver = createServer((req, res) => {
+      req.resume();
+      res.statusCode = 530;
+      res.end();
+    });
+    await new Promise<void>((resolve) => {
+      receiver?.listen(0, '127.0.0.1', resolve);
+    });
+
+    const address = httpAddress((receiver.address() as AddressInfo).port, 'tunnel');
+    const masking = createMutableRedactor([]);
+    const { deps: base } = createTestDeps(hawk);
+    const result = await runEndpointsProbe({ ...base,
+      redact: masking.redact,
+      receiverCheck: receiverCheck({ findAddress: async () => Promise.resolve(address),
+        probe: async (found, signal) => probeReceiver(found, 'secret', 'nonce', { httpTimeoutMs: 500,
+          clock: base.clock,
+          attempts: 1,
+          retry: base.config.retry }, signal),
+        addSecret: masking.add }) }, { sequence: 1 });
+
+    expect(result).toMatchObject({ status: 'failed',
+      failedStage: 'receiver_availability',
+      errorClass: 'receiver_unreachable' });
+    expect(result.message).toContain('answered HTTP 530');
+    expect(JSON.stringify(result)).not.toContain(address.hostname);
+  });
+
+  it('names the collector first when the collector and the tunnel fail in one run', async () => {
+    hawk.collector.knobs.health = { status: 500,
+      redis: false,
+      mongo: true };
+
+    const result = await probeWith(receiverCheck({ findAddress: async () => Promise.reject(new CheckError('tunnel_unavailable', { detail: 'no tunnel' })) }));
+
+    expect(result.failedStage).toBe('collector_availability');
+    expect(result.stages.find(stage => stage.name === 'receiver_availability')?.status).toBe('failed');
+  });
+
+  it('skips the stage with tunnel_starting while the first wait for the tunnel is pending, and the run is ok', async () => {
+    let looked = false;
+    const result = await probeWith(receiverCheck({ tunnelWaited: () => false,
+      findAddress: async () => {
+        looked = true;
+
+        return Promise.resolve(httpAddress(1));
+      } }));
+
+    expect(result.status).toBe('ok');
+    expect(result.stages.find(stage => stage.name === 'receiver_availability')).toMatchObject({ status: 'skipped',
+      details: { reason: 'tunnel_starting' } });
+    expect(looked).toBe(false);
+  });
+
+  it('gives the redactor the base url, the hostname and the bare hostname before the probe', async () => {
+    const added: string[] = [];
+
+    await probeWith(receiverCheck({ addSecret: (value) => {
+      added.push(value);
+    },
+    probe: async () => {
+      expect(added).toEqual(['http://127.0.0.1:1', '127.0.0.1:1', '127.0.0.1']);
+
+      return Promise.resolve();
+    } }));
+    expect(added).toHaveLength(3);
   });
 });

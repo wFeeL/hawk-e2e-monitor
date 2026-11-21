@@ -6,6 +6,8 @@ import type { Config } from './load.js';
 export type ScenarioWithEvent = Exclude<ScenarioName, typeof ENDPOINTS_PROBE>;
 
 const NEW_PROJECT_ALERT_AFTER_FAILURES = 1;
+const RECEIVER_REQUESTS = 2;
+const RECEIVER_SLACK_MS = 1000;
 
 /** Settings that may differ from one scenario to another. */
 export interface ScenarioSettings {
@@ -25,13 +27,32 @@ export interface ScenarioSettings {
 export const PROBE_WATCHDOG_MARGIN_MS = 10_000;
 
 /**
+ * Gives the time limit of the stage `receiver_availability`.
+ * @param httpTimeoutMs Time limit of one HTTP request.
+ * @returns Time for one address lookup and one probe, each a single attempt, and a second of slack.
+ */
+export function receiverAvailabilityTimeoutMs(httpTimeoutMs: number): number {
+  return RECEIVER_REQUESTS * httpTimeoutMs + RECEIVER_SLACK_MS;
+}
+
+/**
+ * Tells whether a scenario that needs the tunnel is enabled, which is when the probe checks the receiver.
+ * @param scenarios Enabled scenarios.
+ * @returns True for check-notification or telegram-delivery.
+ */
+export function usesTunnel(scenarios: readonly ScenarioName[]): boolean {
+  return scenarios.includes(CHECK_NOTIFICATION) || scenarios.includes(TELEGRAM_DELIVERY);
+}
+
+/**
  * Finds the settings of the probe: its own interval, threshold and retention, and a watchdog from the timeouts of its stages.
  * @param config Validated configuration.
  * @returns Settings of `endpoints-probe`; it has no cleanup.
  */
 function probeSettings(config: Config): ScenarioSettings {
   const { timeouts, hawk, monitoring } = config;
-  const budgetMs = timeouts.collectorAvailability + timeouts.apiAvailability + (hawk.garageUrl === undefined ? 0 : timeouts.garage);
+  const budgetMs = timeouts.collectorAvailability + timeouts.apiAvailability + (hawk.garageUrl === undefined ? 0 : timeouts.garage)
+    + (usesTunnel(monitoring.scenarios) ? receiverAvailabilityTimeoutMs(config.httpTimeoutMs) : 0);
 
   return {
     intervalMs: monitoring.probe.intervalMs,

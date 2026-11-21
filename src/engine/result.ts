@@ -21,6 +21,7 @@ export const STAGE_NAMES = [
   'threshold_formed',
   'cleanup',
   'garage_availability',
+  'receiver_availability',
 ] as const;
 
 /** One of `STAGE_NAMES`. */
@@ -53,7 +54,7 @@ export interface StageDetails {
   /** Degradation codes the stage names itself. */
   degraded?: DegradedCode[];
   /** Why the stage was skipped. */
-  reason?: 'rule_cache_warmup';
+  reason?: 'rule_cache_warmup' | 'tunnel_starting';
   /** Time left of the rule cache warmup. */
   warmupRemainingMs?: number;
   /** How the recount before cleanup went. */

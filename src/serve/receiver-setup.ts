@@ -140,6 +140,8 @@ export interface ReceiverRuntime {
   lastHostname: LastHostname;
   /** Waits for the tunnel once for the process, later callers get the same wait; never rejects. A wait that its caller cancelled is not shared: the next caller waits again. */
   waitForTunnel: (signal: AbortSignal) => Promise<void>;
+  /** False until a wait for the tunnel has ended for a caller that did not cancel it. */
+  tunnelWaited: () => boolean;
   /** Readiness check of the receiver. */
   readiness: Check[];
 }
@@ -187,6 +189,7 @@ async function startRuntime(context: RunnerContext): Promise<ReceiverRuntime> {
     clock,
     retry: config.retry }, signal);
   let tunnel: Promise<void> | undefined;
+  let waited = false;
 
   return {
     settings,
@@ -205,8 +208,12 @@ async function startRuntime(context: RunnerContext): Promise<ReceiverRuntime> {
           signal,
           pollMs: overrides.tunnelPollMs ?? TUNNEL_POLL_MS }).then(() => {
           // A wait that was cut short says nothing about the tunnel, so the next scenario must not inherit it.
-          if (signal.aborted && tunnel === own) {
-            tunnel = undefined;
+          if (signal.aborted) {
+            if (tunnel === own) {
+              tunnel = undefined;
+            }
+          } else {
+            waited = true;
           }
         });
 
@@ -215,6 +222,7 @@ async function startRuntime(context: RunnerContext): Promise<ReceiverRuntime> {
 
       return tunnel;
     },
+    tunnelWaited: () => waited,
     readiness: [{ name: 'receiver',
       run: async () => Promise.resolve(!receiverClosed) }],
   };

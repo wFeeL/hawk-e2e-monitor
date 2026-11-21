@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { scenarioSettings } from '../../src/config/scenario.js';
+import { receiverAvailabilityTimeoutMs, scenarioSettings } from '../../src/config/scenario.js';
+import type { ScenarioName } from '../../src/scenarios/names.js';
 import { testConfig } from '../support/config.js';
 
 describe('scenarioSettings', () => {
@@ -77,5 +78,23 @@ describe('scenarioSettings', () => {
         garage: 400 } };
 
     expect(scenarioSettings(config, 'endpoints-probe').watchdogMs).toBe(11_000);
+  });
+
+  it('adds the receiver check to the watchdog of the probe when a notification scenario is enabled', () => {
+    const base = testConfig();
+
+    for (const notification of ['check-notification', 'telegram-delivery'] as const) {
+      const config = { ...base,
+        monitoring: { ...base.monitoring,
+          scenarios: ['endpoints-probe', notification] satisfies ScenarioName[] } };
+
+      // 10 600 ms as without a notification scenario, plus 2 * 100 ms of HTTP and 1000 ms.
+      expect(scenarioSettings(config, 'endpoints-probe').watchdogMs).toBe(10_600 + 1200);
+    }
+  });
+
+  it('gives the receiver check two HTTP timeouts and a second', () => {
+    expect(receiverAvailabilityTimeoutMs(100)).toBe(1200);
+    expect(receiverAvailabilityTimeoutMs(10_000)).toBe(21_000);
   });
 });

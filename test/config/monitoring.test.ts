@@ -25,7 +25,7 @@ describe('monitoring configuration', () => {
       SCENARIOS: undefined }))).config;
 
     expect(monitoring).toEqual({
-      scenarios: ['send-and-receive-event', 'check-notification', 'sourcemaps', 'sentry-envelope'],
+      scenarios: ['send-and-receive-event', 'check-notification', 'sourcemaps', 'sentry-envelope', 'endpoints-probe'],
       intervalMs: 600_000,
       watchdogGraceMs: 30_000,
       staggerMs: 30_000,

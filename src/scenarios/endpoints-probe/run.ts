@@ -9,8 +9,9 @@ import { followOutsideSignal } from '../run-steps.js';
 import type { ScenarioDeps } from '../shared/deps.js';
 import { apiAvailabilityStage, collectorAvailabilityStage } from '../shared/availability.js';
 import { errorOf } from '../shared/verdict.js';
-import { garageAvailabilityStage } from './stages.js';
-import type { ProbeContext } from './stages.js';
+import { receiverAvailabilityTimeoutMs } from '../../config/scenario.js';
+import { garageAvailabilityStage, receiverAvailabilityStage } from './stages.js';
+import type { ProbeContext, ReceiverCheck } from './stages.js';
 
 /** What identifies one probe. */
 export interface ProbeOptions {
@@ -20,15 +21,21 @@ export interface ProbeOptions {
   runId?: string;
 }
 
+/** What the probe needs besides the usual dependencies. */
+export interface ProbeDeps extends ScenarioDeps {
+  /** The running receiver; only `serve` has one, so the stage is left out without it. */
+  receiverCheck?: ReceiverCheck;
+}
+
 /**
- * Runs the probe once: the collector, the API and, with a Garage address, Garage answer.
+ * Runs the probe once: the collector, the API and, with a Garage address, Garage answer; with a receiver check, the receiver behind the tunnel answers too.
  * The stages do not depend on each other, so they run side by side and a second failure shows too; the verdict names the first failed stage in the order of the stages.
  * No event is sent, so there is nothing to clean up.
- * @param deps Configuration, clients, clock, logger and redactor.
+ * @param deps Configuration, clients, clock, logger, redactor and, in `serve`, the receiver check.
  * @param options Run number and id.
  * @returns Result with secrets masked; never rejects for failures of Hawk.
  */
-export async function runEndpointsProbe(deps: ScenarioDeps, options: ProbeOptions): Promise<RunResult> {
+export async function runEndpointsProbe(deps: ProbeDeps, options: ProbeOptions): Promise<RunResult> {
   const { config, clock } = deps;
   const { timeouts } = config;
   const context: ProbeContext = { config,
@@ -39,6 +46,7 @@ export async function runEndpointsProbe(deps: ScenarioDeps, options: ProbeOption
     collectorAvailabilityStage(timeouts.collectorAvailability),
     apiAvailabilityStage(timeouts.apiAvailability),
     ...config.hawk.garageUrl === undefined ? [] : [garageAvailabilityStage(timeouts.garage)],
+    ...deps.receiverCheck === undefined ? [] : [receiverAvailabilityStage(receiverAvailabilityTimeoutMs(config.httpTimeoutMs), deps.receiverCheck)],
   ];
   const startedAt = clock.wallTime().toISOString();
   const t0 = clock.monotonicMs();

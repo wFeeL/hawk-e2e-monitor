@@ -3,7 +3,7 @@ import { decodeIntegrationToken } from '../hawk/token.js';
 import { blockedPortOf } from '../net/blocked-ports.js';
 import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, NEW_PROJECT, SCENARIO_NAMES, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS, TELEGRAM_DELIVERY } from '../scenarios/names.js';
 import { MAX_DURATION_MS, boundedDurationMs, durationMs } from './duration.js';
-import { PROBE_WATCHDOG_MARGIN_MS, watchdogOf } from './scenario.js';
+import { PROBE_WATCHDOG_MARGIN_MS, receiverAvailabilityTimeoutMs, usesTunnel, watchdogOf } from './scenario.js';
 
 const DEFAULT_INTERNAL_PORT = 8090;
 const MAX_PORT = 65_535;
@@ -36,7 +36,7 @@ const DEFAULT_TELEGRAM_DELIVERY_TIMEOUT_MS = 120_000;
 const DEFAULT_TELEGRAM_PROBE_TIMEOUT_MS = 30_000;
 const DEFAULT_TELEGRAM_API_URL = 'https://api.telegram.org';
 const DEFAULT_TELEGRAM_SENDER = 'codex_bot';
-const DEFAULT_SCENARIOS = [SEND_AND_RECEIVE_EVENT, CHECK_NOTIFICATION, SOURCEMAPS, SENTRY_ENVELOPE].join(',');
+const DEFAULT_SCENARIOS = [SEND_AND_RECEIVE_EVENT, CHECK_NOTIFICATION, SOURCEMAPS, SENTRY_ENVELOPE, ENDPOINTS_PROBE].join(',');
 const DEFAULT_STAGGER_MS = 30_000;
 const DEFAULT_TUNNEL_READY_TIMEOUT_MS = 120_000;
 const MAX_TUNNEL_READY_TIMEOUT_MS = 600_000;
@@ -457,7 +457,8 @@ function checkScenarioIntervals(env: z.output<typeof baseSchema>, ctx: z.Refinem
 function checkProbe(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx): void {
   // A configuration without the probe was valid before the probe existed, so its variables are not judged.
   if (Array.isArray(env.SCENARIOS) && env.SCENARIOS.includes(ENDPOINTS_PROBE)) {
-    const budget = env.COLLECTOR_AVAILABILITY_TIMEOUT_MS + env.API_AVAILABILITY_TIMEOUT_MS + (env.GARAGE_URL === undefined ? 0 : env.GARAGE_TIMEOUT_MS);
+    const budget = env.COLLECTOR_AVAILABILITY_TIMEOUT_MS + env.API_AVAILABILITY_TIMEOUT_MS + (env.GARAGE_URL === undefined ? 0 : env.GARAGE_TIMEOUT_MS)
+      + (usesTunnel(env.SCENARIOS) ? receiverAvailabilityTimeoutMs(env.HTTP_TIMEOUT_MS) : 0);
 
     if (env.PROBE_INTERVAL_MS > env.CHECK_INTERVAL_MS) {
       ctx.addIssue({ code: 'custom',

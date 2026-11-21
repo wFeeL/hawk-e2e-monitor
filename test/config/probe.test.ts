@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validEnv } from '../support/env.js';
+import { TEST_RECEIVER_SECRET, validEnv } from '../support/env.js';
 import { expectErrors, expectOk } from '../support/result.js';
 import { describeConfig } from '../../src/config/describe.js';
 import { loadConfig } from '../../src/config/load.js';
@@ -27,6 +27,14 @@ describe('probe configuration', () => {
       retentionDays: 7 });
     expect(config.hawk.garageUrl).toBeUndefined();
     expect(config.timeouts.garage).toBe(15_000);
+  });
+
+  it('runs the probe by default', () => {
+    const { monitoring } = expectOk(loadConfig(validEnv({ SCENARIOS: undefined,
+      RECEIVER_SECRET: TEST_RECEIVER_SECRET,
+      PUBLIC_BASE_URL: 'https://monitor.example.test' }))).config;
+
+    expect(monitoring.scenarios).toContain('endpoints-probe');
   });
 
   it('accepts endpoints-probe among the scenarios', () => {
@@ -77,6 +85,23 @@ describe('probe configuration', () => {
     expect(messagesOf({ SCENARIOS: PROBE_SCENARIOS,
       PROBE_INTERVAL_MS: '40000' }, 'PROBE_INTERVAL_MS')[0]).toContain('+ 10000');
     expectOk(loadConfig(validEnv({ SCENARIOS: PROBE_SCENARIOS,
+      PROBE_INTERVAL_MS: '40001' })));
+  });
+
+  it('adds the receiver check to that sum when a notification scenario is enabled', () => {
+    const env = { SCENARIOS: 'check-notification,endpoints-probe',
+      RECEIVER_SECRET: TEST_RECEIVER_SECRET,
+      PUBLIC_BASE_URL: 'https://monitor.example.test',
+      HTTP_TIMEOUT_MS: '1000' };
+
+    // 30000 ms of the availability stages + 2 * 1000 ms + 1000 ms of the receiver check; the margin of 10000 ms comes on top.
+    expect(messagesOf({ ...env,
+      PROBE_INTERVAL_MS: '43000' }, 'PROBE_INTERVAL_MS')[0]).toContain('33000 ms');
+    expectOk(loadConfig(validEnv({ ...env,
+      PROBE_INTERVAL_MS: '43001' })));
+    // Without a notification scenario the old sum stands.
+    expectOk(loadConfig(validEnv({ SCENARIOS: PROBE_SCENARIOS,
+      HTTP_TIMEOUT_MS: '1000',
       PROBE_INTERVAL_MS: '40001' })));
   });
 

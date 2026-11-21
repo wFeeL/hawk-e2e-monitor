@@ -21,6 +21,7 @@ describe('STAGE_NAMES', () => {
       'threshold_formed',
       'cleanup',
       'garage_availability',
+      'receiver_availability',
     ]);
   });
 });
