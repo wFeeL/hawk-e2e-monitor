@@ -134,6 +134,15 @@ describe('createServeHeartbeat: first sighting of a scenario', () => {
     expect(history.getKv(heartbeatFirstSeenKey(SEND))).toBeUndefined();
   });
 
+  it('removes the stored sighting of a scenario that is no longer configured', () => {
+    const history = createHistory(openDatabase(':memory:'));
+
+    history.setKv(heartbeatFirstSeenKey('check-notification'), T.toISOString());
+    processAt(history, 'http://127.0.0.1:9/ping/x', T);
+    expect(history.getKv(heartbeatFirstSeenKey('check-notification'))).toBeUndefined();
+    expect(history.getKv(heartbeatFirstSeenKey(SEND))).toBe(T.toISOString());
+  });
+
   it('falls back to the start of the process when kv cannot be used', async () => {
     const real = createHistory(openDatabase(':memory:'));
     const history: History = { ...real,
