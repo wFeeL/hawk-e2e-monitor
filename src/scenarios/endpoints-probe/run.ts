@@ -9,7 +9,7 @@ import { followOutsideSignal } from '../run-steps.js';
 import type { ScenarioDeps } from '../shared/deps.js';
 import { apiAvailabilityStage, collectorAvailabilityStage } from '../shared/availability.js';
 import { errorOf } from '../shared/verdict.js';
-import { receiverAvailabilityTimeoutMs } from '../../config/scenario.js';
+import { PROBE_WATCHDOG_MARGIN_MS, receiverAvailabilityTimeoutMs } from '../../config/scenario.js';
 import { garageAvailabilityStage, receiverAvailabilityStage } from './stages.js';
 import type { ProbeContext, ReceiverCheck } from './stages.js';
 
@@ -54,8 +54,8 @@ export async function runEndpointsProbe(deps: ProbeDeps, options: ProbeOptions):
   const timer = new AbortController();
   const unfollow = followOutsideSignal(run, deps.signal);
 
-  // The stages run side by side, so the run lasts as long as the slowest of them could.
-  clock.sleep(specs.reduce((sum, spec) => sum + spec.timeoutMs, 0), timer.signal).then(() => {
+  // The stages run side by side, so the run lasts as long as the slowest of them could, and the margin keeps this timer behind the stage timers.
+  clock.sleep(Math.max(...specs.map(spec => spec.timeoutMs)) + PROBE_WATCHDOG_MARGIN_MS, timer.signal).then(() => {
     run.abort();
   }, () => undefined);
 

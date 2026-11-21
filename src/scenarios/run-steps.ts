@@ -40,6 +40,17 @@ export interface StepsOutcome {
 }
 
 /**
+ * Binds the stages recorded so far to a stage, so its body can see how the run went.
+ * @param spec Stage to run later.
+ * @param stages List that the runner keeps appending to; read when the stage starts.
+ * @returns Stage whose body gets the list as its third argument.
+ */
+export function withEarlierStages<C>(spec: StageSpec<C>, stages: readonly StageResult[]): StageSpec<C> {
+  return { ...spec,
+    run: async (context, signal) => spec.run(context, signal, stages) };
+}
+
+/**
  * Makes the run controller abort when the caller's signal does, with the reason that tells stages it was a cancellation.
  * @param run Controller whose signal the stages watch.
  * @param outside Signal of the caller, if any.
@@ -175,7 +186,7 @@ export async function runSteps<C>(options: RunStepsOptions<C>): Promise<StepsOut
   }
 
   // Cleanup has its own timeout outside the run deadline, so its signal is never aborted by the run.
-  stages.push(await runStage(options.cleanup, context, { clock,
+  stages.push(await runStage(withEarlierStages(options.cleanup, stages), context, { clock,
     runSignal: new AbortController().signal }));
 
   return { stages,

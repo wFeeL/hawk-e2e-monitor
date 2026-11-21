@@ -592,6 +592,19 @@ describe('late duplicate', () => {
     expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
   });
 
+  it('a send that never returns still marks the event as possibly sent and leaves the search to the cleanup', async () => {
+    const { deps } = createTestDeps(hawk, { env: TIMEOUT_LIMITS });
+    const result = await runSendAndReceive({ ...deps,
+      collector: { ...deps.collector,
+        send: async () => new Promise<never>(() => undefined) } }, { sequence: 1 });
+
+    expect(stageOf(result, 'collector_accept')).toMatchObject({ status: 'failed',
+      errorClass: 'monitor_internal' });
+    expect(stageOf(result, 'event_visible').status).toBe('skipped');
+    expect(stageOf(result, 'cleanup').details).toMatchObject({ found: false });
+    expect(result.sendMayHaveReached).toBe(true);
+  });
+
   it('the pause before the recheck is wide enough for a copy that arrives during it', async () => {
     const waitMs = 50;
     const { deps } = createTestDeps(hawk, { env: { LATE_DUPLICATE_WAIT_MS: String(waitMs) } });
@@ -679,15 +692,15 @@ describe('late duplicate', () => {
     expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
   });
 
-  it('a recheck that finds no card does not fail the run', async () => {
+  it('a recheck that finds no card keeps the run passed, with a warning and without a removal', async () => {
     const { deps } = createTestDeps(hawk);
     const result = await runSendAndReceive({ ...deps,
       api: hookCleanupCard(deps.api, 2, () => null) }, { sequence: 1 });
 
     expect(result.status).toBe('ok');
     expect(stageOf(result, 'cleanup').details).toMatchObject({ recheck: 'missing' });
-    expect(result.warnings).toEqual([]);
-    expect(hawk.api.removeCalls).toBe(1);
+    expect(result.warnings).toEqual(['event was already gone before cleanup']);
+    expect(hawk.api.removeCalls).toBe(0);
   });
 
   it('a wait cut by the cleanup limit fails the run as monitor_internal and removes nothing', async () => {

@@ -8,6 +8,7 @@ import { probeReceiver, resolvePublicAddress } from '../notifications/address.js
 import type { PublicAddress } from '../notifications/address.js';
 import { startReceiver } from '../receiver/server.js';
 import type { Receiver } from '../receiver/server.js';
+import { RUN_ID_SOURCE } from '../scenarios/shared/plan.js';
 import type { Clock } from '../time/clock.js';
 import type { FindAddress, RunnerContext } from './scenario-setup.js';
 
@@ -18,8 +19,8 @@ const TUNNEL_POLL_MS = 2000;
  * @param instanceId Id of the instance; its characters are matched literally.
  * @returns Pattern with the run id as its first group.
  */
-export function LATE_RUN_ID(instanceId: string): RegExp {
-  return new RegExp(`\\[e2e:${instanceId.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`)}\\] ([a-z]{16}) `, 'u');
+export function lateRunIdPattern(instanceId: string): RegExp {
+  return new RegExp(`\\[e2e:${instanceId.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`)}\\] (${RUN_ID_SOURCE}) `, 'u');
 }
 
 /**
@@ -160,7 +161,7 @@ async function startRuntime(context: RunnerContext): Promise<ReceiverRuntime> {
       clock,
       logger,
       onUnmatched: (channel, rawBody) => {
-        const found = LATE_RUN_ID(config.instanceId).exec(rawBody);
+        const found = lateRunIdPattern(config.instanceId).exec(rawBody);
         const runId = found?.[1];
         // The history keeps a late notification of the channels of the rules; a late threshold POST is only logged.
         const outcome = runId === undefined || channel === 'threshold' ? undefined : history.markLateNotification(runId, channel, clock.wallTime().toISOString());
@@ -174,10 +175,8 @@ async function startRuntime(context: RunnerContext): Promise<ReceiverRuntime> {
   }
 
   const started = receiver;
-  let receiverClosed = false;
 
   context.closers.push(async () => {
-    receiverClosed = true;
     await started.close();
   });
 
@@ -220,7 +219,7 @@ async function startRuntime(context: RunnerContext): Promise<ReceiverRuntime> {
     },
     tunnelWaited: () => waited,
     readiness: [{ name: 'receiver',
-      run: async () => Promise.resolve(!receiverClosed) }],
+      run: async () => Promise.resolve(started.listening()) }],
   };
 }
 

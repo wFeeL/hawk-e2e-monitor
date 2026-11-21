@@ -43,12 +43,24 @@ export interface FoundEvent {
   timestamp?: number;
 }
 
+/** Position in the event search that Hawk names for the next page and expects back. */
+export interface EventsCursor {
+  /** Boundary of the grouping day. */
+  groupingTimestampBoundary: number;
+  /** Boundary of the sort value. */
+  sortValueBoundary: number;
+  /** Id of the last row. */
+  idBoundary: string;
+}
+
 /** One page of the event search. */
 export interface EventsPage {
   /** Events of the page, one per group. */
   events: FoundEvent[];
   /** True when Hawk names a cursor, so more rows match than this page holds. */
   more: boolean;
+  /** Cursor of the next page; absent on the last one. */
+  nextCursor?: EventsCursor;
 }
 
 /** Event card as the page of an event in Garage reads it: a search row and the fields of the payload. */
@@ -179,9 +191,10 @@ export interface HawkApi {
    * @param projectId 24-character hex id of the project.
    * @param search Text looked for in titles and contexts.
    * @param signal Deadline of the caller.
-   * @returns The events of the page and whether more match.
+   * @param cursor Cursor of the previous page; the first page when absent.
+   * @returns The events of the page, whether more match and the cursor of the next page.
    */
-  findEventsPage(projectId: string, search: string, signal: AbortSignal): Promise<EventsPage>;
+  findEventsPage(projectId: string, search: string, signal: AbortSignal, cursor?: EventsCursor): Promise<EventsPage>;
   /**
    * Reads one event card.
    * @param projectId 24-character hex id of the project.
@@ -400,7 +413,7 @@ interface FindEventsProject {
 /** Portion of daily events. */
 interface DailyPortion {
   /** Cursor of the next portion; null or absent when nothing more matches. */
-  nextCursor?: object | null;
+  nextCursor?: EventsCursor | null;
   /** Rows, possibly with nulls. */
   dailyEvents: (DailyRow | null)[] | null;
 }
@@ -729,9 +742,10 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
       eventsCount: workspace.billingPeriodEventsCount ?? 0 };
   };
 
-  const findEventsPage: HawkApi['findEventsPage'] = async (projectId, search, signal) => {
+  const findEventsPage: HawkApi['findEventsPage'] = async (projectId, search, signal, cursor) => {
     const data = await authorized<FindEventsData>(PROJECT_DAILY_EVENTS, { projectId,
-      search }, signal);
+      search,
+      ...cursor === undefined ? {} : { cursor } }, signal);
 
     if (!data.project) {
       throw new CheckError('api_error', { detail: 'project not found' });
@@ -750,8 +764,11 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
       }
     }
 
+    const nextCursor = data.project.dailyEventsPortion?.nextCursor ?? undefined;
+
     return { events: [...byGroup.values()],
-      more: (data.project.dailyEventsPortion?.nextCursor ?? null) !== null };
+      more: nextCursor !== undefined,
+      ...nextCursor === undefined ? {} : { nextCursor } };
   };
 
   const findEvents: HawkApi['findEvents'] = async (projectId, search, signal) => (await findEventsPage(projectId, search, signal)).events;

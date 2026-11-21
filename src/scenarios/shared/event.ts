@@ -12,24 +12,6 @@ const BREADCRUMB_GAP_MS = 1000;
 /** Browser string the event carries, so the JavaScript worker has something to describe. */
 export const BROWSER_USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-/** What the grouper and the API keep of an event; a value over a limit comes back cut, so the monitor stays within them. */
-export const EVENT_LIMITS = {
-  /** Longest title. */
-  title: 400,
-  /** Longest string in `context`, `addons` and breadcrumbs. */
-  string: 200,
-  /** Most keys of one object in `context` and `addons`. */
-  keys: 20,
-  /** Most items of one array in `context` and `addons`. */
-  items: 10,
-  /** Deepest nesting of objects and arrays in `context` and `addons`. */
-  depth: 5,
-  /** Most source lines of one frame. */
-  sourceLines: 21,
-  /** Longest source line. */
-  sourceLine: 140,
-} as const;
-
 // The loop sender fails on an event without a backtrace.
 const BACKTRACE = [
   { file: 'hawk-e2e-monitor/check.js',
@@ -138,90 +120,6 @@ export function eventMessage(context: ScenarioContext): CollectorMessage {
       release: `e2e-${config.instanceId}-plain`,
       context: { ...plan.context,
         password: SENTINEL } } };
-}
-
-/**
- * Looks for a string over the limit or a structure too wide or too deep.
- * @param value Value of `context`, `addons` or a breadcrumb.
- * @param path Name of the value for the text.
- * @param depth Nesting above the value, counted as the sanitizer of Hawk counts it.
- * @returns Text of the first violation, or undefined.
- */
-function overLimit(value: unknown, path: string, depth: number): string | undefined {
-  if (typeof value === 'string') {
-    return value.length > EVENT_LIMITS.string ? `${path} is longer than ${String(EVENT_LIMITS.string)} characters` : undefined;
-  }
-
-  if (Array.isArray(value)) {
-    if (value.length > EVENT_LIMITS.items) {
-      return `${path} has more than ${String(EVENT_LIMITS.items)} items`;
-    }
-
-    return value.map((item, index) => overLimit(item, `${path}[${String(index)}]`, depth + 1)).find(text => text !== undefined);
-  }
-
-  if (typeof value === 'object' && value !== null) {
-    const entries = Object.entries(value);
-
-    if (depth + 1 > EVENT_LIMITS.depth) {
-      return `${path} is nested deeper than ${String(EVENT_LIMITS.depth)} levels (depth)`;
-    }
-
-    if (entries.length > EVENT_LIMITS.keys) {
-      return `${path} has more than ${String(EVENT_LIMITS.keys)} keys`;
-    }
-
-    return entries.map(([key, item]) => overLimit(item, `${path}.${key}`, depth + 1)).find(text => text !== undefined);
-  }
-
-  return undefined;
-}
-
-/**
- * Checks that an event stays within what Hawk keeps, so what the API shows can be compared with what was sent.
- * @param payload Event as the collector gets it.
- * @returns Text of the first value over a limit, or undefined when all fit.
- */
-export function withinEventLimits(payload: Readonly<Record<string, unknown>>): string | undefined {
-  const { title, backtrace, breadcrumbs } = payload;
-
-  if (typeof title === 'string' && title.length > EVENT_LIMITS.title) {
-    return `title is longer than ${String(EVENT_LIMITS.title)} characters`;
-  }
-
-  for (const field of ['context', 'addons'] as const) {
-    const text = overLimit(payload[field], field, 0);
-
-    if (text !== undefined) {
-      return text;
-    }
-  }
-
-  const crumbs = Array.isArray(breadcrumbs) ? breadcrumbs as Array<Record<string, unknown>> : [];
-
-  for (const [index, crumb] of crumbs.entries()) {
-    const text = overLimit(crumb.message, `breadcrumbs[${String(index)}].message`, 0);
-
-    if (text !== undefined) {
-      return text;
-    }
-  }
-
-  const frames = Array.isArray(backtrace) ? backtrace as Array<Record<string, unknown>> : [];
-
-  for (const [index, frame] of frames.entries()) {
-    const lines = Array.isArray(frame.sourceCode) ? frame.sourceCode as Array<Record<string, unknown>> : [];
-
-    if (lines.length > EVENT_LIMITS.sourceLines) {
-      return `backtrace[${String(index)}].sourceCode has more than ${String(EVENT_LIMITS.sourceLines)} lines`;
-    }
-
-    if (lines.some(line => typeof line.content === 'string' && line.content.length > EVENT_LIMITS.sourceLine)) {
-      return `backtrace[${String(index)}].sourceCode has a line longer than ${String(EVENT_LIMITS.sourceLine)} characters`;
-    }
-  }
-
-  return undefined;
 }
 
 /**

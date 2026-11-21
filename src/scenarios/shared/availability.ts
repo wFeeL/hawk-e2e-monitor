@@ -7,7 +7,7 @@ import type { AvailabilityContext } from './context.js';
 const LOW_QUOTA_SHARE = 0.1;
 
 /**
- * Stage 1: the collector answers `/health` and rejects an unknown token over WebSocket.
+ * Stage `collector_availability`: the collector answers `/health` and rejects an unknown token over WebSocket.
  * @param timeoutMs Time limit of the stage.
  * @returns Stage spec.
  */
@@ -65,7 +65,7 @@ function patternFindings(patterns: readonly string[], title: string): PatternFin
 }
 
 /**
- * Stage 2: the monitor can sign in, the token belongs to the project, the workspace has quota and no grouping pattern catches the next title.
+ * Stage `api_availability`: the monitor can sign in, the token belongs to the project, the workspace has quota and no grouping pattern catches the next title.
  * @param timeoutMs Time limit of the stage.
  * @param options Title of the next event, for the pattern check.
  * @returns Stage spec.

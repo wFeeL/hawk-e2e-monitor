@@ -12,6 +12,11 @@ import { HttpStatus } from '../net/http-status.js';
 const DEFAULT_MAX_BODY_BYTES = 1_048_576;
 const NONCE_BYTES = 16;
 const PATH_SEGMENTS = 4;
+// A POST that matches a run keeps its body only for the first arrivals per channel; the rest is counted.
+const KEPT_ARRIVALS = 2;
+// cloudflared holds idle connections for 90 s and does not repeat a POST, so the server must outlast it.
+const KEEP_ALIVE_TIMEOUT_MS = 95_000;
+const HEADERS_TIMEOUT_MS = 96_000;
 
 /** One POST that was bound to a run. */
 export interface Arrival {
@@ -37,6 +42,8 @@ export interface Arrivals {
   telegram: Arrival[];
   /** POSTs that matched no run while the run was waiting. */
   unmatched: number;
+  /** POSTs beyond the first ones per channel, whose bodies were not kept; absent when none. */
+  extra?: Partial<Record<ArrivalKind, number>>;
 }
 
 /** Limits of one `wait`. */
@@ -55,6 +62,11 @@ export interface WaitOptions {
 export interface Receiver {
   /** Port the server listens on. */
   readonly port: number;
+  /**
+   * Tells whether the server still accepts connections.
+   * @returns False once the server has been closed.
+   */
+  listening(): boolean;
   /** Random value that `probe` returns, so a probe proves it reached this process. */
   readonly nonce: string;
   /**
@@ -114,6 +126,16 @@ interface RunState {
 }
 
 /**
+ * Counts every POST of a channel, also those whose bodies were not kept.
+ * @param arrivals What the receiver collected for a run.
+ * @param channel Which of the four channels to count.
+ * @returns Kept arrivals plus the counted rest.
+ */
+export function arrivalCount(arrivals: Arrivals, channel: ArrivalKind): number {
+  return arrivals[channel].length + (arrivals.extra?.[channel] ?? 0);
+}
+
+/**
  * Hashes a value so comparisons run on equal lengths.
  * @param value Text to hash.
  * @returns SHA-256 digest.
@@ -134,7 +156,8 @@ function snapshot(arrivals: Arrivals): Arrivals {
     loop: [...arrivals.loop],
     threshold: [...arrivals.threshold],
     telegram: [...arrivals.telegram],
-    unmatched: arrivals.unmatched };
+    unmatched: arrivals.unmatched,
+    ...arrivals.extra === undefined ? {} : { extra: { ...arrivals.extra } } };
 }
 
 /**
@@ -204,10 +227,17 @@ export async function startReceiver(options: ReceiverOptions): Promise<Receiver>
     const matched = [...runs.entries()].find(([runId]) => rawBody.includes(runId));
 
     if (matched) {
-      matched[1].arrivals[channel].push({ channel,
-        atMs: clock.monotonicMs(),
-        headers,
-        rawBody });
+      const { arrivals } = matched[1];
+
+      if (arrivals[channel].length < KEPT_ARRIVALS) {
+        arrivals[channel].push({ channel,
+          atMs: clock.monotonicMs(),
+          headers,
+          rawBody });
+      } else {
+        arrivals.extra = { ...arrivals.extra,
+          [channel]: (arrivals.extra?.[channel] ?? 0) + 1 };
+      }
       for (const listener of matched[1].listeners) {
         listener();
       }
@@ -228,7 +258,15 @@ export async function startReceiver(options: ReceiverOptions): Promise<Receiver>
   };
 
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    const pathname = new URL(req.url ?? '/', 'http://receiver').pathname;
+    const target = req.url ?? '/';
+
+    if (!URL.canParse(target, 'http://receiver')) {
+      sendEmpty(res, HttpStatus.notFound);
+
+      return;
+    }
+
+    const pathname = new URL(target, 'http://receiver').pathname;
     const segments = pathname.split('/');
     const kind = segments[2];
     const given = segments[3];
@@ -278,6 +316,9 @@ export async function startReceiver(options: ReceiverOptions): Promise<Receiver>
       }
     });
   });
+
+  server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
+  server.headersTimeout = HEADERS_TIMEOUT_MS;
 
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
@@ -381,6 +422,7 @@ export async function startReceiver(options: ReceiverOptions): Promise<Receiver>
 
   return {
     port,
+    listening: () => server.listening,
     nonce,
     expect,
     wait,

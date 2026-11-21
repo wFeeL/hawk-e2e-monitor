@@ -105,8 +105,6 @@ export async function runTelegramDelivery(deps: TelegramDeliveryDeps, options: P
           telegramDeliveredStage(bot.deliveryTimeoutMs + 2 * http)],
         [telegramProbeStage(http + bot.probeTimeoutMs + 2 * http)],
       ],
-      // A failed send that may have reached the collector still needs the search and the cleanup.
-      keepGoing: failed => failed.name === 'collector_accept' && state.sendMayHaveReached,
       cleanup: cleanupStage(timeouts.cleanup) });
 
     // What arrived after the wait of the stage, such as a second POST, counts for the verdict.

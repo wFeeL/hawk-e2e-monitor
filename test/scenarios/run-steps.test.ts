@@ -61,6 +61,25 @@ describe('runSteps', () => {
     expect(context.ran).toEqual(['collector_availability', 'cleanup']);
   });
 
+  it('hands the stages recorded so far to the cleanup', async () => {
+    const seen: string[] = [];
+    const cleanup: StageSpec<Ctx> = { name: 'cleanup',
+      timeoutMs: 1000,
+      run: async (_context, _signal, earlier) => {
+        seen.push(...(earlier ?? []).map(item => `${item.name}:${item.status}`));
+
+        return Promise.resolve({ status: 'ok' });
+      } };
+
+    await runSteps({ context: { ran: [] },
+      clock: systemClock,
+      runTimeoutMs: 1000,
+      steps: [[stage('collector_availability')], [stage('api_availability', 'failed')]],
+      cleanup });
+
+    expect(seen).toEqual(['collector_availability:ok', 'api_availability:failed']);
+  });
+
   it('goes on after a failure that keepGoing accepts', async () => {
     const context: Ctx = { ran: [] };
     const outcome = await runSteps({ context,

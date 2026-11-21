@@ -17,7 +17,7 @@ function cleanupFailure(error: unknown): unknown {
 }
 
 /**
- * Stage 6: removes the test event when it is ours.
+ * Stage `cleanup`: removes the test event when it is ours.
  * @param timeoutMs Time limit of the stage.
  * @returns Stage spec.
  */
@@ -25,7 +25,7 @@ export function cleanupStage(timeoutMs: number): StageSpec<ScenarioContext> {
   return {
     name: 'cleanup',
     timeoutMs,
-    run: async (context, signal): Promise<StageOutcome> => {
+    run: async (context, signal, earlier): Promise<StageOutcome> => {
       const { api, clock, config, plan, state } = context;
       const shape = shapeOf(context);
       const { projectId } = shape;
@@ -60,7 +60,7 @@ export function cleanupStage(timeoutMs: number): StageSpec<ScenarioContext> {
           throw refuse(first);
         }
 
-        // The event outran stage 4's deadline; leave a trace so the late arrival is visible in the result.
+        // The event outran the `event_visible` deadline; leave a trace so the late arrival is visible in the result.
         details.foundBySearch = true;
         details.originalEventId = target.originalEventId;
       } else {
@@ -72,7 +72,10 @@ export function cleanupStage(timeoutMs: number): StageSpec<ScenarioContext> {
         // The verdict reads the count from `details`.
         let cut = false;
 
-        if (config.lateDuplicateWaitMs > 0) {
+        // The pause waits for a late copy that would change the verdict of a passed run; a failed run has its verdict already.
+        const failedSoFar = earlier?.some(stage => stage.status === 'failed') === true;
+
+        if (config.lateDuplicateWaitMs > 0 && !failedSoFar) {
           try {
             await clock.sleep(config.lateDuplicateWaitMs, signal);
           } catch {
@@ -121,6 +124,14 @@ export function cleanupStage(timeoutMs: number): StageSpec<ScenarioContext> {
             signal.removeEventListener('abort', onStageAbort);
           }
         }
+      }
+
+      if (details.recheck === 'missing') {
+        // Nothing is left to remove, and the run passed on what it saw before the event went.
+        details.warning = 'event was already gone before cleanup';
+
+        return { status: 'ok',
+          details };
       }
 
       const withDetails = (outcome: StageOutcome): StageOutcome => Object.keys(details).length > 0

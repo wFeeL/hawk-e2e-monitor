@@ -154,12 +154,17 @@ export function envelopeAcceptStage(timeoutMs: number): StageSpec<ScenarioContex
         scenario: SENTRY_ENVELOPE,
         sentAt: clock.wallTime() });
       const startedMs = clock.monotonicMs();
+
+      // A send that never returns leaves the flag up, so the cleanup still looks for the event.
+      state.sendMayHaveReached = true;
+
       const outcome = await collector.sendEnvelope(tokenKey(token), body, signal);
 
       state.sendOutcome = outcome;
 
       switch (outcome.kind) {
         case 'accepted':
+          state.sendMayHaveReached = false;
           state.acceptedAtMs = clock.monotonicMs();
 
           return { status: 'ok',
@@ -173,6 +178,8 @@ export function envelopeAcceptStage(timeoutMs: number): StageSpec<ScenarioContex
             details: { attempts: outcome.attempts,
               warning: `The collector did not confirm the envelope (${outcome.cause.message}); SDKs of users may see an error` } };
         case 'rejected':
+          state.sendMayHaveReached = false;
+
           return { status: 'failed',
             error: outcome.error,
             details: { attempts: outcome.attempts } };

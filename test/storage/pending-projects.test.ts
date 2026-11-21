@@ -72,7 +72,8 @@ describe('pendingProjects', () => {
     history.setKv(NEW_PROJECT_PENDING_KEY, JSON.stringify([{ runId: FIRST,
       at: AT }, { runId: 'short',
       at: AT }, { runId: SECOND,
-      at: 'yesterday' }, 7]));
+      at: 'yesterday' }, { runId: 'aaaaaaaaaaaaaaaa',
+      at: AT }, 7]));
     expect(pending.list()).toEqual([{ runId: FIRST,
       at: AT }]);
   });

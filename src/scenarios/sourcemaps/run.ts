@@ -56,8 +56,6 @@ export async function runSourcemaps(deps: ScenarioDeps, options: PlanOptions): P
       [collectorAcceptStage(timeouts.collectorAccept)],
       [eventVisibleStage(timeouts.eventVisible)],
     ],
-    // A failed send that may have reached the collector still needs the search and the cleanup.
-    keepGoing: failed => failed.name === 'collector_accept' && state.sendMayHaveReached,
     cleanup: cleanupStage(timeouts.cleanup) });
 
   return buildRunResult({ scenario: SOURCEMAPS,

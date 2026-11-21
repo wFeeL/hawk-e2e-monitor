@@ -18,8 +18,8 @@ export interface StageSpec<C> {
   name: StageName;
   /** Time the body may take before its signal aborts. */
   timeoutMs: number;
-  /** Body; must stop when the signal aborts. */
-  run: (context: C, signal: AbortSignal) => Promise<StageOutcome>;
+  /** Body; must stop when the signal aborts. The runner of a scenario passes the stages recorded so far to a stage that needs them, such as the cleanup. */
+  run: (context: C, signal: AbortSignal, earlier?: readonly StageResult[]) => Promise<StageOutcome>;
 }
 
 /** Clock and run-wide deadline of the stage runner. */
@@ -59,14 +59,27 @@ const DEFAULT_GRACE_MS = 1000;
 /**
  * Turns an unknown thrown value into text.
  * @param error Anything thrown.
- * @returns Message of an `Error`, a string itself, otherwise JSON.
+ * @returns Message of an `Error`, a string itself, otherwise JSON, then `String(error)`, then a fixed text when nothing can print it.
  */
 function describeThrown(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
   }
 
-  return typeof error === 'string' ? error : JSON.stringify(error) ?? 'unknown error';
+  if (typeof error === 'string') {
+    return error;
+  }
+
+  // A cyclic object or a BigInt breaks JSON.stringify, and an object without a prototype breaks String; the stage must still end.
+  try {
+    return JSON.stringify(error) ?? 'unknown error';
+  } catch {
+    try {
+      return String(error);
+    } catch {
+      return 'unprintable error';
+    }
+  }
 }
 
 /**
@@ -90,7 +103,7 @@ function settle(run: () => Promise<StageOutcome>): Promise<Settled> {
 
 /**
  * Builds the stage result from the body's end state.
- * @param name Which stage was skipped.
+ * @param name Stage whose body ended.
  * @param settled How the body ended, or `undefined` when it never did.
  * @param reason What aborted the stage, if anything.
  * @param cancelled Whether the run was cancelled from outside.

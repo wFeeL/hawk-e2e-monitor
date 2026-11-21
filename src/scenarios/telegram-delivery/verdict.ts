@@ -1,6 +1,7 @@
 import type { RunNotification, RunTelegram, StageName, StageResult } from '../../engine/result.js';
 import { CheckError } from '../../errors/taxonomy.js';
 import type { ErrorClass } from '../../errors/taxonomy.js';
+import { arrivalCount } from '../../receiver/server.js';
 import type { Arrivals } from '../../receiver/server.js';
 import { checkNotificationAgainstEvent } from '../check-notification/stages.js';
 import type { NotificationState } from '../check-notification/stages.js';
@@ -95,7 +96,7 @@ function decideRest(stages: readonly StageResult[], state: ScenarioState, notifi
     return failedVerdict('notification_formed', mismatch);
   }
 
-  const count = finalArrivals.telegram.length;
+  const count = arrivalCount(finalArrivals, 'telegram');
 
   return count > 1
     ? failedVerdict('notification_formed', new CheckError('duplicate_notification', { channel: 'telegram',

@@ -786,6 +786,14 @@ describe('notificationFormedStage', () => {
       expect(result.message).toContain(field);
     });
 
+    it('accepts any version of the Hawk webhook agent', async () => {
+      const { result } = await formedWith({ body: parts => webhookBody(parts),
+        headers: { ...GOOD_HEADERS,
+          ...header('user-agent', 'Hawk-Webhook/2.0') } }, goodLoop);
+
+      expect(result.status).toBe('ok');
+    });
+
     it('accepts header names in any case', async () => {
       const { result } = await formedWith({ body: parts => webhookBody(parts),
         headers: { ...header('USER-AGENT', 'Hawk-Webhook/1.0'),

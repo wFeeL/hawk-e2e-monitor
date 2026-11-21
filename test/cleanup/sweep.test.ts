@@ -343,11 +343,48 @@ describe('sweepOnce', () => {
       leftover(runIdOf(index), { ageMs: 1000 });
     }
 
-    const report = await sweeper().sweepOnce(SIGNAL);
+    const report = await sweeper({ api: { ...api,
+      findEventsPage: async (projectId, search, signal) => {
+        const { nextCursor: _cursor, ...page } = await api.findEventsPage(projectId, search, signal);
+
+        return { ...page,
+          more: false };
+      } } }).sweepOnce(SIGNAL);
 
     expect(report).toMatchObject({ scanned: 50,
       removed: 0,
       pages: 1 });
+  });
+
+  it('reaches its own events behind a full page of events of another instance', async () => {
+    const foreign = 'fake-2';
+
+    for (let index = 0; index < 50; index += 1) {
+      leftover(runIdOf(index), { instanceId: foreign,
+        title: buildTitle(foreign, runIdOf(index), 'send-and-receive-event') });
+    }
+
+    const own = [runIdOf(60), runIdOf(61), runIdOf(62)].map(runId => leftover(runId));
+    const cursors: unknown[] = [];
+    const report = await sweeper({ api: { ...api,
+      findEventsPage: async (projectId, search, signal, cursor) => {
+        cursors.push(cursor);
+
+        // Hawk would continue after the cursor; the fake always starts over, so page 2 searches the title with the closing bracket.
+        return cursor === undefined
+          ? api.findEventsPage(projectId, search, signal)
+          : api.findEventsPage(projectId, `e2e:${INSTANCE}]`, signal);
+      } } }).sweepOnce(SIGNAL);
+
+    expect(report).toMatchObject({ pages: 2,
+      removed: 3 });
+    expect(cursors[0]).toBeUndefined();
+    expect(cursors[1]).toBeDefined();
+    for (const id of own) {
+      expect(hawk.store.get(hawk.projectId, id)).toBeUndefined();
+    }
+
+    expect(logger.lines.some(line => line.level === 'debug' && line.msg === 'sweep page had nothing to remove')).toBe(true);
   });
 
   it('reads at most 10 pages in one pass', async () => {

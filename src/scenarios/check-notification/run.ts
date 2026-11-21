@@ -10,7 +10,7 @@ import type { Provisioner } from '../../notifications/provisioning.js';
 import type { Receiver } from '../../receiver/server.js';
 import { planRun } from '../shared/plan.js';
 import type { PlanOptions } from '../shared/plan.js';
-import { abortedStage, followOutsideSignal, toCleanupResult } from '../run-steps.js';
+import { abortedStage, followOutsideSignal, toCleanupResult, withEarlierStages } from '../run-steps.js';
 import type { ScenarioDeps } from '../shared/deps.js';
 import { apiAvailabilityStage, collectorAvailabilityStage } from '../shared/availability.js';
 import { cleanupStage } from '../shared/cleanup.js';
@@ -146,9 +146,8 @@ export async function runCheckNotification(deps: NotificationDeps, options: Plan
         const [first] = results;
 
         stages.push(...results);
-        // A failed send that may have reached the collector still needs the search and the cleanup.
         // A failed notification does not stop the repeat; a failed search does.
-        skipRest = first?.status === 'failed' && !(first.name === 'collector_accept' && state.sendMayHaveReached);
+        skipRest = first?.status === 'failed';
       }
     }
 
@@ -156,7 +155,7 @@ export async function runCheckNotification(deps: NotificationDeps, options: Plan
     unfollow();
 
     // Cleanup has its own timeout outside the run deadline, so its signal is never aborted by the run.
-    stages.push(await runStage(cleanupStage(timeouts.cleanup), context, { clock,
+    stages.push(await runStage(withEarlierStages(cleanupStage(timeouts.cleanup), stages), context, { clock,
       runSignal: new AbortController().signal }));
 
     if (stages.some(stage => stage.name === 'collector_accept' && stage.status !== 'skipped')) {

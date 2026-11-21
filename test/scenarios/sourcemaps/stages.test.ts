@@ -59,6 +59,35 @@ describe('checkSourcemapCard', () => {
       facts: { field: 'backtrace[0].sourceCode' } });
   });
 
+  it('accepts a window of another size around the mapped line', () => {
+    const window = expectedSourceCode(built.sourceLines, 6).filter(entry => entry.line >= 4 && entry.line <= 8);
+
+    expect(checkSourcemapCard(card({ backtrace: [{ file: 'e2e-source.js',
+      line: 6,
+      column: 0,
+      sourceCode: window }] }), built, RELEASE, plan, 1)).toBeUndefined();
+  });
+
+  it('names the line when the frame points at another line of the source', () => {
+    const error = checkSourcemapCard(card({ backtrace: [{ file: 'e2e-source.js',
+      line: 7,
+      column: 0,
+      sourceCode: expectedSourceCode(built.sourceLines, 6) }] }), built, RELEASE, plan, 1);
+
+    expect(error).toMatchObject({ errorClass: 'sourcemap_not_applied',
+      facts: { field: 'backtrace[0].line' } });
+  });
+
+  it('names the source code when no entry holds the mapped line', () => {
+    const error = checkSourcemapCard(card({ backtrace: [{ file: 'e2e-source.js',
+      line: 6,
+      column: 0,
+      sourceCode: expectedSourceCode(built.sourceLines, 6).filter(entry => entry.line !== 6) }] }), built, RELEASE, plan, 1);
+
+    expect(error).toMatchObject({ errorClass: 'sourcemap_not_applied',
+      facts: { field: 'backtrace[0].sourceCode' } });
+  });
+
   it('treats a card without a backtrace as a map that was not applied', () => {
     expect(checkSourcemapCard(card({ backtrace: undefined }), built, RELEASE, plan, 1)).toMatchObject({ errorClass: 'sourcemap_not_applied' });
   });

@@ -5,6 +5,12 @@ import type { TransportMode } from '../../config/schema.js';
 import type { ScenarioName } from '../names.js';
 
 const RUN_ID_LETTERS = 15;
+
+/** Pattern of a run id as text: `r` and fifteen lowercase letters, as `createRunId` makes it. Put it into a larger expression. */
+export const RUN_ID_SOURCE = 'r[a-z]{15}';
+
+/** Matches a whole run id. */
+export const RUN_ID_PATTERN = new RegExp(`^${RUN_ID_SOURCE}$`, 'u');
 const ALPHABET_SIZE = 26;
 const FIRST_LETTER_CODE = 97;
 const HTTP_CATCHER = 'errors/nodejs';
@@ -34,7 +40,7 @@ export interface RunPlan {
   transport: Transport;
   /** Catcher type that goes with the transport. */
   catcherType: string;
-  /** Whether stage 5 sends the event a second time. */
+  /** Whether `event_repeated` sends the event a second time. */
   repeat: boolean;
   /** Title of the event. */
   title: string;
@@ -79,7 +85,7 @@ export function chooseTransport(sequence: number, mode: TransportMode): Transpor
  * @param sequence Run number from 1.
  * @param mode Configured mode.
  * @param everyN Repeat period; 0 turns repeats off.
- * @returns True when stage 5 runs.
+ * @returns True when `event_repeated` runs.
  */
 export function shouldRepeat(sequence: number, mode: TransportMode, everyN: number): boolean {
   if (everyN === 0) {

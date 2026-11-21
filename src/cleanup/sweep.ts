@@ -1,8 +1,8 @@
-import type { FoundEvent, HawkApi } from '../clients/hawk-api.js';
+import type { EventsCursor, FoundEvent, HawkApi } from '../clients/hawk-api.js';
 import type { Config } from '../config/load.js';
 import { CheckError } from '../errors/taxonomy.js';
 import type { Logger } from '../log/logger.js';
-import { buildTitle } from '../scenarios/shared/plan.js';
+import { RUN_ID_PATTERN, RUN_ID_SOURCE, buildTitle } from '../scenarios/shared/plan.js';
 import { EVENT_SCENARIOS, SENTRY_ENVELOPE } from '../scenarios/names.js';
 import { EXCEPTION_TYPE } from '../scenarios/sentry-envelope/envelope.js';
 import { createdProjects } from '../storage/created-projects.js';
@@ -14,7 +14,6 @@ const PAGE_SIZE = 50;
 const MAX_PAGES = 10;
 const TIMEOUT_FACTOR = 4;
 const FIRST_PASS_DELAY_MS = 300_000;
-const RUN_ID_PATTERN = /^[a-z]{16}$/u;
 // The collector puts the type of the exception in front of the value to make the title of an event that came as an envelope.
 const SENTRY_PREFIX = `${EXCEPTION_TYPE}: `;
 
@@ -133,7 +132,7 @@ function runIdOf(instanceId: string, title: string): string | undefined {
  * @returns Pattern with the run id as its first group.
  */
 function projectNamePattern(instanceId: string): RegExp {
-  return new RegExp(`^\\[e2e:${instanceId.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`)}\\] new-project (r[a-z]{15})$`, 'u');
+  return new RegExp(`^\\[e2e:${instanceId.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`)}\\] new-project (${RUN_ID_SOURCE})$`, 'u');
 }
 
 /**
@@ -372,11 +371,13 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
     }, () => undefined);
 
     try {
+      let cursor: EventsCursor | undefined;
+
       for (let page = 0; page < MAX_PAGES; page += 1) {
         signal.throwIfAborted();
 
         // Hawk parses the search as a regex, so no brackets; the title prefix is checked on the results.
-        const { events, more } = await api.findEventsPage(projectId, `e2e:${config.instanceId}`, signal);
+        const { events, more, nextCursor } = await api.findEventsPage(projectId, `e2e:${config.instanceId}`, signal, cursor);
         const removedBefore = report.removed;
 
         report.pages += 1;
@@ -392,11 +393,21 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
           report.skipped += outcome.removed ? 0 : 1;
         }
 
+        const nothingRemoved = report.removed === removedBefore;
+
+        if (nothingRemoved && events.length >= PAGE_SIZE) {
+          logger.debug('sweep page had nothing to remove', { page: report.pages,
+            cursor: nextCursor !== undefined });
+        }
+
         // Hawk names a cursor only when more rows match, and one group seen on two days is two rows and one event here,
         // so a page can look short; a full page goes on even without a cursor, in case Hawk stops sending it.
-        if ((!more && events.length < PAGE_SIZE) || report.removed === removedBefore) {
+        // Events of another instance can fill whole pages, so a cursor is followed even when nothing was removed.
+        if (nextCursor === undefined && ((!more && events.length < PAGE_SIZE) || nothingRemoved)) {
           break;
         }
+
+        cursor = nextCursor;
       }
 
       const projects = await sweepProjects(signal);

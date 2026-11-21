@@ -14,6 +14,8 @@ import { startFakeHawk } from '../../support/fake-hawk/index.js';
 import type { FakeHawk } from '../../support/fake-hawk/index.js';
 import { BUNDLE_PATH, startFakeGarage } from '../../support/fake-garage.js';
 import type { FakeGarage } from '../../support/fake-garage.js';
+import { PROBE_WATCHDOG_MARGIN_MS } from '../../../src/config/scenario.js';
+import { systemClock } from '../../../src/time/clock.js';
 import { createTestDeps } from '../../support/scenario.js';
 import type { TestDepsOptions } from '../../support/scenario.js';
 
@@ -57,6 +59,24 @@ function stageOf(result: RunResult, name: StageResult['name']): StageResult {
 
   return found;
 }
+
+describe('the deadline of a probe', () => {
+  it('is the slowest stage timeout plus the watchdog margin, since the stages run side by side', async () => {
+    const sleeps: number[] = [];
+    const { deps } = createTestDeps(hawk, { clock: { ...systemClock,
+      sleep: async (ms, signal) => {
+        sleeps.push(ms);
+
+        return systemClock.sleep(ms, signal);
+      } } });
+    const { collectorAvailability, apiAvailability } = deps.config.timeouts;
+
+    await runEndpointsProbe(deps, { sequence: 1 });
+
+    expect(sleeps).toContain(Math.max(collectorAvailability, apiAvailability) + PROBE_WATCHDOG_MARGIN_MS);
+    expect(sleeps).not.toContain(collectorAvailability + apiAvailability);
+  });
+});
 
 describe('runEndpointsProbe', () => {
   it('passes with the two availability stages when there is no Garage address, and sends no event', async () => {
