@@ -6,6 +6,7 @@ import { manualRunHandler } from '../../src/serve/manual-runs.js';
 import type { ManualRunsDeps } from '../../src/serve/manual-runs.js';
 import type { StartedRun } from '../../src/scheduler/scheduler.js';
 import { openDatabase } from '../../src/storage/database.js';
+import { outcomeOf, rowOf } from '../../src/storage/outcome.js';
 import { createHistory } from '../../src/storage/history.js';
 import type { History } from '../../src/storage/history.js';
 import type { RunWithResult } from '../../src/storage/types.js';
@@ -264,6 +265,28 @@ describe('POST /runs/<scenario>: accepted', () => {
       trigger: 'manual',
       status: 'ok' });
     expect(body.result?.runId).toBe('raaaaaaaaaaaaaaaa');
+  });
+
+  it('with ?wait=true answers with the result of a row built in memory when the history has none', async () => {
+    const { post, scheduler } = await rig();
+    const pending = post(`/runs/${SEND}?wait=true`);
+
+    await vi.waitFor(() => {
+      expect(scheduler.runNow).toHaveBeenCalled();
+    });
+
+    const result = runResultFixture({ runId: 'raaaaaaaaaaaaaaaa',
+      warnings: ['first', 'second'] });
+
+    scheduler.finish(rowOf({ runId: 'raaaaaaaaaaaaaaaa',
+      scenario: SEND,
+      sequence: 1,
+      trigger: 'manual',
+      startedAt: '2026-03-10T10:00:00.000Z' }, outcomeOf(result, { loopEnabled: false })));
+
+    const body = await (await pending).json() as RunWithResult;
+
+    expect(body.result?.warnings).toEqual(['first', 'second']);
   });
 
   it('with ?wait=true gives up at the watchdog of the scenario and answers 202 with the run id', async () => {

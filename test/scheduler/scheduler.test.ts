@@ -7,7 +7,7 @@ import type { ScenarioName } from '../../src/scenarios/names.js';
 import { openDatabase } from '../../src/storage/database.js';
 import { createHistory } from '../../src/storage/history.js';
 import type { History } from '../../src/storage/history.js';
-import type { RunOutcome, RunRow } from '../../src/storage/types.js';
+import type { RunOutcome, RunRow, RunWithResult } from '../../src/storage/types.js';
 import { testConfig } from '../support/config.js';
 import { createFakeClock } from '../support/fake-clock.js';
 import type { FakeClock } from '../support/fake-clock.js';
@@ -1081,6 +1081,26 @@ describe('a run whose start was not written', () => {
     expect(scheduler.failures()).toBe(2);
     await clock.advance(INTERVAL_MS);
     expect(callOf(runners[SEND], 1).sequence).toBe(callOf(runners[SEND], 0).sequence + 1);
+  });
+
+  it('keeps the result in the row built in memory, for the listener and for done', async () => {
+    const real = createHistory(openDatabase(':memory:'));
+    const { history } = failingStart(real, Infinity);
+    const { scheduler, clock, runners, finished } = setup({ scenarios: [SEND],
+      history });
+    const started = scheduler.runNow(SEND, 'manual');
+
+    if (!started.started) {
+      throw new Error('Expected the run to start');
+    }
+
+    await settle(clock);
+    callOf(runners[SEND], 0).resolve({ warnings: ['first', 'second'] });
+
+    const row = await started.done as RunWithResult;
+
+    expect(row.result?.warnings).toEqual(['first', 'second']);
+    expect((finished[0]?.row as RunWithResult).result?.warnings).toEqual(['first', 'second']);
   });
 
   it('stopped before its start was written is recorded as monitor_stopped', async () => {
