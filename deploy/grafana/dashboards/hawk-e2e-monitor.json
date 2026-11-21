@@ -168,8 +168,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s",
-          "noValue": "0"
+          "unit": "s"
         },
         "overrides": []
       },
@@ -202,8 +201,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s",
-          "noValue": "0"
+          "unit": "s"
         },
         "overrides": []
       },
@@ -245,8 +243,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s",
-          "noValue": "0"
+          "unit": "s"
         },
         "overrides": []
       },
@@ -279,8 +276,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s",
-          "noValue": "0"
+          "unit": "s"
         },
         "overrides": []
       },
@@ -307,7 +303,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (scenario, stage, error_class) (increase(hawk_e2e_failures_total[1h]))",
+          "expr": "sum by (scenario, stage, error_class) (((hawk_e2e_failures_total unless hawk_e2e_failures_total offset 1h) and on (job, instance) (up{job=\"monitor\"} offset 1h)) or increase(hawk_e2e_failures_total[1h]))",
           "legendFormat": "{{scenario}} {{stage}} {{error_class}}"
         }
       ],
@@ -382,7 +378,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (stage) (increase(hawk_e2e_failures_total{scenario=\"endpoints-probe\"}[1h]))",
+          "expr": "sum by (stage) (((hawk_e2e_failures_total{scenario=\"endpoints-probe\"} unless hawk_e2e_failures_total{scenario=\"endpoints-probe\"} offset 1h) and on (job, instance) (up{job=\"monitor\"} offset 1h)) or increase(hawk_e2e_failures_total{scenario=\"endpoints-probe\"}[1h]))",
           "legendFormat": "failures {{stage}}"
         }
       ],

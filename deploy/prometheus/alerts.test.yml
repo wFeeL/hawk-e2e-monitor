@@ -15,6 +15,21 @@ tests:
           - exp_labels: { job: monitor, instance: "monitor:8090" }
             exp_annotations: { summary: The monitor does not answer on its metrics port. }
 
+  # No scrape of the monitor at all: the series is absent, not zero.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="prometheus", instance="localhost:9090"}'
+        values: "1x10"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: MonitorDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: MonitorDown
+        exp_alerts:
+          - exp_labels: { job: monitor }
+            exp_annotations: { summary: The monitor does not answer on its metrics port. }
+
   - interval: 1m
     input_series:
       - series: 'hawk_e2e_last_run_timestamp_seconds{scenario="send-and-receive-event"}'
