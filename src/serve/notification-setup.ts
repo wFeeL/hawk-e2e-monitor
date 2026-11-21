@@ -14,7 +14,7 @@ import type { ScenarioSetup, SetupScenario } from './scenario-setup.js';
 export const setupCheckNotification: SetupScenario = async (context): Promise<ScenarioSetup> => {
   const { config, clock, logger, masking, api, collector, overrides } = context;
   const runtime = await sharedReceiver(context);
-  const { settings, receiver, findAddress, lastHostname } = runtime;
+  const { settings, receiver, findAddress } = runtime;
   const provisioner: Provisioner = createProvisioner({ api,
     clock,
     projectId: config.hawk.projectId,
@@ -38,7 +38,6 @@ export const setupCheckNotification: SetupScenario = async (context): Promise<Sc
       provisioner,
       resolveAddress: findAddress,
       addSecret: masking.add,
-      lastHostname,
       ...overrides.addressPollMs === undefined ? {} : { addressPollMs: overrides.addressPollMs } }, { sequence,
       runId }),
     beforeFirstRun: runtime.waitForTunnel,

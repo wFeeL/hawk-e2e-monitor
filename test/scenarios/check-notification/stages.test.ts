@@ -291,65 +291,13 @@ describe('notificationSetupStage', () => {
   });
 });
 
-describe('notificationSetupStage after the address changed', () => {
-  it('waits until the new address answers the self-check, then provisions and remembers the host', async () => {
-    const parts = await scenario({ preProvision: false });
-    const server = await probeServer(hit => Promise.resolve(hit < 3 ? 'not the receiver' : parts.receiver.nonce));
-
-    parts.context.resolveAddress = () => Promise.resolve(server.address);
-    parts.context.lastHostname = { value: 'old.example.test' };
-    parts.context.addressPollMs = 20;
-
-    const result = await run(notificationSetupStage(TIMEOUT_MS), parts.context);
-
-    expect(result.status).toBe('ok');
-    expect(server.hits()).toBe(3);
-    expect(parts.context.lastHostname.value).toBe(server.address.hostname);
-    expect(parts.context.notification.provisioning?.action).toBe('created');
-  });
-
-  it('fails with the last self-check error when the timeout ends first, and leaves the rule and the remembered host alone', async () => {
-    const parts = await scenario({ preProvision: false });
-    const server = await probeServer(() => Promise.resolve('not the receiver'));
-    const before = hawk.rules.version(hawk.projectId);
-
-    parts.context.resolveAddress = () => Promise.resolve(server.address);
-    parts.context.lastHostname = { value: 'old.example.test' };
-    parts.context.addressPollMs = 20;
-
-    const result = await run(notificationSetupStage(400), parts.context);
-
-    expect(result).toMatchObject({ status: 'failed',
-      errorClass: 'receiver_unreachable' });
-    expect(server.hits()).toBeGreaterThan(1);
-    expect(hawk.rules.version(hawk.projectId)).toBe(before);
-    expect(parts.context.lastHostname.value).toBe('old.example.test');
-  });
-
-  it('does not wait for the first address of the process and remembers it', async () => {
+describe('notificationSetupStage for a configured address', () => {
+  it('makes one ordinary probe for a configured address', async () => {
     const parts = await scenario();
-
-    parts.context.lastHostname = {};
-
     const result = await run(notificationSetupStage(TIMEOUT_MS), parts.context);
 
     expect(result.status).toBe('ok');
-    expect(parts.context.lastHostname.value).toBe(parts.address.hostname);
-  });
-
-  it('does not wait when the host is the same as before', async () => {
-    const parts = await scenario({ env: { HTTP_TIMEOUT_MS: '300' } });
-    const server = await probeServer(() => Promise.resolve('not the receiver'));
-
-    parts.context.resolveAddress = () => Promise.resolve(server.address);
-    parts.context.lastHostname = { value: server.address.hostname };
-
-    const result = await run(notificationSetupStage(TIMEOUT_MS), parts.context);
-
-    expect(result).toMatchObject({ status: 'failed',
-      errorClass: 'receiver_unreachable' });
-    // The ordinary probe, not the waiting loop, judged it.
-    expect(server.hits()).toBeLessThanOrEqual(3);
+    expect(result.details?.probes).toBe(1);
   });
 });
 
@@ -540,19 +488,31 @@ describe('notificationSetupStage through a tunnel', () => {
     expect(ms).toBeLessThan(950);
   });
 
-  it('waits for a new tunnel host inside the same window', async () => {
+  it('waits for a tunnel address inside the window', async () => {
     const server = await statusServer(() => ({ status: 200,
       body: 'not the receiver' }));
     const parts = await tunnelScenario(server.address);
-
-    parts.context.lastHostname = { value: 'old.example.test' };
 
     const { result, ms } = await timed(notificationSetupStage(3000), parts.context);
 
     expect(result).toMatchObject({ status: 'failed',
       errorClass: 'receiver_unreachable' });
     expect(ms).toBeLessThan(2700);
-    expect(parts.context.lastHostname.value).toBe('old.example.test');
+  });
+
+  it('a tunnel address gets one ordinary probe when the window is not positive', async () => {
+    const server = await statusServer(() => ({ status: 530,
+      body: 'gap' }));
+    const parts = await tunnelScenario(server.address, { HTTP_TIMEOUT_MS: '500',
+      RETRY_ATTEMPTS: '3',
+      RETRY_DELAYS_MS: '10,10' });
+
+    const { result, ms } = await timed(notificationSetupStage(1000), parts.context);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'receiver_unreachable' });
+    expect(server.hits()).toBe(3);
+    expect(ms).toBeLessThan(1000);
   });
 
   it('keeps the ordinary probe for a fixed address', async () => {
@@ -946,6 +906,16 @@ describe('notificationFormedStage through a tunnel', () => {
     expect(result.message).toContain('registrations 3 → 4');
   });
 
+  it('a counter that fell makes it tunnel_reconnected', async () => {
+    const { parts } = await silent({ before: 3,
+      after: 1 });
+    const result = await run(notificationFormedStage(FORMED_TIMEOUT_MS), parts.context);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'tunnel_reconnected' });
+    expect(result.message).toContain('registrations 3 → 1');
+  });
+
   it('the same counter keeps notification_timeout', async () => {
     const { parts } = await silent({ before: 3,
       after: 3 });
@@ -1046,6 +1016,69 @@ describe('thresholdFormedStage through a tunnel', () => {
       errorClass: 'tunnel_reconnected',
       culprit: 'network' });
     expect(result.message).toContain('No threshold notification arrived');
+  });
+});
+
+/**
+ * Builds a repeat run that is ready for the threshold stage, with a rule that waits for no POST.
+ * @returns The scenario after send, search and repeat.
+ */
+async function emptyThreshold(): Promise<NotificationTestScenario> {
+  const parts = await scenario({ repeat: true,
+    env: { NOTIFICATION_TIMEOUT_MS: '300',
+      NOTIFICATION_PAIR_WAIT_MS: '100' } });
+
+  hawk.rules.remove(hawk.projectId, hawk.rules.list(hawk.projectId).find(rule => rule.whatToReceive === 'SEEN_MORE' && rule.including.length === 1)?.id ?? '');
+
+  const { context } = parts;
+
+  await sendEvent(context);
+  await run(eventVisibleStage(TIMEOUT_MS), context);
+  await run(eventRepeatedStage(TIMEOUT_MS, thresholdBeforeRepeat(context)), context);
+
+  return parts;
+}
+
+describe('thresholdFormedStage after an empty wait', () => {
+  it('a counter that fell makes it tunnel_reconnected for the threshold channel', async () => {
+    const { context, receiver } = await emptyThreshold();
+
+    context.address = httpAddress(receiver.port, 'tunnel');
+    context.tunnelRegistrations = () => Promise.resolve(1);
+    context.notification.registrationsAtSetup = 3;
+
+    const result = await run(thresholdFormedStage(FORMED_TIMEOUT_MS), context);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'tunnel_reconnected' });
+    expect(result.message).toContain('registrations 3 → 1');
+    expect(result.message).toContain('No threshold notification arrived');
+  });
+
+  it('blames the receiver when it does not answer after an empty wait', async () => {
+    const { context } = await emptyThreshold();
+
+    context.address = httpAddress(await deadPort(), 'tunnel');
+    context.tunnelRegistrations = () => Promise.resolve(3);
+    context.notification.registrationsAtSetup = 3;
+
+    const result = await run(thresholdFormedStage(FORMED_TIMEOUT_MS), context);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'receiver_unreachable' });
+    expect(result.details).toHaveProperty('unmatched');
+  });
+
+  it('probes the receiver once before notification_timeout', async () => {
+    const { context } = await emptyThreshold();
+    const probe = await probeServer(() => Promise.resolve(context.receiver.nonce));
+
+    context.address = probe.address;
+
+    const result = await run(thresholdFormedStage(FORMED_TIMEOUT_MS), context);
+
+    expect(result.errorClass).toBe('notification_timeout');
+    expect(probe.hits()).toBe(1);
   });
 });
 

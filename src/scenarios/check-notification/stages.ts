@@ -1,7 +1,7 @@
 import { formatDuration } from '../../time/format.js';
 import type { FoundEvent } from '../../clients/hawk-api.js';
 import type { notificationSettings } from '../../config/load.js';
-import type { StageDetails } from '../../engine/result.js';
+import type { StageDetails, StageName } from '../../engine/result.js';
 import type { StageOutcome, StageSpec } from '../../engine/stages.js';
 import { CheckError, isCheckError } from '../../errors/taxonomy.js';
 import { probeReceiver } from '../../notifications/address.js';
@@ -34,12 +34,6 @@ export interface NotificationState {
   registrationsAtSetup?: number;
 }
 
-/** Host of the address a process used for the last run. */
-export interface LastHostname {
-  /** Host with the port when it has one; absent before the first run. */
-  value?: string;
-}
-
 /** Everything a notification stage needs. */
 export interface NotificationContext extends ScenarioContext {
   /** Receiver of the notifications. */
@@ -54,8 +48,6 @@ export interface NotificationContext extends ScenarioContext {
   resolveAddress: (signal: AbortSignal) => Promise<PublicAddress>;
   /** Adds a value to the secrets that output must not show. */
   addSecret: (value: string) => void;
-  /** Host of the address of the previous run, shared by the runs of a process; a new host is waited for before the rule is changed. */
-  lastHostname?: LastHostname;
   /** Pause between self-checks while waiting for a new address, 2000 ms by default. */
   addressPollMs?: number;
   /** Reads the registration counter of the tunnel; absent when the address does not come from the tunnel. */
@@ -81,7 +73,7 @@ export const UNREADABLE_REGISTRATIONS = 'The tunnel registration counter could n
  * @param waitedMs How long the wait lasted.
  * @param signal Aborts the read.
  * @param channel Channel that did not arrive, when the stage waits for one.
- * @returns `error` when the counter grew, `warning` when it cannot be compared, nothing otherwise.
+ * @returns `error` when the counter changed, `warning` when it cannot be compared, nothing otherwise.
  */
 export async function tunnelReconnect(context: NotificationContext, waitedMs: number, signal: AbortSignal, channel?: ArrivalKind): Promise<ReconnectVerdict> {
   if (context.address?.source !== 'tunnel' || context.tunnelRegistrations === undefined) {
@@ -100,13 +92,45 @@ export async function tunnelReconnect(context: NotificationContext, waitedMs: nu
     return { warning: UNREADABLE_REGISTRATIONS };
   }
 
-  if (after > before) {
+  // A restarted cloudflared counts from zero again, so a lower value is a reconnect too.
+  if (after !== before) {
     return { error: new CheckError('tunnel_reconnected', { waitedMs,
       detail: `registrations ${String(before)} → ${String(after)}`,
       ...channel === undefined ? {} : { channel } }) };
   }
 
   return {};
+}
+
+/**
+ * Probes the receiver once after a wait in which nothing arrived, to tell a dead receiver from a silent Hawk.
+ * @param context Context of the stage; its address is probed.
+ * @param signal Timeout of the stage.
+ * @param stage Name of the calling stage, for the text of an internal error.
+ * @returns The error of a failed probe, or undefined when the receiver answered.
+ * @throws Whatever is not a `CheckError`.
+ */
+export async function probeAfterEmptyWait(context: NotificationContext, signal: AbortSignal, stage: StageName): Promise<CheckError | undefined> {
+  const { address, clock, config, receiver, settings } = context;
+
+  if (address === undefined) {
+    return new CheckError('monitor_internal', { detail: `${stage} ran without a public address` });
+  }
+
+  try {
+    await probeReceiver(address, settings.receiverSecret, receiver.nonce, { httpTimeoutMs: config.httpTimeoutMs,
+      clock,
+      attempts: 1,
+      retry: config.retry }, signal);
+  } catch (error) {
+    if (isCheckError(error)) {
+      return error;
+    }
+
+    throw error;
+  }
+
+  return undefined;
 }
 
 /** An event of a webhook body. */
@@ -289,19 +313,19 @@ export function notificationBeforeSend(context: NotificationContext): () => void
  * Waits until the receiver answers through an address, trying once per pause.
  * @param context Context of the stage.
  * @param address The address to check.
- * @param deadlineMs `clock.monotonicMs()` value after which no new try starts; undefined polls until the signal aborts.
+ * @param deadlineMs `clock.monotonicMs()` value after which no new try starts.
  * @param signal Timeout of the stage.
  * @returns Number of self-checks made, the passing one included.
  * @throws CheckError of the last self-check when the deadline or the timeout ends first.
  */
-async function waitForAddress(context: NotificationContext, address: PublicAddress, deadlineMs: number | undefined, signal: AbortSignal): Promise<number> {
+async function waitForAddress(context: NotificationContext, address: PublicAddress, deadlineMs: number, signal: AbortSignal): Promise<number> {
   const { config, clock, receiver, settings } = context;
   const pauseMs = context.addressPollMs ?? DEFAULT_ADDRESS_POLL_MS;
   let last: CheckError | undefined;
   let probes = 0;
 
   for (;;) {
-    const remaining = deadlineMs === undefined ? config.httpTimeoutMs : deadlineMs - clock.monotonicMs();
+    const remaining = deadlineMs - clock.monotonicMs();
 
     // The monotonic clock is fractional and a request timeout must be a whole number of milliseconds.
     const probeTimeoutMs = Math.ceil(Math.min(config.httpTimeoutMs, Math.max(remaining, pauseMs)));
@@ -324,7 +348,7 @@ async function waitForAddress(context: NotificationContext, address: PublicAddre
     }
 
     // A probe after a pause must have at least one pause left, so it ends inside the window.
-    if (deadlineMs !== undefined && deadlineMs - clock.monotonicMs() < 2 * pauseMs) {
+    if (deadlineMs - clock.monotonicMs() < 2 * pauseMs) {
       throw last;
     }
 
@@ -356,7 +380,6 @@ export function notificationSetupStage(timeoutMs: number): StageSpec<Notificatio
       context.addSecret(address.hostname);
       context.addSecret(new URL(address.baseUrl).hostname);
 
-      const previous = context.lastHostname?.value;
       let probes = 1;
 
       // Provisioning runs in the same stage, so the probe leaves it two request timeouts.
@@ -364,17 +387,12 @@ export function notificationSetupStage(timeoutMs: number): StageSpec<Notificatio
 
       if (address.source === 'tunnel' && windowMs > 0) {
         probes = await waitForAddress(context, address, startedMs + windowMs, signal);
-      } else if (previous !== undefined && previous !== address.hostname) {
-        probes = await waitForAddress(context, address, undefined, signal);
       } else {
+        // Without room for the window the address gets one ordinary probe, so provisioning keeps its time.
         await probeReceiver(address, settings.receiverSecret, receiver.nonce, { httpTimeoutMs: config.httpTimeoutMs,
           clock,
           attempts: config.retry.attempts,
           retry: config.retry }, signal);
-      }
-
-      if (context.lastHostname !== undefined) {
-        context.lastHostname.value = address.hostname;
       }
 
       const details: StageDetails = { probes };
@@ -443,10 +461,7 @@ export function notificationFormedStage(timeoutMs: number): StageSpec<Notificati
       const details: StageDetails = { unmatched: arrivals.unmatched };
 
       notification.arrivals = arrivals;
-
       if (missing.length === channels.length) {
-        const { address } = context;
-
         details.waitedMs = waitedMs;
 
         const reconnect = await tunnelReconnect(context, waitedMs, signal);
@@ -461,23 +476,12 @@ export function notificationFormedStage(timeoutMs: number): StageSpec<Notificati
           details.warning = reconnect.warning;
         }
 
-        try {
-          if (address === undefined) {
-            throw new CheckError('monitor_internal', { detail: 'notification_formed ran without a public address' });
-          }
+        const probeError = await probeAfterEmptyWait(context, signal, 'notification_formed');
 
-          await probeReceiver(address, settings.receiverSecret, receiver.nonce, { httpTimeoutMs: config.httpTimeoutMs,
-            clock,
-            attempts: 1,
-            retry: config.retry }, signal);
-        } catch (error) {
-          if (isCheckError(error)) {
-            return { status: 'failed',
-              error,
-              details };
-          }
-
-          throw error;
+        if (probeError !== undefined) {
+          return { status: 'failed',
+            error: probeError,
+            details };
         }
 
         return { status: 'failed',
@@ -608,6 +612,14 @@ export function thresholdFormedStage(timeoutMs: number): StageSpec<NotificationC
 
         if (reconnect.warning !== undefined) {
           details.warning = reconnect.warning;
+        }
+
+        const probeError = await probeAfterEmptyWait(context, signal, 'threshold_formed');
+
+        if (probeError !== undefined) {
+          return { status: 'failed',
+            error: probeError,
+            details };
         }
 
         return { status: 'failed',

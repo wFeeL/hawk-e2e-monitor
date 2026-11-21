@@ -4,10 +4,9 @@ import type { StageDetails } from '../../engine/result.js';
 import type { StageOutcome, StageSpec } from '../../engine/stages.js';
 import { CheckError, isCheckError } from '../../errors/taxonomy.js';
 import type { ErrorClass } from '../../errors/taxonomy.js';
-import { probeReceiver } from '../../notifications/address.js';
 import { formatDuration } from '../../time/format.js';
 import { MS_PER_SECOND } from '../../time/units.js';
-import { checkWebhook, tunnelReconnect } from '../check-notification/stages.js';
+import { checkWebhook, probeAfterEmptyWait, tunnelReconnect } from '../check-notification/stages.js';
 import type { NotificationContext } from '../check-notification/stages.js';
 
 const LONG_POLL_MAX_S = 10;
@@ -375,23 +374,12 @@ export function telegramFormedStage(timeoutMs: number): StageSpec<TelegramContex
           details.warning = reconnect.warning;
         }
 
-        try {
-          if (context.address === undefined) {
-            throw new CheckError('monitor_internal', { detail: 'notification_formed ran without a public address' });
-          }
+        const probeError = await probeAfterEmptyWait(context, signal, 'notification_formed');
 
-          await probeReceiver(context.address, settings.receiverSecret, receiver.nonce, { httpTimeoutMs: config.httpTimeoutMs,
-            clock,
-            attempts: 1,
-            retry: config.retry }, signal);
-        } catch (error) {
-          if (isCheckError(error)) {
-            return { status: 'failed',
-              error,
-              details };
-          }
-
-          throw error;
+        if (probeError !== undefined) {
+          return { status: 'failed',
+            error: probeError,
+            details };
         }
 
         return { status: 'failed',

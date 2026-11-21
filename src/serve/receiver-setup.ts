@@ -8,7 +8,6 @@ import { probeReceiver, resolvePublicAddress } from '../notifications/address.js
 import type { PublicAddress } from '../notifications/address.js';
 import { startReceiver } from '../receiver/server.js';
 import type { Receiver } from '../receiver/server.js';
-import type { LastHostname } from '../scenarios/check-notification/stages.js';
 import type { Clock } from '../time/clock.js';
 import type { FindAddress, RunnerContext } from './scenario-setup.js';
 
@@ -136,8 +135,6 @@ export interface ReceiverRuntime {
   receiver: Receiver;
   /** Looks up the public address. */
   findAddress: FindAddress;
-  /** Host of the address of the previous run; both scenarios see the same address, so they share it. */
-  lastHostname: LastHostname;
   /** Waits for the tunnel once for the process, later callers get the same wait; never rejects. A wait that its caller cancelled is not shared: the next caller waits again. */
   waitForTunnel: (signal: AbortSignal) => Promise<void>;
   /** False until a wait for the tunnel has ended for a caller that did not cancel it. */
@@ -195,7 +192,6 @@ async function startRuntime(context: RunnerContext): Promise<ReceiverRuntime> {
     settings,
     receiver: started,
     findAddress,
-    lastHostname: {},
     waitForTunnel: async (signal) => {
       if (tunnel === undefined) {
         const own = waitForTunnel({ findAddress,

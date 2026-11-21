@@ -26,14 +26,44 @@ describe('classifyNetworkError', () => {
     expect(classifyNetworkError(fetchFailed('ECONNREFUSED'), 'api').errorClass).toBe('api_unavailable');
   });
 
-  it('maps TLS codes', () => {
-    for (const code of ['DEPTH_ZERO_SELF_SIGNED_CERT', 'ERR_SSL_WRONG_VERSION_NUMBER', 'ERR_TLS_CERT_ALTNAME_INVALID',
-      'CERT_HAS_EXPIRED', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'SELF_SIGNED_CERT_IN_CHAIN']) {
-      expect(classifyNetworkError(fetchFailed(code), 'collector'))
-        .toEqual({ errorClass: 'tls_error',
-          code,
-          beforeSend: true });
-    }
+  it.each([
+    'CERT_HAS_EXPIRED',
+    'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+    'DEPTH_ZERO_SELF_SIGNED_CERT',
+    'SELF_SIGNED_CERT_IN_CHAIN',
+    'ERR_TLS_CERT_ALTNAME_INVALID',
+    'ERR_TLS_HANDSHAKE_TIMEOUT',
+    'ERR_SSL_WRONG_VERSION_NUMBER',
+    'ERR_SSL_SSLV3_ALERT_HANDSHAKE_FAILURE',
+    'ERR_SSL_TLSV1_ALERT_PROTOCOL_VERSION',
+    'ERR_SSL_TLSV1_UNRECOGNIZED_NAME',
+    'ERR_SSL_UNSUPPORTED_PROTOCOL',
+    'ERR_SSL_NO_PROTOCOLS_AVAILABLE',
+    'ERR_SSL_TLSV1_ALERT_UNKNOWN_CA',
+  ])('a certificate error is tls_error before the send: %s', (code) => {
+    expect(classifyNetworkError(fetchFailed(code), 'collector'))
+      .toEqual({ errorClass: 'tls_error',
+        code,
+        beforeSend: true });
+  });
+
+  it.each([
+    'ERR_SSL_DECRYPTION_FAILED_OR_BAD_RECORD_MAC',
+    'ERR_SSL_SSLV3_ALERT_BAD_RECORD_MAC',
+    'ERR_SSL_UNEXPECTED_EOF_WHILE_READING',
+    'ERR_SSL_PACKET_LENGTH_TOO_LONG',
+  ])('a tls record error may come after the send: %s', (code) => {
+    expect(classifyNetworkError(fetchFailed(code), 'collector'))
+      .toEqual({ errorClass: 'tls_error',
+        code,
+        beforeSend: false });
+  });
+
+  it('a connect timeout is before the send', () => {
+    expect(classifyNetworkError(fetchFailed('UND_ERR_CONNECT_TIMEOUT'), 'collector'))
+      .toEqual({ errorClass: 'collector_unavailable',
+        code: 'UND_ERR_CONNECT_TIMEOUT',
+        beforeSend: true });
   });
 
   it('treats abort and timeout names as TIMEOUT after send, ignoring numeric codes', () => {

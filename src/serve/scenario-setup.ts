@@ -23,7 +23,7 @@ export interface RunnerOverrides {
   resolveAddress?: typeof resolvePublicAddress;
   /** Poll schedule of the search for the event, short in tests. */
   pollScheduleMs?: readonly number[];
-  /** Pause between self-checks while a new tunnel address is awaited, 2000 ms by default. */
+  /** Pause between self-checks while a tunnel address is awaited, 2000 ms by default. */
   addressPollMs?: number;
   /** Pause between self-checks while the tunnel starts, 2000 ms by default. */
   tunnelPollMs?: number;

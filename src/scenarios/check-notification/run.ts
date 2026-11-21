@@ -17,7 +17,7 @@ import { cleanupStage } from '../shared/cleanup.js';
 import { collectorAcceptStage, eventRepeatedStage, eventVisibleStage } from '../shared/delivery.js';
 import type { ScenarioState } from '../shared/context.js';
 import { notificationBeforeSend, notificationFormedStage, notificationSetupStage, thresholdBeforeRepeat, thresholdFormedStage } from './stages.js';
-import type { LastHostname, NotificationContext, NotificationState } from './stages.js';
+import type { NotificationContext, NotificationState } from './stages.js';
 import { decideNotificationVerdict } from './verdict.js';
 import { CHECK_NOTIFICATION } from '../names.js';
 
@@ -37,8 +37,6 @@ export interface NotificationDeps extends ScenarioDeps {
   onMatchChange?: (wallMs: number) => void;
   /** Adds a value that output must not show, such as the public address. */
   addSecret: (value: string) => void;
-  /** Host of the previous run's address, shared by the runs of a process; see `NotificationContext`. */
-  lastHostname?: LastHostname;
   /** Pause between self-checks while waiting for a new address, for tests. */
   addressPollMs?: number;
 }
@@ -106,7 +104,6 @@ export async function runCheckNotification(deps: NotificationDeps, options: Plan
       clock,
       retry: config.retry }, signal)),
     addSecret: deps.addSecret,
-    ...deps.lastHostname === undefined ? {} : { lastHostname: deps.lastHostname },
     ...deps.addressPollMs === undefined ? {} : { addressPollMs: deps.addressPollMs },
     ...tunnelRegistrations === undefined ? {} : { tunnelRegistrations },
     notification };

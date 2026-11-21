@@ -877,6 +877,20 @@ describe('telegramFormedStage', () => {
     expect(result.message).toContain('registrations 3 → 4');
   });
 
+  it('a counter that fell makes it tunnel_reconnected', async () => {
+    const { context, parts } = await world();
+
+    context.address = httpAddress(parts.receiver.port, 'tunnel');
+    context.tunnelRegistrations = () => Promise.resolve(1);
+    context.notification.registrationsAtSetup = 3;
+    register(context);
+
+    const result = await run(telegramFormedStage(STAGE_MS), context);
+
+    expect(result.errorClass).toBe('tunnel_reconnected');
+    expect(result.message).toContain('registrations 3 → 1');
+  });
+
   it('an unreadable tunnel counter and a failed probe keep receiver_unreachable and warn', async () => {
     const { context } = await world();
     const dead = await startDeadPort();

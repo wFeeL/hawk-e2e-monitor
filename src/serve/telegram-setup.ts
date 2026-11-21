@@ -36,7 +36,7 @@ export const setupTelegramDelivery: SetupScenario = async (context): Promise<Sce
   const { config, clock, logger, masking, api, collector, overrides } = context;
   const bot = settingsOrStartupError(config);
   const runtime = await sharedReceiver(context);
-  const { settings, receiver, findAddress, lastHostname } = runtime;
+  const { settings, receiver, findAddress } = runtime;
   const telegramClient = createTelegramClient({ apiUrl: bot.apiUrl,
     token: bot.botToken,
     httpTimeoutMs: config.httpTimeoutMs,
@@ -66,7 +66,6 @@ export const setupTelegramDelivery: SetupScenario = async (context): Promise<Sce
       telegramClient,
       resolveAddress: findAddress,
       addSecret: masking.add,
-      lastHostname,
       ...overrides.addressPollMs === undefined ? {} : { addressPollMs: overrides.addressPollMs } }, { sequence,
       runId }),
     beforeFirstRun: runtime.waitForTunnel,
