@@ -134,7 +134,7 @@ export interface SchedulerHealth {
 
 /** Starts scenario runs on a schedule and watches them. */
 export interface Scheduler {
-  /** Starts the timers; the first run of the first scenario begins at once. */
+  /** Starts the timers; each scenario ticks first after its stagger, or when the old schedule says so after a restart. */
   start(): void;
   /**
    * Aborts running runs and records `monitor_stopped`; does not wait for the runs themselves.
@@ -219,6 +219,8 @@ interface ScenarioState {
   lastTickMono?: number;
   /** Wall-clock time of the last tick. */
   lastTickAt?: string;
+  /** Monotonic time the first tick is due; the silence before it counts from here. */
+  firstDueMono?: number;
   /** Run that keeps the scenario busy. */
   running?: Handle;
   /** Hung runs in a row. */
@@ -639,6 +641,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const firstTick = async (state: ScenarioState): Promise<void> => {
     const delay = firstDelay(state);
 
+    state.firstDueMono = clock.monotonicMs() + delay;
+
     if (delay > 0) {
       try {
         await clock.sleep(delay, stopper.signal);
@@ -667,7 +671,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // Before its first tick a scenario with a gate may wait for the tunnel, which is bounded by its own timeout.
     const allowedMs = (state: ScenarioState): number => thresholdOf(state.name)
       + (state.lastTickMono === undefined && deps.beforeFirstRun?.[state.name] !== undefined ? monitoring.tunnelReadyTimeoutMs : 0);
-    const ticking = started && !stopped && [...states.values()].every(state => nowMonoMs - (state.lastTickMono ?? startedMono ?? nowMonoMs) <= allowedMs(state));
+    const ticking = started && !stopped && [...states.values()].every(state => nowMonoMs - (state.lastTickMono ?? state.firstDueMono ?? startedMono ?? nowMonoMs) <= allowedMs(state));
 
     // The watchdog abandons a run at `watchdogMs` and the scenario is held for one more cleanup timeout.
     const stuck = [...states.values()]

@@ -4,6 +4,7 @@ import type { Config } from '../../src/config/load.js';
 import type { RunResult } from '../../src/engine/result.js';
 import { createRedactor } from '../../src/errors/redact.js';
 import type { ScenarioName } from '../../src/scenarios/names.js';
+import type { Clock } from '../../src/time/clock.js';
 import { openDatabase } from '../../src/storage/database.js';
 import { createHistory } from '../../src/storage/history.js';
 import type { History } from '../../src/storage/history.js';
@@ -1553,5 +1554,125 @@ describe('warmup streak', () => {
     await settle(parts.clock);
 
     expect(await skipCall(parts, 0)).toMatchObject({ status: 'skipped' });
+  });
+});
+
+describe('first tick', () => {
+  const DEFAULT_ORDER: ScenarioName[] = [SEND, NOTIFY, 'sourcemaps', 'sentry-envelope', PROBE];
+  const FIRST_DELAY_MS = 30_000;
+
+  /** Scheduler under test with instant runners. */
+  interface Instant {
+    /** The scheduler. */
+    scheduler: Scheduler;
+    /** The `exit` spy. */
+    exit: ReturnType<typeof vi.fn<(code: number) => void>>;
+    /** Calls per scenario. */
+    calls: Map<ScenarioName, number>;
+  }
+
+  /**
+   * Builds a scheduler whose runners end every run at once.
+   * @param scenarios Scenarios to run, in order.
+   * @param staggerMs Stagger between the first ticks.
+   * @param clock Clock to use.
+   * @returns The scheduler, the `exit` spy and the calls per scenario.
+   */
+  function instant(scenarios: ScenarioName[], staggerMs: number, clock: Clock): Instant {
+    const base = testConfig();
+    const config: Config = { ...base,
+      monitoring: { ...base.monitoring,
+        scenarios,
+        intervalMs: INTERVAL_MS,
+        staggerMs } };
+    const calls = new Map<ScenarioName, number>();
+    const exit = vi.fn<(code: number) => void>();
+    const runners: Partial<Record<ScenarioName, (options: ScenarioRunOptions) => Promise<RunResult>>> = {};
+    let counter = 0;
+
+    for (const scenario of scenarios) {
+      runners[scenario] = async (options) => {
+        calls.set(scenario, (calls.get(scenario) ?? 0) + 1);
+
+        return Promise.resolve(runResultFixture({ runId: options.runId,
+          sequence: options.sequence,
+          scenario }));
+      };
+    }
+
+    const scheduler = createScheduler({ runners,
+      history: createHistory(openDatabase(':memory:')),
+      clock,
+      logger: memoryLogger(),
+      config,
+      redact: createRedactor(['hunter2-secret']),
+      newRunId: () => {
+        counter += 1;
+
+        return `r${'a'.repeat(13)}${String.fromCodePoint(97 + Math.floor(counter / 26))}${String.fromCodePoint(97 + (counter % 26))}`;
+      },
+      exit });
+
+    cleanups.push(async () => {
+      await scheduler.stop();
+    });
+
+    return { scheduler,
+      exit,
+      calls };
+  }
+
+  it('does not exit while the probe waits for its staggered first tick, and every default scenario runs', async () => {
+    const clock = createFakeClock({ wall: START });
+    const { scheduler, exit, calls } = instant(DEFAULT_ORDER, 60_000, clock);
+
+    scheduler.start();
+    await clock.advance(600_000);
+    expect(exit).not.toHaveBeenCalled();
+
+    for (const scenario of DEFAULT_ORDER) {
+      expect(calls.get(scenario) ?? 0, scenario).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it('does not exit when the probe comes last of seven scenarios and ticks at 180 s', async () => {
+    const all: ScenarioName[] = [SEND, NOTIFY, 'new-project', 'sourcemaps', 'sentry-envelope', 'telegram-delivery', PROBE];
+    const clock = createFakeClock({ wall: START });
+    const { scheduler, exit, calls } = instant(all, 30_000, clock);
+
+    scheduler.start();
+    await clock.advance(600_000);
+    expect(exit).not.toHaveBeenCalled();
+    expect(calls.get(PROBE) ?? 0).toBeGreaterThanOrEqual(1);
+  });
+
+  it('still exits when the first tick of a scenario never comes', async () => {
+    const real = createFakeClock({ wall: START });
+    let blocked = false;
+    const clock: Clock = { ...real,
+      sleep: async (ms, signal) => {
+        if (ms === FIRST_DELAY_MS && !blocked) {
+          blocked = true;
+
+          return new Promise<void>((_resolve, reject) => {
+            signal?.addEventListener('abort', () => {
+              reject(new DOMException('The operation was aborted', 'AbortError'));
+            }, { once: true });
+          });
+        }
+
+        return real.sleep(ms, signal);
+      } };
+    const { scheduler, exit } = instant([SEND, NOTIFY], FIRST_DELAY_MS, clock);
+    const thresholdMs = INTERVAL_MS + WATCHDOG_MS;
+
+    scheduler.start();
+    await real.advance(FIRST_DELAY_MS + thresholdMs);
+    expect(scheduler.health().scheduler).toBe(true);
+    expect(exit).not.toHaveBeenCalled();
+    await real.advance(1);
+    expect(scheduler.health().scheduler).toBe(false);
+    await real.advance(60_000);
+    expect(exit).toHaveBeenCalledWith(1);
   });
 });
