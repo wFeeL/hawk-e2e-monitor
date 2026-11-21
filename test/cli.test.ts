@@ -134,15 +134,47 @@ describe('parseCommand', () => {
   it('history defaults to the last 20 runs', () => {
     expect(parseCommand(['history'])).toEqual({ kind: 'history',
       limit: 20,
-      stats: false });
+      stats: false,
+      json: false });
   });
 
   it('history takes a scenario, a limit and --stats', () => {
     expect(parseCommand(['history', '--scenario', 'check-notification', '--limit', '1000', '--stats'])).toEqual({ kind: 'history',
       scenario: 'check-notification',
       limit: 1000,
-      stats: true });
+      stats: true,
+      json: false });
     expect(parseCommand(['history', '--limit', '1'])).toMatchObject({ limit: 1 });
+  });
+
+  it('history --json asks for JSON lines, with or without --stats', () => {
+    expect(parseCommand(['history', '--json'])).toMatchObject({ kind: 'history',
+      json: true,
+      stats: false });
+    expect(parseCommand(['history', '--stats', '--json'])).toMatchObject({ json: true,
+      stats: true });
+  });
+
+  it.each(['new-project', 'sourcemaps', 'sentry-envelope'])('check %s keeps --sequence but rejects --transport and --repeat', (scenario) => {
+    expect(parseCommand(['check', scenario, '--sequence', '3'])).toMatchObject({ kind: 'check',
+      sequence: 3 });
+
+    for (const flags of [['--transport', 'ws'], ['--repeat']]) {
+      const command = parseCommand(['check', scenario, ...flags]);
+
+      expect(command.kind).toBe('usage');
+      expect(command.kind === 'usage' ? command.message : '').toContain(`${flags[0] ?? ''} does not apply to ${scenario}`);
+    }
+  });
+
+  it('check telegram-delivery still takes --transport and --repeat', () => {
+    expect(parseCommand(['check', 'telegram-delivery', '--transport', 'http', '--repeat'])).toMatchObject({ transport: 'http',
+      repeat: true });
+  });
+
+  it('usage says where --transport and --repeat apply', () => {
+    expect(USAGE).toContain('--transport and --repeat apply to send-and-receive-event, check-notification, telegram-delivery only');
+    expect(USAGE).toContain('[--stats] [--json]');
   });
 
   it.each([

@@ -331,6 +331,56 @@ function telegramErrors(botToken: string | undefined, notifyUrl: string | undefi
   return errors;
 }
 
+/** The settings `history` reads: it opens the database file and knows nothing of Hawk. */
+export interface HistoryConfig {
+  /** Path of the SQLite file. */
+  databasePath: string;
+  /** Scenarios the statistics cover by default. */
+  scenarios: ScenarioName[];
+}
+
+/** Successful `loadHistoryConfig` result. */
+export interface LoadHistoryConfigOk {
+  /** Discriminant. */
+  ok: true;
+  /** The two settings. */
+  config: HistoryConfig;
+}
+
+/** Outcome of `loadHistoryConfig`. */
+export type LoadHistoryConfigResult = LoadConfigFailure | LoadHistoryConfigOk;
+
+/**
+ * Reads only `DATABASE_PATH` and `SCENARIOS`, so `history` works without the Hawk credentials.
+ * @param env Raw environment; empty strings count as missing.
+ * @returns The two settings or every problem found.
+ */
+export function loadHistoryConfig(env: Readonly<Record<string, string | undefined>>): LoadHistoryConfigResult {
+  const read = (name: 'DATABASE_PATH' | 'SCENARIOS'): string | undefined => env[name] === '' ? undefined : env[name];
+  const databasePath = ENV_SHAPE.DATABASE_PATH.safeParse(read('DATABASE_PATH'));
+  const scenarios = ENV_SHAPE.SCENARIOS.safeParse(read('SCENARIOS'));
+  const errors: ConfigError[] = [];
+
+  if (!databasePath.success) {
+    errors.push({ variable: 'DATABASE_PATH',
+      message: databasePath.error.issues[0]?.message ?? 'is invalid' });
+  }
+
+  if (!scenarios.success) {
+    errors.push({ variable: 'SCENARIOS',
+      message: scenarios.error.issues[0]?.message ?? 'is invalid' });
+  }
+
+  if (!databasePath.success || !scenarios.success) {
+    return { ok: false,
+      errors };
+  }
+
+  return { ok: true,
+    config: { databasePath: databasePath.data,
+      scenarios: scenarios.data } };
+}
+
 /** What `loadConfig` may be told about its caller. */
 export interface LoadOptions {
   /** Command about to run; `serve` also needs the settings of the notification scenarios it will start. */

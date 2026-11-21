@@ -6,7 +6,7 @@ import { runHistoryCommand } from './commands/history.js';
 import { runProvisionCommand } from './commands/provision.js';
 import { runRunCommand } from './commands/run.js';
 import type { Config } from './config/load.js';
-import { formatConfigErrors, loadConfig } from './config/load.js';
+import { formatConfigErrors, loadConfig, loadHistoryConfig } from './config/load.js';
 import { describeConfig } from './config/describe.js';
 import type { ParsedEnv } from './config/schema.js';
 import { createLogger } from './log/logger.js';
@@ -159,6 +159,19 @@ async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<nu
     return 0;
   }
 
+  if (command.kind === 'history') {
+    // History only reads the database file, so it does not ask for the Hawk settings.
+    const history = loadHistoryConfig(env);
+
+    if (!history.ok) {
+      process.stderr.write(formatConfigErrors(history.errors));
+
+      return configErrorExitCode();
+    }
+
+    return runHistoryCommand(command, history.config, io);
+  }
+
   const result = loadConfig(env, { command: command.kind });
 
   if (!result.ok) {
@@ -174,8 +187,6 @@ async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<nu
       return runProvisionCommand(command, result.config, io);
     case 'run':
       return runRunCommand(command, result.config, io);
-    case 'history':
-      return runHistoryCommand(command, result.config, io);
     default:
       return serve(result.config, result.env);
   }

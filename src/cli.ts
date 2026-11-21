@@ -1,5 +1,5 @@
 import type { Transport } from './clients/collector.js';
-import { SCENARIO_NAMES, SCENARIO_TRAITS } from './scenarios/names.js';
+import { CHECK_NOTIFICATION, SCENARIO_NAMES, SCENARIO_TRAITS, SEND_AND_RECEIVE_EVENT, TELEGRAM_DELIVERY } from './scenarios/names.js';
 import type { ScenarioName } from './scenarios/names.js';
 import { DEFAULT_LIST_LIMIT } from './storage/types.js';
 
@@ -49,6 +49,8 @@ export interface HistoryCommand {
   limit: number;
   /** Print statistics instead of runs. */
   stats: boolean;
+  /** Print JSON, one line per run or one array of statistics, instead of a table. */
+  json: boolean;
 }
 
 /** Show usage and fail. */
@@ -76,6 +78,9 @@ export interface VersionCommand {
 /** Parsed command line. */
 export type Command = CheckCommand | HelpCommand | HistoryCommand | ProvisionCommand | RunCommand | ServeCommand | UsageCommand | VersionCommand;
 
+/** Scenarios that send over a chosen transport and can repeat the event, so `--transport` and `--repeat` mean something there. */
+const TRANSPORT_SCENARIOS: readonly ScenarioName[] = [SEND_AND_RECEIVE_EVENT, CHECK_NOTIFICATION, TELEGRAM_DELIVERY];
+
 /** Usage text, printed for `--help` and after a mistake in the arguments. */
 export const USAGE = [
   'Usage: node dist/main.js <command> [options]',
@@ -85,12 +90,13 @@ export const USAGE = [
   '      Start the monitor; this is the default without a command.',
   '  check <scenario> [--sequence <n>] [--transport http|ws] [--repeat]',
   `      Run one scenario once and print its result. Scenarios: ${SCENARIO_NAMES.join('|')}.`,
+  `      --transport and --repeat apply to ${TRANSPORT_SCENARIOS.join(', ')} only; endpoints-probe takes no options.`,
   '  run [<scenario> ...]',
   '      Ask the running monitor to run the scenarios now; without names, every enabled one.',
   '  provision [--no-wait]',
   '      Bring the notification rule of the Hawk project to the wanted state.',
-  '  history [--scenario <name>] [--limit <n>] [--stats]',
-  '      Print the stored runs or, with --stats, their statistics.',
+  '  history [--scenario <name>] [--limit <n>] [--stats] [--json]',
+  '      Print the stored runs or, with --stats, their statistics, as a table; --json prints JSON instead.',
   '',
   'Options:',
   '  -h, --help     Print this text.',
@@ -157,6 +163,10 @@ function parseCheck(args: readonly string[]): CheckCommand | UsageCommand {
 
     seen.add(flag);
 
+    if ((flag === '--repeat' || flag === '--transport') && !TRANSPORT_SCENARIOS.includes(known)) {
+      return invalid(`${flag} does not apply to ${known}`);
+    }
+
     if (flag === '--repeat') {
       command.repeat = true;
     } else if (flag === '--sequence' || flag === '--transport') {
@@ -220,7 +230,8 @@ function parseProvision(flags: readonly string[]): ProvisionCommand | UsageComma
 function parseHistory(flags: readonly string[]): HistoryCommand | UsageCommand {
   const command: HistoryCommand = { kind: 'history',
     limit: DEFAULT_LIST_LIMIT,
-    stats: false };
+    stats: false,
+    json: false };
   const seen = new Set<string>();
 
   for (let i = 0; i < flags.length; i += 1) {
@@ -234,6 +245,8 @@ function parseHistory(flags: readonly string[]): HistoryCommand | UsageCommand {
 
     if (flag === '--stats') {
       command.stats = true;
+    } else if (flag === '--json') {
+      command.json = true;
     } else if (flag === '--scenario') {
       i += 1;
 
