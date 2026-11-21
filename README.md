@@ -13,7 +13,7 @@
 | check-notification | Hawk отправил уведомление в webhook и loop, правило с порогом срабатывает на втором событии | каждые 10 мин |
 | sourcemaps | релиз с source map сохранен, кадр события указывает на исходный файл и строку | раз в час |
 | sentry-envelope | событие в формате Sentry SDK доходит до Hawk | раз в час |
-| endpoints-probe | коллектор и API отвечают, а также Garage (при `GARAGE_URL`) и приемник за туннелем (рядом с check-notification); событий не шлет | каждые 90 с |
+| endpoints-probe | коллектор и API отвечают, а также Garage (при `GARAGE_URL`) и приемник за туннелем (при check-notification или telegram-delivery); событий не шлет | каждые 90 с |
 | telegram-delivery | уведомление Hawk доходит до чата в Telegram | выключен, нужен бот |
 | new-project | коллектор принимает токен нового проекта | выключен, только для своего Hawk |
 

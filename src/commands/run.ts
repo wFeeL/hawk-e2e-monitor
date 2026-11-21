@@ -194,7 +194,10 @@ async function post(url: string, token: string, timeoutMs: number): Promise<Answ
       res.on('data', (chunk: Buffer) => {
         chunks.push(chunk);
       });
-      res.on('error', reject);
+      res.on('error', (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
       res.on('end', () => {
         clearTimeout(timer);
 
