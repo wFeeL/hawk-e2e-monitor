@@ -19,6 +19,7 @@ import { memoryLogger } from '../support/logger.js';
 import type { MemoryLogger } from '../support/logger.js';
 import { runResultFixture } from '../support/run-result.js';
 import { createAlerter } from '../../src/alerting/alerter.js';
+import { heartbeatReason } from '../../src/heartbeat/heartbeat.js';
 import type { Alerter } from '../../src/alerting/alerter.js';
 import { sendNotify } from '../../src/alerting/notify.js';
 
@@ -964,5 +965,130 @@ describe('alerter: one alert for an outage of Hawk', () => {
     alerter.onRunFinished(down(clock, PROBE), NO_RESULT);
     expect(history.alertState(SCENARIO)?.state).toBe('failing');
     expect(history.alertState(PROBE)?.state).toBe('failing');
+  });
+});
+
+describe('alerter: a rejected head does not hold the queue for a day', () => {
+  const OTHER = 'check-notification';
+  const GIVEN_UP = 'alert dropped after rejections';
+
+  /**
+   * Queues FAILED of one scenario and FAILED of another, in that order.
+   * @param alerter Alerter under test.
+   * @param clock Clock that gives the start time.
+   */
+  function queueTwo(alerter: Alerter, clock: FakeClock): void {
+    alerter.onRunFinished(failedRow(clock), NO_RESULT);
+    alerter.onRunFinished(failedRow(clock, { scenario: OTHER,
+      runId: 'rcccccccccccccccc' }), NO_RESULT);
+  }
+
+  /**
+   * Runs `count` flushes, each after the longest retry pause.
+   * @param alerter Alerter under test.
+   * @param clock Fake clock.
+   * @param count Number of flushes.
+   */
+  async function flushTimes(alerter: Alerter, clock: FakeClock, count: number): Promise<void> {
+    for (let index = 0; index < count; index += 1) {
+      await alerter.flush(SIGNAL);
+      await clock.advance(600_000);
+    }
+  }
+
+  it('a bot that answers 429 three times and then accepts loses nothing and keeps the order', async () => {
+    const { alerter, bot, clock, history, logger } = await setup({ answer: { status: 429 } });
+
+    queueTwo(alerter, clock);
+    await flushTimes(alerter, clock, 3);
+    bot.setAnswer({});
+    await flushTimes(alerter, clock, 1);
+
+    expect(history.pendingAlerts(clock.wallTime().toISOString(), 10)).toEqual([]);
+    expect(messages(bot).filter((_text, index) => index >= 3)
+      .map(text => /<b>([^<]+)<\/b> (\S+)/u.exec(text)?.[2])).toEqual([SCENARIO, OTHER]);
+    expect(logger.lines.some(line => line.msg === GIVEN_UP)).toBe(false);
+  });
+
+  it('a bot that answers 401 forever drops nothing', async () => {
+    const { alerter, bot, clock, history, logger } = await setup({ answer: { status: 401 } });
+
+    queueTwo(alerter, clock);
+    await flushTimes(alerter, clock, 8);
+
+    expect(history.oldestUnsentAlert()).toBeDefined();
+    expect(history.pendingAlerts(clock.wallTime().toISOString(), 10)).toHaveLength(2);
+    expect(bot.requests.length).toBeGreaterThanOrEqual(8);
+    expect(logger.lines.some(line => line.msg === GIVEN_UP)).toBe(false);
+  });
+
+  it('a message the bot rejects three times is given up once another one gets through, and its scenario announces again', async () => {
+    const { alerter, bot, clock, history, logger } = await setup({ answer: { answerFor: message => message.includes(SCENARIO) ? { body: 'FAIL' } : undefined } });
+
+    queueTwo(alerter, clock);
+    await flushTimes(alerter, clock, 2);
+    expect(history.pendingAlerts(clock.wallTime().toISOString(), 10)).toHaveLength(2);
+    await alerter.flush(SIGNAL);
+
+    expect(history.pendingAlerts('2100-01-01T00:00:00.000Z', 10)).toEqual([]);
+    expect(messages(bot).at(-1)).toContain(OTHER);
+    expect(logger.lines.find(line => line.msg === GIVEN_UP)).toMatchObject({ level: 'error',
+      scenario: SCENARIO,
+      text: expect.stringContaining(SCENARIO) as string });
+    expect(history.alertState(SCENARIO)?.announced).toBe(false);
+    expect(alerter.health().rejectedInRow).toBe(0);
+  });
+
+  it('a bot that rejects everything drops nothing, grows rejectedInRow and stops the heartbeat', async () => {
+    const { alerter, clock, history, logger } = await setup({ answer: { body: 'FAIL' } });
+
+    queueTwo(alerter, clock);
+    await flushTimes(alerter, clock, 6);
+
+    expect(history.pendingAlerts(clock.wallTime().toISOString(), 10)).toHaveLength(2);
+    expect(alerter.health().rejectedInRow).toBeGreaterThanOrEqual(6);
+    expect(logger.lines.some(line => line.msg === GIVEN_UP)).toBe(false);
+    expect(heartbeatReason({ scheduler: { scheduler: true,
+      storage: true,
+      stuck: [] },
+    alerts: alerter.health(),
+    scenarios: [],
+    lastVerdictAt: () => undefined,
+    freshnessMs: () => 1,
+    nowWallMs: 0,
+    startedWallMs: 0 })).toEqual({ reason: 'alerts are not delivered' });
+  });
+
+  it('a bot that cannot be reached holds the queue', async () => {
+    const { alerter, bot, clock, history, logger } = await setup();
+
+    queueTwo(alerter, clock);
+    await bot.close();
+    await flushTimes(alerter, clock, 6);
+
+    expect(history.pendingAlerts(clock.wallTime().toISOString(), 10)).toHaveLength(2);
+    expect(logger.lines.some(line => line.msg === GIVEN_UP)).toBe(false);
+  });
+
+  it('a delivered message whose mark failed is not sent again', async () => {
+    let failures = 1;
+    const { alerter, bot, clock, history } = await setup({ wrap: base => ({ ...base,
+      alertAttempt: (id, update): void => {
+        if (update.sentAt !== undefined && failures > 0) {
+          failures -= 1;
+          throw new Error('disk full');
+        }
+
+        base.alertAttempt(id, update);
+      } }) });
+
+    alerter.onRunFinished(failedRow(clock), NO_RESULT);
+    await alerter.flush(SIGNAL);
+    expect(bot.requests).toHaveLength(1);
+    expect(history.oldestUnsentAlert()).toBeDefined();
+
+    await alerter.flush(SIGNAL);
+    expect(bot.requests).toHaveLength(1);
+    expect(history.oldestUnsentAlert()).toBeUndefined();
   });
 });

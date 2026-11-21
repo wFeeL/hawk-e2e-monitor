@@ -5,7 +5,8 @@ import { isCheckError } from '../errors/taxonomy.js';
 import type { Logger } from '../log/logger.js';
 import type { ScenarioName } from '../scenarios/names.js';
 import type { History } from '../storage/history.js';
-import type { AlertStateRow } from '../storage/types.js';
+import { HttpStatus } from '../net/http-status.js';
+import type { AlertStateRow, OutboxRow } from '../storage/types.js';
 import type { RunRow } from '../storage/types.js';
 import type { Clock } from '../time/clock.js';
 import { sendNotify } from './notify.js';
@@ -21,6 +22,13 @@ export const ALERT_BACKLOG_LIMIT_MS = 1_800_000;
 const FLUSH_BATCH = 50;
 const MAX_RETRY_PAUSE_MS = 600_000;
 const REJECTED_LOG_EVERY = 3;
+const REJECTIONS_BEFORE_SKIP = 3;
+
+/** A send that did not succeed. */
+interface SendFailure {
+  /** What the send threw. */
+  error: unknown;
+}
 
 /** What the alerter needs from outside. */
 export interface AlerterDeps {
@@ -248,6 +256,102 @@ export function createAlerter(deps: AlerterDeps): Alerter {
     });
   };
 
+  // Messages the bot accepted whose "sent" mark could not be written; they are never sent again.
+  const delivered = new Set<number>();
+
+  /**
+   * Writes the "sent" mark of a message the bot accepted.
+   * @param row Message.
+   * @returns False when the write failed, so the caller stops and the mark is retried first on the next flush.
+   */
+  const markSent = (row: OutboxRow): boolean => {
+    try {
+      history.alertAttempt(row.id, { sentAt: nowIso() });
+      delivered.delete(row.id);
+
+      return true;
+    } catch (error) {
+      delivered.add(row.id);
+      storageFailed(error, 'mark');
+
+      return false;
+    }
+  };
+
+  /**
+   * Sends one message.
+   * @param row Message.
+   * @param signal Cancels the sending.
+   * @returns Undefined when the bot accepted it, otherwise what went wrong.
+   */
+  const trySend = async (row: OutboxRow, signal: AbortSignal): Promise<SendFailure | undefined> => {
+    try {
+      await send(monitoring.alertNotifyUrl ?? '', row.text, { httpTimeoutMs: config.httpTimeoutMs,
+        clock }, signal);
+      rejectedInRow = 0;
+
+      return undefined;
+    } catch (error) {
+      return { error };
+    }
+  };
+
+  /**
+   * Records a failed delivery and says whether the bot rejected the message itself, which is a 200 without `OK!` or a 400.
+   * Every other answer (429, 401, 5xx) and a missing answer only say the bot cannot take messages now.
+   * @param row Message.
+   * @param error What the send threw.
+   * @param now Time of the flush, ISO.
+   * @returns True when the message itself was rejected.
+   */
+  const recordFailure = (row: OutboxRow, error: unknown, now: string): boolean => {
+    const pause = Math.min(monitoring.alertRetryMs * 2 ** row.attempts, MAX_RETRY_PAUSE_MS);
+    const nextAttemptAt = new Date(Date.parse(now) + pause).toISOString();
+    const rejected = isCheckError(error) && error.errorClass === 'alert_rejected';
+    const ofMessage = rejected && (error.facts.status === HttpStatus.ok || error.facts.status === HttpStatus.badRequest);
+    const reason = redact(describe(error));
+
+    if (ofMessage) {
+      history.alertRejected(row.id, nextAttemptAt, reason);
+    } else {
+      history.alertAttempt(row.id, { nextAttemptAt,
+        error: reason });
+    }
+
+    rejectedInRow = rejected ? rejectedInRow + 1 : 0;
+
+    if (rejectedInRow > 0 && rejectedInRow % REJECTED_LOG_EVERY === 0) {
+      logger.error('codex.bot rejected 3 alerts in a row; check ALERT_NOTIFY_URL', { rejectedInRow });
+    }
+
+    logger.warn('alert delivery failed', { scenario: row.scenario,
+      error: reason,
+      retryInMs: pause });
+
+    return ofMessage;
+  };
+
+  /**
+   * Drops a message that is too old.
+   * @param row Message.
+   * @param now Time of the flush, ISO.
+   * @returns True when the message was dropped.
+   */
+  const dropIfStale = (row: OutboxRow, now: string): boolean => {
+    if (Date.parse(now) - Date.parse(row.createdAt) <= MS_PER_DAY) {
+      return false;
+    }
+
+    history.alertAttempt(row.id, { droppedAt: now,
+      error: 'dropped after 24 hours' });
+    unannounce(row.scenario);
+    logger.error('alert dropped', { scenario: row.scenario,
+      runId: row.runId,
+      createdAt: row.createdAt });
+
+    return true;
+  };
+
   const deliver = async (signal: AbortSignal): Promise<FlushResult> => {
     const result = { sent: 0,
       failed: 0 };
@@ -260,44 +364,81 @@ export function createAlerter(deps: AlerterDeps): Alerter {
       return result;
     }
 
-    for (const row of rows) {
-      if (Date.parse(now) - Date.parse(row.createdAt) > MS_PER_DAY) {
-        history.alertAttempt(row.id, { droppedAt: now,
-          error: 'dropped after 24 hours' });
-        unannounce(row.scenario);
-        logger.error('alert dropped', { scenario: row.scenario,
-          runId: row.runId,
-          createdAt: row.createdAt });
-      } else if (monitoring.alertNotifyUrl === undefined) {
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+
+      if (row === undefined) {
+        break;
+      }
+
+      if (delivered.has(row.id)) {
+        if (markSent(row)) {
+          continue;
+        }
+
+        break;
+      }
+
+      if (dropIfStale(row, now)) {
+        continue;
+      }
+
+      if (monitoring.alertNotifyUrl === undefined) {
         logger.warn('alert', { scenario: row.scenario,
           text: row.text });
         history.alertAttempt(row.id, { sentAt: now });
         result.sent += 1;
-      } else {
-        try {
-          await send(monitoring.alertNotifyUrl, row.text, { httpTimeoutMs: config.httpTimeoutMs,
-            clock }, signal);
-          history.alertAttempt(row.id, { sentAt: nowIso() });
-          rejectedInRow = 0;
-          result.sent += 1;
-        } catch (error) {
-          const pause = Math.min(monitoring.alertRetryMs * 2 ** row.attempts, MAX_RETRY_PAUSE_MS);
+        continue;
+      }
 
-          history.alertAttempt(row.id, { nextAttemptAt: new Date(Date.parse(now) + pause).toISOString(),
-            error: redact(describe(error)) });
-          rejectedInRow = isCheckError(error) && error.errorClass === 'alert_rejected' ? rejectedInRow + 1 : 0;
+      const failure = await trySend(row, signal);
 
-          if (rejectedInRow > 0 && rejectedInRow % REJECTED_LOG_EVERY === 0) {
-            logger.error('codex.bot rejected 3 alerts in a row; check ALERT_NOTIFY_URL', { rejectedInRow });
-          }
+      if (failure === undefined) {
+        result.sent += 1;
 
-          logger.warn('alert delivery failed', { scenario: row.scenario,
-            error: redact(describe(error)),
-            retryInMs: pause });
-          result.failed += 1;
-
-          break;
+        if (markSent(row)) {
+          continue;
         }
+
+        break;
+      }
+
+      const rejected = recordFailure(row, failure.error, now);
+
+      result.failed += 1;
+
+      if (!rejected || row.rejections + 1 < REJECTIONS_BEFORE_SKIP) {
+        break;
+      }
+
+      // The head was rejected three times: the bot works only if another message gets through.
+      const nextIndex = rows.findIndex((item, at) => at > index && !delivered.has(item.id) && !dropIfStale(item, now));
+      const next = rows[nextIndex];
+
+      if (next === undefined) {
+        break;
+      }
+
+      const second = await trySend(next, signal);
+
+      if (second !== undefined) {
+        result.failed += 1;
+        recordFailure(next, second.error, now);
+
+        break;
+      }
+
+      history.alertAttempt(row.id, { droppedAt: now,
+        error: 'rejected by codex.bot 3 times' });
+      unannounce(row.scenario);
+      logger.error('alert dropped after rejections', { scenario: row.scenario,
+        runId: row.runId,
+        text: row.text });
+      result.sent += 1;
+      index = nextIndex;
+
+      if (!markSent(next)) {
+        break;
       }
     }
 
