@@ -78,6 +78,8 @@ export interface SchedulerDeps {
   beforeFirstRun?: Partial<Record<ScenarioName, (signal: AbortSignal) => Promise<void>>>;
   /** Called after a row is finished, whatever its status; each listener has its own error handling. */
   onRunFinished?: RunFinishedListener | readonly RunFinishedListener[];
+  /** Runs a function after the timers that are already due; `setImmediate` by default. */
+  defer?: (action: () => void) => void;
   /** Called with code 1 after three hung runs of one scenario in a row, or when a scenario stops ticking. */
   exit: (code: number) => void;
 }
@@ -259,6 +261,9 @@ function verdictTime(row: RunRow): number {
 export function createScheduler(deps: SchedulerDeps): Scheduler {
   const { history, clock, logger, config, redact } = deps;
   const { monitoring } = config;
+  const defer = deps.defer ?? ((action: () => void): void => {
+    setImmediate(action);
+  });
   const newRunId = deps.newRunId ?? ((): string => createRunId());
   const settingsOf = (scenario: ScenarioName): ScenarioSettings => scenarioSettings(config, scenario);
   const intervalOf = deps.intervalOf ?? ((scenario: ScenarioName): number => settingsOf(scenario).intervalMs);
@@ -685,14 +690,27 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
   const selfCheck = (): void => {
     after(SELF_CHECK_MS, stopper.signal, () => {
-      if (!evaluate(clock.monotonicMs()).scheduler) {
-        logger.error('a scenario stopped ticking; exiting');
-        deps.exit(1);
+      if (evaluate(clock.monotonicMs()).scheduler) {
+        selfCheck();
 
         return;
       }
 
-      selfCheck();
+      // After a freeze of the process this timer fires before the overdue ticks; give them their turn.
+      defer(() => {
+        if (stopped) {
+          return;
+        }
+
+        if (evaluate(clock.monotonicMs()).scheduler) {
+          selfCheck();
+
+          return;
+        }
+
+        logger.error('a scenario stopped ticking; exiting');
+        deps.exit(1);
+      });
     });
   };
 

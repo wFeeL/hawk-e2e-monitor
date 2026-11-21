@@ -880,6 +880,8 @@ describe('health', () => {
     await clock.advance(THRESHOLD_MS + tunnelMs - 1);
     expect(exit).not.toHaveBeenCalled();
     await clock.advance(60_000);
+    // The self-check re-evaluates after setImmediate.
+    await settle(clock);
     expect(exit).toHaveBeenCalledWith(1);
     expect(logger.lines.some(line => line.level === 'error')).toBe(true);
   });
@@ -1632,9 +1634,10 @@ describe('first tick', () => {
    * @param scenarios Scenarios to run, in order.
    * @param staggerMs Stagger between the first ticks.
    * @param clock Clock to use.
+   * @param deps Other deps.
    * @returns The scheduler, the `exit` spy and the calls per scenario.
    */
-  function instant(scenarios: ScenarioName[], staggerMs: number, clock: Clock): Instant {
+  function instant(scenarios: ScenarioName[], staggerMs: number, clock: Clock, deps: Partial<SchedulerDeps> = {}): Instant {
     const base = testConfig();
     const config: Config = { ...base,
       monitoring: { ...base.monitoring,
@@ -1667,7 +1670,8 @@ describe('first tick', () => {
 
         return `r${'a'.repeat(13)}${String.fromCodePoint(97 + Math.floor(counter / 26))}${String.fromCodePoint(97 + (counter % 26))}`;
       },
-      exit });
+      exit,
+      ...deps });
 
     cleanups.push(async () => {
       await scheduler.stop();
@@ -1729,6 +1733,106 @@ describe('first tick', () => {
     await real.advance(1);
     expect(scheduler.health().scheduler).toBe(false);
     await real.advance(60_000);
+    await real.advance(0);
     expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  describe('after the process was frozen', () => {
+    const FREEZE_MS = 200_000;
+
+    /** Fake clock whose monotonic reading can jump ahead of its timers, like a paused process. */
+    interface FreezableClock extends Clock {
+      /** Moves the monotonic reading without firing any timer. */
+      freeze(ms: number): void;
+      /** Fires the timers that fall due within the given time. */
+      advance(ms: number): Promise<void>;
+    }
+
+    /**
+     * Wraps a fake clock with a monotonic offset.
+     * @param real Clock that owns the timers.
+     * @param sleep Replacement for its `sleep`, if any.
+     * @returns Clock with `freeze`.
+     */
+    function freezable(real: FakeClock, sleep: Clock['sleep'] = async (ms, signal) => real.sleep(ms, signal)): FreezableClock {
+      let offset = 0;
+
+      return { monotonicMs: () => real.monotonicMs() + offset,
+        wallTime: () => real.wallTime(),
+        sleep,
+        freeze: (ms) => {
+          offset += ms;
+        },
+        advance: async ms => real.advance(ms) };
+    }
+
+    /** Deferred actions that the test runs by hand. */
+    interface Deferral {
+      /** Hook for `SchedulerDeps.defer`. */
+      defer: (action: () => void) => void;
+      /** Runs what was collected. */
+      runAll: () => void;
+    }
+
+    /**
+     * Collects deferred actions so that the test decides when they run.
+     * @returns The deferral hook and a function that runs what it collected.
+     */
+    function deferral(): Deferral {
+      const actions: Array<() => void> = [];
+
+      return { defer: (action) => {
+        actions.push(action);
+      },
+      runAll: () => {
+        for (const action of actions.splice(0)) {
+          action();
+        }
+      } };
+    }
+
+    it('does not exit when the overdue ticks fire in the same turn as the self-check', async () => {
+      const clock = freezable(createFakeClock({ wall: START }));
+      const { defer, runAll } = deferral();
+      const { scheduler, exit, calls } = instant([SEND], 0, clock, { intervalOf: () => 60_000,
+        defer });
+
+      scheduler.start();
+      await clock.advance(1);
+      clock.freeze(FREEZE_MS);
+      await clock.advance(60_000);
+      runAll();
+      expect(exit).not.toHaveBeenCalled();
+      expect(calls.get(SEND)).toBe(2);
+    });
+
+    it('exits after the re-check when a scenario really stopped', async () => {
+      const real = createFakeClock({ wall: START });
+      let blocked = false;
+      const clock = freezable(real, async (ms, signal) => {
+        if (ms === STAGGER_MS && !blocked) {
+          blocked = true;
+
+          return new Promise<void>((_resolve, reject) => {
+            signal?.addEventListener('abort', () => {
+              reject(new DOMException('The operation was aborted', 'AbortError'));
+            }, { once: true });
+          });
+        }
+
+        return real.sleep(ms, signal);
+      });
+      const { defer, runAll } = deferral();
+      const { scheduler, exit } = instant([SEND, NOTIFY], STAGGER_MS, clock, { intervalOf: () => 60_000,
+        defer });
+
+      scheduler.start();
+      await clock.advance(1);
+      clock.freeze(FREEZE_MS);
+      await clock.advance(60_000);
+      expect(exit).not.toHaveBeenCalled();
+      runAll();
+      expect(exit).toHaveBeenCalledWith(1);
+    });
   });
 });
