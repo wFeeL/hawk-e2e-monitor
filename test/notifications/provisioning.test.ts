@@ -618,6 +618,27 @@ describe('provision', () => {
     expect(error.message).toContain(`another monitor with INSTANCE_ID ${INSTANCE} rewrites the rules; give each monitor its own INSTANCE_ID`);
   });
 
+  it('after a conflict the next run takes the rules back and the one after changes nothing', async () => {
+    const first = provisioner();
+    const second = provisioner();
+
+    await first.provision(address('one.example.com'), signal);
+    await second.provision(address('two.example.com'), signal);
+    await checkErrorOf(first.provision(address('one.example.com'), signal));
+
+    const mutationsBefore = mutations().length;
+    const taken = await first.provision(address('one.example.com'), signal);
+
+    expect(taken.action).toBe('updated');
+    expect(mutations().length).toBeGreaterThan(mutationsBefore);
+
+    const mutationsAfterTake = mutations().length;
+    const settled = await first.provision(address('one.example.com'), signal);
+
+    expect(settled.action).toBe('none');
+    expect(mutations()).toHaveLength(mutationsAfterTake);
+  });
+
   it('a changed address of this process alone is not a conflict', async () => {
     const same = provisioner();
 

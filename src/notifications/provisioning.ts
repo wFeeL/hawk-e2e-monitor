@@ -399,6 +399,8 @@ export function createProvisioner(deps: ProvisionerDeps): Provisioner {
           matchChanged: false };
       } else {
         if (endpointsOf(first) !== endpointsOf(wanted) && written.get(kind) === endpointsOf(wanted)) {
+          // Forget every kind: the other rule is stale too, and the next run takes both back; a monitor that is still alive is found again.
+          written.clear();
           throw new CheckError('provisioning_conflict', { detail: `another monitor with INSTANCE_ID ${deps.instanceId} rewrites the rules; give each monitor its own INSTANCE_ID` });
         }
 
