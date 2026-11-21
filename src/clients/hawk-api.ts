@@ -2,7 +2,7 @@ import { CheckError, isCheckError } from '../errors/taxonomy.js';
 import type { ErrorClass } from '../errors/taxonomy.js';
 import type { RetryPolicy } from '../net/retry.js';
 import type { Clock } from '../time/clock.js';
-import { ACCESS_EXPIRED, GraphqlFailure, UNAUTHENTICATED } from './graphql.js';
+import { ACCESS_EXPIRED, BAD_USER_INPUT, GraphqlFailure, UNAUTHENTICATED } from './graphql.js';
 import type { GraphqlOperation, GraphqlTransport } from './graphql.js';
 import type { ChannelSettings, NotificationRule, NotificationRuleInput, NotificationRuleUpdate } from '../notifications/types.js';
 import { CREATE_NOTIFICATION_RULE, CREATE_PROJECT, DELETE_NOTIFICATION_RULE, EVENT, PROJECT_DAILY_EVENTS, LOGIN, NOTIFICATION_RULES, PROJECT_TOKEN, REFRESH_TOKENS, RELEASE_DETAILS, REMOVE_EVENT, REMOVE_PROJECT, UPDATE_NOTIFICATION_RULE, WORKSPACE_PROJECTS, WORKSPACE_QUOTA } from './operations.js';
@@ -600,7 +600,7 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
   const { attempts, delaysMs } = options.retry;
   let session: Session | undefined;
 
-  const authFailed = (detail: string): CheckError => new CheckError('api_auth_failed', { detail });
+  const authFailed = (detail: string, message?: string): CheckError => new CheckError('api_auth_failed', { detail }, message === undefined ? {} : { message });
 
   const login = async (signal: AbortSignal): Promise<void> => {
     try {
@@ -615,8 +615,11 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
         throw authFailed(error.message);
       }
 
-      if (isCheckError(error) && error.errorClass === 'api_query_rejected') {
-        throw authFailed(error.facts.detail ?? error.message);
+      // Only the format check of the arguments is a login problem; a refused mutation is the monitor's own fault.
+      if (isCheckError(error) && error.errorClass === 'api_query_rejected' && error.facts.code === BAD_USER_INPUT) {
+        const detail = error.facts.detail ?? error.message;
+
+        throw authFailed(detail, `Hawk rejected the format of HAWK_EMAIL or HAWK_PASSWORD: ${detail}`);
       }
 
       throw error;

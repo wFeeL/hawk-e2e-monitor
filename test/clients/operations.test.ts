@@ -400,12 +400,39 @@ describe('graphql transport', () => {
     expect(error.facts.projectId).toBe('c'.repeat(24));
   });
 
-  it('GRAPHQL_VALIDATION_FAILED and BAD_USER_INPUT are api_query_rejected', async () => {
-    for (const code of ['GRAPHQL_VALIDATION_FAILED', 'BAD_USER_INPUT']) {
-      hawk.api.knobs.errors = injected('Login', code, 'bad');
-      checkError(await failureOf(transportFor().request(LOGIN, { email: 'a',
-        password: 'b' }, undefined, signal)), 'api_query_rejected');
-    }
+  it('GRAPHQL_VALIDATION_FAILED is api_query_rejected for the monitor to fix', async () => {
+    hawk.api.knobs.errors = injected('Login', 'GRAPHQL_VALIDATION_FAILED', 'bad');
+
+    const error = checkError(await failureOf(transportFor().request(LOGIN, { email: 'a',
+      password: 'b' }, undefined, signal)), 'api_query_rejected');
+
+    expect(error.culprit).toBe('monitor');
+    expect(error.facts.code).toBe('GRAPHQL_VALIDATION_FAILED');
+    expect(error.message).toContain('did the API version change?');
+  });
+
+  it('BAD_USER_INPUT keeps api_query_rejected but blames Hawk and shows the server message', async () => {
+    const token = await login(transportFor());
+
+    hawk.api.knobs.errors = injected('ProjectToken', 'BAD_USER_INPUT', 'There is no project with provided ID');
+
+    const error = checkError(await failureOf(transportFor().request(PROJECT_TOKEN, { projectId: hawk.projectId }, token, signal)), 'api_query_rejected');
+
+    expect(error.culprit).toBe('hawk');
+    expect(error.facts).toMatchObject({ code: 'BAD_USER_INPUT',
+      detail: 'There is no project with provided ID' });
+    expect(error.message).toBe('There is no project with provided ID');
+  });
+
+  it('a long BAD_USER_INPUT message is cut to 200 characters', async () => {
+    const token = await login(transportFor());
+
+    hawk.api.knobs.errors = injected('ProjectToken', 'BAD_USER_INPUT', 'x'.repeat(500));
+
+    const error = checkError(await failureOf(transportFor().request(PROJECT_TOKEN, { projectId: hawk.projectId }, token, signal)), 'api_query_rejected');
+
+    expect(error.message).toBe('x'.repeat(200));
+    expect(error.facts.detail).toBe('x'.repeat(200));
   });
 
   it('INTERNAL_SERVER_ERROR is api_error on an operation of the monitor', async () => {
