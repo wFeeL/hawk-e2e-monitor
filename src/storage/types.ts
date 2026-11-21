@@ -172,6 +172,8 @@ export interface OpenPair {
   pair: string;
   /** Failed runs that added this pair. */
   count: number;
+  /** Start of the first run that added this pair; absent in rows written before it was kept. */
+  firstAt?: string;
 }
 
 /** Alert state of a scenario as stored. */
@@ -198,7 +200,7 @@ export interface AlertStateRow {
   open: OpenPair[];
   /** False when the failure is held back because another scenario already announced the outage. */
   announced: boolean;
-  /** Start of the run that began the current series of failures. */
+  /** Start of the first run of the current series of consecutive failures. */
   streakStartedAt?: string;
   /** Causes already reported in the episode, `<stage>/<class>`. */
   reported: string[];

@@ -117,6 +117,11 @@ export function covers(pair: string, row: RunRow, transport: PairTransport, sett
     return success && pairTransport === transport;
   }
 
+  // A verdict can fail a run on a stage whose own row ended `ok`; the failure is still there.
+  if (!success && stage === row.failedStage) {
+    return false;
+  }
+
   const result = row.stages.find(item => item.name === stage)?.status;
   const variant = VARIANT_STAGES.includes(stage as StageName);
 
@@ -155,12 +160,14 @@ function sameCodes(left: readonly DegradedCode[], right: readonly DegradedCode[]
  * Adds a failure to the open pairs.
  * @param open Pairs still open.
  * @param pair Pair of the new failure.
+ * @param startedAt Start of the failed run, kept as the first sighting of a new pair.
  * @returns The list with the pair added or its count raised.
  */
-function withPair(open: readonly OpenPair[], pair: string): OpenPair[] {
+function withPair(open: readonly OpenPair[], pair: string, startedAt: string): OpenPair[] {
   if (!open.some(item => item.pair === pair)) {
     return [...open, { pair,
-      count: 1 }];
+      count: 1,
+      firstAt: startedAt }];
   }
 
   return open.map(item => item.pair === pair
@@ -180,9 +187,10 @@ function withPair(open: readonly OpenPair[], pair: string): OpenPair[] {
  */
 function afterFailure(previous: AlertStateRow, row: RunRow, threshold: number, now: string, pair: string): AlertDecision {
   const streak = previous.failureStreak + 1;
-  const open = withPair(previous.open, pair);
-  const count = open.find(item => item.pair === pair)?.count ?? 1;
-  const streakStartedAt = (previous.open.length > 0 ? previous.streakStartedAt : undefined) ?? row.startedAt;
+  const open = withPair(previous.open, pair, row.startedAt);
+  const own = open.find(item => item.pair === pair);
+  const count = own?.count ?? 1;
+  const streakStartedAt = previous.failureStreak === 0 ? row.startedAt : previous.streakStartedAt ?? row.startedAt;
   const last = { ...row.errorClass === undefined ? {} : { lastClass: row.errorClass },
     ...row.failedStage === undefined ? {} : { lastStage: row.failedStage },
     lastRunId: row.runId };
@@ -212,12 +220,15 @@ function afterFailure(previous: AlertStateRow, row: RunRow, threshold: number, n
       updatedAt: now } };
   }
 
+  // The series that reached the threshold counts as a whole; otherwise the pair that did tells where the episode began.
+  const bySeries = streak >= threshold;
+
   return { state: { scenario: previous.scenario,
     state: 'failing',
     failureStreak: streak,
     ...last,
-    episodeStartedAt: streakStartedAt,
-    episodeFailures: open.reduce((total, item) => total + item.count, 0),
+    episodeStartedAt: bySeries ? streakStartedAt : own?.firstAt ?? row.startedAt,
+    episodeFailures: bySeries ? streak : count,
     degraded: [],
     open,
     announced: true,
@@ -259,7 +270,6 @@ function afterSuccess(previous: AlertStateRow, row: RunRow, now: string): AlertD
     degraded: row.degraded,
     open: previous.state === 'failing' ? [] : previous.open,
     announced: true,
-    ...previous.state !== 'failing' && stillOpen && previous.streakStartedAt !== undefined ? { streakStartedAt: previous.streakStartedAt } : {},
     reported: [],
     updatedAt: now });
 
@@ -356,7 +366,7 @@ export function shareEpisode(previous: AlertStateRow | undefined, decision: Aler
       kind: 'degraded' };
   }
 
-  if (stage === undefined || (!availability && kind === undefined)) {
+  if (row.status === 'ok') {
     return decision;
   }
 
