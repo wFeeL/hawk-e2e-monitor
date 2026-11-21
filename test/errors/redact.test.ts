@@ -8,6 +8,7 @@ describe('mutable redactor', () => {
 
   it('adds the same value 1000 times and still masks it once', () => {
     const { redact, add } = createMutableRedactor([]);
+    const sorts = vi.spyOn(Array.prototype, 'toSorted');
 
     for (let i = 0; i < 1000; i += 1) {
       add('https://a.example');
@@ -15,8 +16,9 @@ describe('mutable redactor', () => {
 
     add('a.example');
 
-    const sorts = vi.spyOn(Array.prototype, 'toSorted');
-
+    // One rebuild per new value; the 999 repeats rebuild nothing.
+    expect(sorts).toHaveBeenCalledTimes(2);
+    sorts.mockClear();
     expect(redact('see https://a.example')).toBe('see ***');
     expect(sorts).not.toHaveBeenCalled();
   });

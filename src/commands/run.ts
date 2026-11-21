@@ -6,6 +6,8 @@ import type { Config } from '../config/load.js';
 import { scenarioSettings } from '../config/scenario.js';
 import type { ScenarioName } from '../scenarios/names.js';
 import { HttpStatus } from '../net/http-status.js';
+import { systemClock, timeoutSignal } from '../time/clock.js';
+import type { Clock } from '../time/clock.js';
 import { formatDuration } from '../time/format.js';
 import type { CheckIo } from './check.js';
 
@@ -42,6 +44,8 @@ const TIMEOUT = 'TIMEOUT';
 export interface RunDeps {
   /** Replaces the whole request timeout of a scenario. */
   requestTimeoutMs?: (scenario: ScenarioName) => number;
+  /** Clock of the request deadline, the system one by default. */
+  clock?: Clock;
 }
 
 /**
@@ -205,16 +209,24 @@ function describeAnswer(status: number, body: unknown): Line | Fatal {
  * @param url Address of the run.
  * @param token Bearer token.
  * @param timeoutMs Time for the whole answer.
+ * @param clock Clock that measures the time.
  * @returns Status and parsed body.
  * @throws Error with `message` TIMEOUT when the time is up, or the error of the request.
  */
-async function post(url: string, token: string, timeoutMs: number): Promise<Answer> {
+async function post(url: string, token: string, timeoutMs: number, clock: Clock): Promise<Answer> {
   return new Promise<Answer>((resolve, reject) => {
     const req = request(url, { method: 'POST',
       headers: { authorization: `Bearer ${token}` } });
-    const timer = setTimeout(() => {
+    const deadline = timeoutSignal(clock, timeoutMs);
+    const onAbort = (): void => {
       req.destroy(new Error(TIMEOUT));
-    }, timeoutMs);
+    };
+    const end = (): void => {
+      deadline.signal.removeEventListener('abort', onAbort);
+      deadline.dispose();
+    };
+
+    deadline.signal.addEventListener('abort', onAbort, { once: true });
 
     req.on('response', (res: IncomingMessage) => {
       const chunks: Buffer[] = [];
@@ -223,11 +235,11 @@ async function post(url: string, token: string, timeoutMs: number): Promise<Answ
         chunks.push(chunk);
       });
       res.on('error', (error) => {
-        clearTimeout(timer);
+        end();
         reject(error);
       });
       res.on('end', () => {
-        clearTimeout(timer);
+        end();
 
         let body: unknown;
 
@@ -242,7 +254,7 @@ async function post(url: string, token: string, timeoutMs: number): Promise<Answ
       });
     });
     req.on('error', (error) => {
-      clearTimeout(timer);
+      end();
       reject(error);
     });
     req.end();
@@ -255,11 +267,12 @@ async function post(url: string, token: string, timeoutMs: number): Promise<Answ
  * @param token Bearer token.
  * @param timeoutMs Time for the whole answer.
  * @param address Host and port, for the message when nobody listens.
+ * @param clock Clock of the deadline.
  * @returns What to print, or a fatal message.
  */
-async function ask(url: string, token: string, timeoutMs: number, address: string): Promise<Line | Fatal> {
+async function ask(url: string, token: string, timeoutMs: number, address: string, clock: Clock): Promise<Line | Fatal> {
   try {
-    const { status, body } = await post(url, token, timeoutMs);
+    const { status, body } = await post(url, token, timeoutMs, clock);
 
     return describeAnswer(status, body);
   } catch (error) {
@@ -310,7 +323,7 @@ export async function runRunCommand(command: RunCommand, config: Config, io: Che
 
   for (const scenario of scenarios) {
     const timeoutMs = deps.requestTimeoutMs?.(scenario) ?? scenarioSettings(config, scenario).watchdogMs + EXTRA_WAIT_MS;
-    const outcome = await ask(`http://${urlHost}:${String(config.internal.port)}/runs/${scenario}?wait=true`, token, timeoutMs, address);
+    const outcome = await ask(`http://${urlHost}:${String(config.internal.port)}/runs/${scenario}?wait=true`, token, timeoutMs, address, deps.clock ?? systemClock);
 
     if ('fatal' in outcome) {
       io.stderr(`${outcome.fatal}\n`);
