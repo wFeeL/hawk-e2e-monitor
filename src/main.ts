@@ -147,12 +147,24 @@ async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<nu
     return 2;
   }
 
+  if (command.kind === 'help') {
+    process.stdout.write(command.text);
+
+    return 0;
+  }
+
+  if (command.kind === 'version') {
+    process.stdout.write(`${SERVICE_VERSION}\n`);
+
+    return 0;
+  }
+
   const result = loadConfig(env, { command: command.kind });
 
   if (!result.ok) {
     process.stderr.write(formatConfigErrors(result.errors));
 
-    return configErrorExitCode(command);
+    return configErrorExitCode();
   }
 
   switch (command.kind) {

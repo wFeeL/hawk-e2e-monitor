@@ -59,28 +59,54 @@ export interface UsageCommand {
   message: string;
 }
 
-/** Parsed command line. */
-export type Command = CheckCommand | HistoryCommand | ProvisionCommand | RunCommand | ServeCommand | UsageCommand;
+/** Print the usage and succeed. */
+export interface HelpCommand {
+  /** Discriminant. */
+  kind: 'help';
+  /** Text for stdout, ends with a newline. */
+  text: string;
+}
 
-/** Usage text printed for an unknown command. */
+/** Print the version and succeed. */
+export interface VersionCommand {
+  /** Discriminant. */
+  kind: 'version';
+}
+
+/** Parsed command line. */
+export type Command = CheckCommand | HelpCommand | HistoryCommand | ProvisionCommand | RunCommand | ServeCommand | UsageCommand | VersionCommand;
+
+/** Usage text, printed for `--help` and after a mistake in the arguments. */
 export const USAGE = [
-  'Usage: hawk-e2e-monitor [serve]',
-  ...SCENARIO_NAMES.map(name => `       hawk-e2e-monitor check ${name}${SCENARIO_TRAITS[name].sendsEvents ? ' [--sequence <n>] [--transport http|ws] [--repeat]' : ''}`),
-  '       hawk-e2e-monitor run [<scenario> ...]',
-  '       hawk-e2e-monitor provision [--no-wait]',
-  '       hawk-e2e-monitor history [--scenario <name>] [--limit <n>] [--stats]',
+  'Usage: node dist/main.js <command> [options]',
+  '',
+  'Commands:',
+  '  serve',
+  '      Start the monitor; this is the default without a command.',
+  '  check <scenario> [--sequence <n>] [--transport http|ws] [--repeat]',
+  `      Run one scenario once and print its result. Scenarios: ${SCENARIO_NAMES.join('|')}.`,
+  '  run [<scenario> ...]',
+  '      Ask the running monitor to run the scenarios now; without names, every enabled one.',
+  '  provision [--no-wait]',
+  '      Bring the notification rule of the Hawk project to the wanted state.',
+  '  history [--scenario <name>] [--limit <n>] [--stats]',
+  '      Print the stored runs or, with --stats, their statistics.',
+  '',
+  'Options:',
+  '  -h, --help     Print this text.',
+  '  --version      Print the version.',
   '',
 ].join('\n');
 
 /**
  * Tells which exit code a configuration error ends a command with.
- * @param command Parsed command.
- * @returns 2 for `run`, which then cannot ask the service, 1 for the others.
+ * @returns 2 for every command, so a wrapper can tell a broken configuration from a failed check, which exits with 1.
  */
-export function configErrorExitCode(command: Command): number {
-  return command.kind === 'run' ? 2 : 1;
+export function configErrorExitCode(): number {
+  return 2;
 }
 
+const COMMAND_NAMES: readonly string[] = ['serve', 'check', 'run', 'provision', 'history'];
 const MAX_HISTORY_COMMAND_LIMIT = 1000;
 const SEQUENCE_PATTERN = /^[1-9]\d*$/u;
 
@@ -270,6 +296,22 @@ function parseRun(names: readonly string[]): RunCommand | UsageCommand {
  * @returns `serve` for no arguments or `serve`, `check` or `provision` with their options, usage text otherwise.
  */
 export function parseCommand(args: readonly string[]): Command {
+  const [first, ...rest] = args;
+
+  if (first === '--help' || first === '-h' || first === 'help') {
+    return { kind: 'help',
+      text: USAGE };
+  }
+
+  if (first === '--version') {
+    return { kind: 'version' };
+  }
+
+  if (first !== undefined && COMMAND_NAMES.includes(first) && rest.some(arg => arg === '--help' || arg === '-h')) {
+    return { kind: 'help',
+      text: USAGE };
+  }
+
   if (args.length === 0 || (args.length === 1 && args[0] === 'serve')) {
     return { kind: 'serve' };
   }

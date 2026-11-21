@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { configErrorExitCode, parseCommand, USAGE } from '../src/cli.js';
+import { SCENARIO_NAMES } from '../src/scenarios/names.js';
 
 describe('parseCommand', () => {
   it('no arguments means serve', () => {
@@ -81,14 +82,12 @@ describe('parseCommand', () => {
     }
   });
 
-  it('usage lists the probe without options', () => {
-    expect(USAGE).toContain('check endpoints-probe\n');
-    expect(USAGE).toContain('check check-notification [--sequence');
-  });
+  it('usage has one check line that lists every scenario', () => {
+    const checkLines = USAGE.split('\n').filter(line => line.includes('check <scenario>'));
 
-  it('usage names both scenarios', () => {
-    expect(USAGE).toContain('check send-and-receive-event');
-    expect(USAGE).toContain('check check-notification');
+    expect(checkLines).toHaveLength(1);
+    expect(checkLines[0]).toContain('[--sequence <n>] [--transport http|ws] [--repeat]');
+    expect(USAGE).toContain(SCENARIO_NAMES.join('|'));
   });
 
   it('check with every flag', () => {
@@ -189,15 +188,37 @@ describe('parseCommand run', () => {
   });
 
   it('usage lists the run command', () => {
-    expect(USAGE).toContain('       hawk-e2e-monitor run [<scenario> ...]\n');
+    expect(USAGE).toContain('run [<scenario> ...]');
+  });
+});
+
+describe('help and version', () => {
+  it.each([['--help'], ['-h'], ['help'], ['serve', '--help'], ['run', '--help'], ['check', '--help'],
+    ['check', 'sourcemaps', '--help'], ['provision', '-h'], ['history', '--help']])('%j prints the usage', (...args) => {
+    expect(parseCommand(args)).toEqual({ kind: 'help',
+      text: USAGE });
+  });
+
+  it('--version asks for the version', () => {
+    expect(parseCommand(['--version'])).toEqual({ kind: 'version' });
+  });
+
+  it('names the program as it is started and describes every command', () => {
+    expect(USAGE).toContain('node dist/main.js');
+    expect(USAGE).not.toContain('hawk-e2e-monitor');
+
+    for (const command of ['serve', 'check', 'run', 'provision', 'history']) {
+      expect(USAGE).toMatch(new RegExp(`^ {2}${command}\\b`, 'mu'));
+    }
+  });
+
+  it('still treats an unknown option as a mistake', () => {
+    expect(parseCommand(['--bogus']).kind).toBe('usage');
   });
 });
 
 describe('configErrorExitCode', () => {
-  it('is 2 for run, which says the service cannot be asked, and 1 for the other commands', () => {
-    expect(configErrorExitCode(parseCommand(['run']))).toBe(2);
-    expect(configErrorExitCode(parseCommand(['serve']))).toBe(1);
-    expect(configErrorExitCode(parseCommand(['check', 'sourcemaps']))).toBe(1);
-    expect(configErrorExitCode(parseCommand(['history']))).toBe(1);
+  it('is 2, whatever the command, and a failed check keeps 1', () => {
+    expect(configErrorExitCode()).toBe(2);
   });
 });
