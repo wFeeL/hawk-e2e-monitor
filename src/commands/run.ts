@@ -190,6 +190,9 @@ function describeAnswer(status: number, body: unknown): Line | Fatal {
     case HttpStatus.tooManyRequests:
       return { text: `skipped: manual run limit, retry in ${textField(body, 'retryAfterSeconds')} s`,
         ok: false };
+    case HttpStatus.serviceUnavailable:
+      return { text: 'not started: the service is stopping',
+        ok: false };
     default:
       return { text: `unexpected HTTP ${String(status)}`,
         ok: false };
