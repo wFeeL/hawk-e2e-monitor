@@ -14,6 +14,8 @@ export interface FakeNotifyAnswer {
   body?: string;
   /** Time the answer is held back; a held answer is dropped when the bot closes. */
   delayMs?: number;
+  /** Answers a message differently from the rest; returns undefined to use the fields above. */
+  answerFor?: (message: string) => FakeNotifyAnswer | undefined;
 }
 
 /** One POST the fake bot received. */
@@ -79,15 +81,16 @@ export async function startFakeNotify(initial: FakeNotifyAnswer = {}): Promise<F
       contentType: req.headers['content-type'] ?? '',
       form: Object.fromEntries(new URLSearchParams(body)) });
 
+    const given = answer.answerFor?.(requests.at(-1)?.form.message ?? '') ?? answer;
     const reply = (): void => {
-      res.statusCode = answer.status ?? 200;
-      res.end(answer.body ?? 'OK!');
+      res.statusCode = given.status ?? 200;
+      res.end(given.body ?? 'OK!');
     };
 
-    if (answer.delayMs === undefined) {
+    if (given.delayMs === undefined) {
       reply();
     } else {
-      timers.add(setTimeout(reply, answer.delayMs));
+      timers.add(setTimeout(reply, given.delayMs));
     }
   };
   const server: Server = createServer((req, res) => {

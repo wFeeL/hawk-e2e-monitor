@@ -85,7 +85,7 @@ export function createStatsStore(sql: Sql): StatsStore {
     const sorted = latencies.toSorted((left, right) => left - right);
     const stageAvgMs: Partial<Record<StageName, number>> = {};
 
-    for (const row of all('SELECT s.name AS name, AVG(s.duration_ms) AS mean FROM stages s JOIN runs r ON r.id = s.run_pk WHERE r.scenario = ? AND r.started_at >= ? AND r.status != \'running\' AND s.status != \'skipped\' GROUP BY s.name', scenario, since)) {
+    for (const row of all('SELECT s.name AS name, AVG(s.duration_ms) AS mean FROM stages s JOIN runs r ON r.id = s.run_pk WHERE r.scenario = ? AND r.started_at >= ? AND r.status != \'running\' AND s.status = \'ok\' GROUP BY s.name', scenario, since)) {
       stageAvgMs[required(row, 'name') as StageName] = Math.round(num(row, 'mean') ?? 0);
     }
 

@@ -384,7 +384,7 @@ describe('stats', () => {
       successRatio: 0.6,
       eventLatencyP50Ms: 2000,
       eventLatencyP95Ms: 3000,
-      stageAvgMs: { [STAGE]: 250 },
+      stageAvgMs: { [STAGE]: 200 },
       lateEvents: 0,
       lateNotifications: 0,
       lateDuplicateNotifications: 0,
@@ -401,6 +401,25 @@ describe('stats', () => {
     expect(stats?.lastRun).toEqual({ runId: 'raaaaaaaaaaaaaaaa',
       status: 'ok',
       startedAt: at(-HOUR_MS) });
+  });
+
+  it('averages the duration of a stage over the runs where it passed, not over a timeout', () => {
+    const history = memoryHistory();
+
+    for (const [index, runId] of ['raaaaaaaaaaaaaaaa', 'rbbbbbbbbbbbbbbbb', 'rcccccccccccccccc'].entries()) {
+      store(history, { runId,
+        startedAt: at(-(index + 1) * HOUR_MS),
+        result: runResultFixture({ stages: [stageFixture('event_visible', 'ok', 900)] }) });
+    }
+
+    store(history, { runId: 'rtimeouttimeoutt',
+      startedAt: at(-5 * HOUR_MS),
+      outcome: { status: 'failed',
+        errorClass: 'event_not_found' },
+      result: runResultFixture({ status: 'failed',
+        stages: [stageFixture('event_visible', 'failed', 60_000)] }) });
+
+    expect(history.stats(NOW, [SCENARIO])[0]?.last24h.stageAvgMs).toEqual({ ['event_visible']: 900 });
   });
 
   it('gives null ratios and percentiles on an empty window and keeps the scenario order', () => {
@@ -566,6 +585,9 @@ describe('alerts', () => {
     episodeStartedAt: at(-1000),
     episodeFailures: 2,
     degraded: ['quota_usage'],
+    open: [],
+    announced: true,
+    reported: [],
     updatedAt: at(0) };
 
   it('saveAlert writes state and outbox, alertState reads them back', () => {
@@ -587,6 +609,7 @@ describe('alerts', () => {
       text: '<b>FAILED</b>',
       createdAt: at(0),
       attempts: 0,
+      rejections: 0,
       nextAttemptAt: at(0) }]);
   });
 
@@ -764,6 +787,9 @@ describe('prune', () => {
         failureStreak: 0,
         episodeFailures: 0,
         degraded: [],
+        open: [],
+        announced: true,
+        reported: [],
         updatedAt: at(0) }, { text: scenario,
         at: old });
     }
@@ -791,6 +817,9 @@ describe('prune', () => {
       failureStreak: 0,
       episodeFailures: 0,
       degraded: [],
+      open: [],
+      announced: true,
+      reported: [],
       updatedAt: at(0) }, { text: 'send alert',
       at: old });
     history.alertAttempt(1, { sentAt: old });
@@ -819,6 +848,9 @@ describe('prune', () => {
       failureStreak: 0,
       episodeFailures: 0,
       degraded: [],
+      open: [],
+      announced: true,
+      reported: [],
       updatedAt: at(0) }, { text: 'old alert',
       at: old });
     history.alertAttempt(1, { sentAt: old });
@@ -852,6 +884,9 @@ describe('prune', () => {
       failureStreak: 0,
       episodeFailures: 0,
       degraded: [],
+      open: [],
+      announced: true,
+      reported: [],
       updatedAt: at(0) }, { text: 'old',
       at: at(-40 * 24 * HOUR_MS) });
     history.alertAttempt(1, { sentAt: at(-40 * 24 * HOUR_MS) });
@@ -860,6 +895,9 @@ describe('prune', () => {
       failureStreak: 0,
       episodeFailures: 0,
       degraded: [],
+      open: [],
+      announced: true,
+      reported: [],
       updatedAt: at(0) }, { text: 'unsent',
       at: at(-40 * 24 * HOUR_MS) });
 

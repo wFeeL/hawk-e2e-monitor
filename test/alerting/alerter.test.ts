@@ -1,3 +1,4 @@
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Config } from '../../src/config/load.js';
 import type { RunResult } from '../../src/engine/result.js';
@@ -6,7 +7,10 @@ import type { Redactor } from '../../src/errors/redact.js';
 import { openDatabase } from '../../src/storage/database.js';
 import { createHistory } from '../../src/storage/history.js';
 import type { History } from '../../src/storage/history.js';
-import type { RunRow } from '../../src/storage/types.js';
+import type { AlertStateRow, RunRow } from '../../src/storage/types.js';
+import type { ScenarioName } from '../../src/scenarios/names.js';
+import { SCENARIO_NAMES } from '../../src/scenarios/names.js';
+import { tempDatabase } from '../support/database.js';
 import { testConfig } from '../support/config.js';
 import { createFakeClock } from '../support/fake-clock.js';
 import type { FakeClock } from '../support/fake-clock.js';
@@ -16,6 +20,7 @@ import { memoryLogger } from '../support/logger.js';
 import type { MemoryLogger } from '../support/logger.js';
 import { runResultFixture } from '../support/run-result.js';
 import { createAlerter } from '../../src/alerting/alerter.js';
+import { heartbeatReason } from '../../src/heartbeat/heartbeat.js';
 import type { Alerter } from '../../src/alerting/alerter.js';
 import { sendNotify } from '../../src/alerting/notify.js';
 
@@ -54,6 +59,10 @@ interface SetupOptions {
   threshold?: number;
   /** Failed probes in a row that raise the alert. */
   probeThreshold?: number;
+  /** History file; `:memory:` by default. */
+  database?: string;
+  /** Scenarios of the monitor; the defaults when absent. */
+  scenarios?: readonly ScenarioName[];
 }
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -71,13 +80,14 @@ afterEach(async () => {
  */
 async function setup(options: SetupOptions = {}): Promise<Setup> {
   const bot = await startFakeNotify(options.answer);
-  const history = createHistory(openDatabase(':memory:'));
+  const history = createHistory(openDatabase(options.database ?? ':memory:'));
   const clock = createFakeClock({ wall: START });
   const logger = memoryLogger();
   const base = testConfig();
   const config: Config = { ...base,
     httpTimeoutMs: options.httpTimeoutMs ?? 3000,
     monitoring: { ...base.monitoring,
+      ...options.scenarios === undefined ? {} : { scenarios: [...options.scenarios] },
       ...options.noUrl === true ? {} : { alertNotifyUrl: bot.url },
       alertRetryMs: RETRY_MS,
       alertAfterFailures: options.threshold ?? 1,
@@ -135,7 +145,10 @@ function failedRow(clock: FakeClock, overrides: Partial<RunRow> = {}): RunRow {
 function okRow(clock: FakeClock): RunRow {
   return failedRow(clock, { status: 'ok',
     runId: 'rbbbbbbbbbbbbbbbb',
-    sequence: 2 });
+    sequence: 3,
+    stages: [{ name: 'event_visible',
+      status: 'ok',
+      durationMs: 1 }] });
 }
 
 /**
@@ -191,6 +204,7 @@ describe('alerter: threshold per scenario', () => {
     const { alerter, clock, bot } = await setup({ probeThreshold: 3 });
     const probe = (status: RunRow['status'], sequence: number): RunRow => failedRow(clock, { scenario: 'endpoints-probe',
       status,
+      failedStage: 'garage_availability',
       sequence,
       runId: `r${String.fromCodePoint(96 + sequence).repeat(16)}` });
 
@@ -276,7 +290,6 @@ describe('alerter: delivery', () => {
     await alerter.flush(SIGNAL);
     await clock.advance(1000);
     expect(alerter.onRunFinished(okRow(clock), NO_RESULT)).toBe('recovered');
-    await alerter.flush(SIGNAL);
 
     // The bot is back, but RECOVERED must not overtake the FAILED that is still waiting for its retry time.
     bot.setAnswer({});
@@ -366,6 +379,28 @@ describe('alerter: delivery', () => {
     await clock.advance(600_000);
     await alerter.flush(SIGNAL);
     expect(alerter.health().rejectedInRow).toBe(0);
+  });
+
+  it('the error kept with a failed delivery is masked', async () => {
+    const secret = 'hunter2-password';
+    const database = await tempDatabase();
+
+    cleanups.push(async () => database.remove());
+
+    const { alerter, clock } = await setup({ database: database.path,
+      redact: createRedactor([secret]),
+      answer: { status: 404,
+        body: `no chat for ${secret}` } });
+
+    alerter.onRunFinished(failedRow(clock), NO_RESULT);
+    await alerter.flush(SIGNAL);
+
+    const raw = new DatabaseSync(database.path, { readOnly: true });
+    const stored = String(raw.prepare('SELECT last_error FROM alert_outbox').get()?.last_error);
+
+    raw.close();
+    expect(stored).toContain('no chat for ***');
+    expect(stored).not.toContain(secret);
   });
 
   it('reports the age of the oldest unsent message', async () => {
@@ -651,6 +686,9 @@ describe('alerter: unreadable state and failing text', () => {
       episodeStartedAt: clock.wallTime().toISOString(),
       episodeFailures: 3,
       degraded: [],
+      open: [],
+      announced: true,
+      reported: [],
       updatedAt: clock.wallTime().toISOString() });
 
     // The first read fails: ok after ok says nothing, and the derived state must not be kept.
@@ -749,5 +787,356 @@ describe('alerter: injected send', () => {
     expect(sendNotify).toBeTypeOf('function');
     await alerter.stop();
     history.close();
+  });
+});
+
+describe('alerter: one alert for an outage of Hawk', () => {
+  const PROBE = 'endpoints-probe';
+  const SOURCEMAPS = 'sourcemaps';
+  const ENVELOPE = 'sentry-envelope';
+  const CHECK = 'check-notification';
+  const AVAILABLE = { name: 'collector_availability',
+    status: 'ok',
+    durationMs: 1 } as const;
+
+  /**
+   * Builds a run that failed at an availability stage.
+   * @param clock Clock that gives the start time.
+   * @param scenario Scenario that ran.
+   * @param errorClass Class of the failure.
+   * @returns Failed run row.
+   */
+  function down(clock: FakeClock, scenario: ScenarioName, errorClass: RunRow['errorClass'] = 'collector_unavailable'): RunRow {
+    return failedRow(clock, { scenario,
+      runId: `r${scenario.replaceAll(/[^a-z]/gu, '').slice(0, 15)
+.padEnd(15, 'x')}`,
+      failedStage: 'collector_availability',
+      errorClass,
+      stages: [] });
+  }
+
+  /**
+   * Builds an `ok` run of a scenario.
+   * @param clock Clock that gives the start time.
+   * @param scenario Scenario of the run.
+   * @param overrides Other fields.
+   * @returns Run row.
+   */
+  function up(clock: FakeClock, scenario: ScenarioName, overrides: Partial<RunRow> = {}): RunRow {
+    return { ...down(clock, scenario),
+      status: 'ok',
+      stages: [AVAILABLE],
+      ...overrides };
+  }
+
+  /**
+   * Builds the stored state of a scenario that announced an outage.
+   * @param clock Clock that gives the time of the state.
+   * @param scenario Scenario whose failure the state holds.
+   * @param overrides Other fields.
+   * @returns Alert state.
+   */
+  function announcedDown(clock: FakeClock, scenario: ScenarioName, overrides: Partial<AlertStateRow> = {}): AlertStateRow {
+    return { scenario,
+      state: 'failing',
+      failureStreak: 1,
+      episodeStartedAt: clock.wallTime().toISOString(),
+      episodeFailures: 1,
+      degraded: [],
+      open: [{ pair: 'collector_availability@*',
+        count: 1 }],
+      announced: true,
+      reported: [],
+      updatedAt: clock.wallTime().toISOString(),
+      ...overrides };
+  }
+
+  it('an hourly scenario that fails first announces itself, then the frequent one announces again', async () => {
+    const { alerter, clock } = await setup({ scenarios: SCENARIO_NAMES,
+      probeThreshold: 1 });
+
+    expect(alerter.onRunFinished(down(clock, SOURCEMAPS), NO_RESULT)).toBe('failed');
+    expect(alerter.onRunFinished(down(clock, SCENARIO), NO_RESULT)).toBe('failed');
+  });
+
+  it('five scenarios with mixed classes send one FAILED, from the frequent one that failed first', async () => {
+    const { alerter, bot, clock } = await setup({ scenarios: SCENARIO_NAMES,
+      probeThreshold: 1 });
+    const kinds = [
+      alerter.onRunFinished(down(clock, SCENARIO), NO_RESULT),
+      alerter.onRunFinished(down(clock, CHECK, 'network_error'), NO_RESULT),
+      alerter.onRunFinished(down(clock, ENVELOPE, 'dns_error'), NO_RESULT),
+      alerter.onRunFinished(down(clock, PROBE, 'network_error'), NO_RESULT),
+      alerter.onRunFinished(down(clock, PROBE), NO_RESULT),
+    ];
+
+    await alerter.flush(SIGNAL);
+    expect(kinds).toEqual(['failed', undefined, undefined, undefined, undefined]);
+    expect(messages(bot)).toHaveLength(1);
+  });
+
+  it('a follower that recovers first says nothing, the leader that recovers says RECOVERED', async () => {
+    const { alerter, bot, clock } = await setup({ scenarios: SCENARIO_NAMES,
+      probeThreshold: 1 });
+
+    alerter.onRunFinished(down(clock, SCENARIO), NO_RESULT);
+    alerter.onRunFinished(down(clock, PROBE), NO_RESULT);
+    expect(alerter.onRunFinished(up(clock, PROBE), NO_RESULT)).toBeUndefined();
+    expect(alerter.onRunFinished(up(clock, SCENARIO), NO_RESULT)).toBe('recovered');
+    await alerter.flush(SIGNAL);
+    expect(messages(bot)).toHaveLength(2);
+  });
+
+  it('a follower that recovers with a warning sends DEGRADED', async () => {
+    const { alerter, clock } = await setup({ scenarios: SCENARIO_NAMES,
+      probeThreshold: 1 });
+
+    alerter.onRunFinished(down(clock, SCENARIO), NO_RESULT);
+    alerter.onRunFinished(down(clock, PROBE), NO_RESULT);
+    expect(alerter.onRunFinished(up(clock, PROBE, { degraded: ['quota_usage'] }), NO_RESULT)).toBe('degraded');
+  });
+
+  it('a follower with a new cause outside the availability stages sends FAILED', async () => {
+    const { alerter, clock } = await setup({ scenarios: SCENARIO_NAMES,
+      probeThreshold: 1 });
+
+    alerter.onRunFinished(down(clock, SCENARIO), NO_RESULT);
+    alerter.onRunFinished(down(clock, CHECK), NO_RESULT);
+    expect(alerter.onRunFinished(failedRow(clock, { scenario: CHECK,
+      stages: [AVAILABLE] }), NO_RESULT)).toBe('failed');
+  });
+
+  it('a leader that is not in the scenarios does not hold back a follower', async () => {
+    const { alerter, clock, history } = await setup({ scenarios: [PROBE, CHECK],
+      probeThreshold: 1 });
+
+    history.saveAlert(announcedDown(clock, SCENARIO), undefined);
+    expect(alerter.onRunFinished(down(clock, PROBE), NO_RESULT)).toBe('failed');
+  });
+
+  it('a leader that has been silent longer than its interval and watchdog does not hold back a follower', async () => {
+    const { alerter, clock, history } = await setup({ scenarios: SCENARIO_NAMES,
+      probeThreshold: 1 });
+
+    history.saveAlert(announcedDown(clock, SCENARIO), undefined);
+    await clock.advance(30 * 60_000);
+    expect(alerter.onRunFinished(down(clock, PROBE), NO_RESULT)).toBe('failed');
+  });
+
+  it('a leader whose FAILED was dropped ends the suppression', async () => {
+    const { alerter, clock, history } = await setup({ scenarios: SCENARIO_NAMES,
+      probeThreshold: 1 });
+    const old = new Date(clock.wallTime().getTime() - 25 * HOUR_MS).toISOString();
+
+    history.saveAlert(announcedDown(clock, SCENARIO), { text: 'FAILED',
+      at: old });
+    await alerter.flush(SIGNAL);
+    expect(history.alertState(SCENARIO)?.announced).toBe(false);
+    expect(alerter.onRunFinished(down(clock, PROBE), NO_RESULT)).toBe('failed');
+  });
+
+  it('a failed read of the other states suppresses nothing', async () => {
+    const { alerter, clock, history } = await setup({ scenarios: SCENARIO_NAMES,
+      probeThreshold: 1,
+      wrap: base => ({ ...base,
+        alertStates: (): AlertStateRow[] => {
+          throw new Error('unreadable');
+        } }) });
+
+    history.saveAlert(announcedDown(clock, SCENARIO), undefined);
+    expect(alerter.onRunFinished(down(clock, PROBE), NO_RESULT)).toBe('failed');
+  });
+
+  it('a restart between the runs keeps the leader and the follower apart', async () => {
+    const database = await tempDatabase();
+
+    cleanups.push(async () => database.remove());
+
+    const first = await setup({ scenarios: SCENARIO_NAMES,
+      probeThreshold: 1,
+      database: database.path });
+
+    first.alerter.onRunFinished(down(first.clock, SCENARIO), NO_RESULT);
+    await first.alerter.stop();
+
+    const second = await setup({ scenarios: SCENARIO_NAMES,
+      probeThreshold: 1,
+      database: database.path });
+
+    expect(second.alerter.onRunFinished(down(second.clock, PROBE), NO_RESULT)).toBeUndefined();
+    expect(second.alerter.onRunFinished(up(second.clock, PROBE), NO_RESULT)).toBeUndefined();
+    expect(second.alerter.onRunFinished(up(second.clock, SCENARIO), NO_RESULT)).toBe('recovered');
+  });
+
+  it('a state saved while the storage failed is written with the next successful save', async () => {
+    const control = { broken: true };
+    const { alerter, clock, history } = await setup({ scenarios: SCENARIO_NAMES,
+      probeThreshold: 1,
+      wrap: base => ({ ...base,
+        saveAlert: (...args): void => {
+          if (control.broken) {
+            throw new Error('disk full');
+          }
+
+          base.saveAlert(...args);
+        } }) });
+
+    alerter.onRunFinished(down(clock, SCENARIO), NO_RESULT);
+    expect(history.alertState(SCENARIO)).toBeUndefined();
+    control.broken = false;
+    alerter.onRunFinished(down(clock, PROBE), NO_RESULT);
+    expect(history.alertState(SCENARIO)?.state).toBe('failing');
+    expect(history.alertState(PROBE)?.state).toBe('failing');
+  });
+});
+
+describe('alerter: a rejected head does not hold the queue for a day', () => {
+  const OTHER = 'check-notification';
+  const GIVEN_UP = 'alert dropped after rejections';
+
+  /**
+   * Queues FAILED of one scenario and FAILED of another, in that order.
+   * @param alerter Alerter under test.
+   * @param clock Clock that gives the start time.
+   */
+  function queueTwo(alerter: Alerter, clock: FakeClock): void {
+    alerter.onRunFinished(failedRow(clock), NO_RESULT);
+    alerter.onRunFinished(failedRow(clock, { scenario: OTHER,
+      runId: 'rcccccccccccccccc' }), NO_RESULT);
+  }
+
+  /**
+   * Runs `count` flushes, each after the longest retry pause.
+   * @param alerter Alerter under test.
+   * @param clock Fake clock.
+   * @param count Number of flushes.
+   */
+  async function flushTimes(alerter: Alerter, clock: FakeClock, count: number): Promise<void> {
+    for (let index = 0; index < count; index += 1) {
+      await alerter.flush(SIGNAL);
+      await clock.advance(600_000);
+    }
+  }
+
+  it('a bot that answers 429 three times and then accepts loses nothing and keeps the order', async () => {
+    const { alerter, bot, clock, history, logger } = await setup({ answer: { status: 429 } });
+
+    queueTwo(alerter, clock);
+    await flushTimes(alerter, clock, 3);
+    bot.setAnswer({});
+    await flushTimes(alerter, clock, 1);
+
+    expect(history.pendingAlerts(clock.wallTime().toISOString(), 10)).toEqual([]);
+    expect(messages(bot).filter((_text, index) => index >= 3)
+      .map(text => /<b>([^<]+)<\/b> (\S+)/u.exec(text)?.[2])).toEqual([SCENARIO, OTHER]);
+    expect(logger.lines.some(line => line.msg === GIVEN_UP)).toBe(false);
+  });
+
+  it('a bot that answers 401 forever drops nothing', async () => {
+    const { alerter, bot, clock, history, logger } = await setup({ answer: { status: 401 } });
+
+    queueTwo(alerter, clock);
+    await flushTimes(alerter, clock, 8);
+
+    expect(history.oldestUnsentAlert()).toBeDefined();
+    expect(history.pendingAlerts(clock.wallTime().toISOString(), 10)).toHaveLength(2);
+    expect(bot.requests.length).toBeGreaterThanOrEqual(8);
+    expect(logger.lines.some(line => line.msg === GIVEN_UP)).toBe(false);
+  });
+
+  it('a message the bot rejects three times is given up once another one gets through, and its scenario announces again', async () => {
+    const { alerter, bot, clock, history, logger } = await setup({ answer: { answerFor: message => message.includes(SCENARIO) ? { body: 'FAIL' } : undefined } });
+
+    queueTwo(alerter, clock);
+    await flushTimes(alerter, clock, 2);
+    expect(history.pendingAlerts(clock.wallTime().toISOString(), 10)).toHaveLength(2);
+    await alerter.flush(SIGNAL);
+
+    expect(history.pendingAlerts('2100-01-01T00:00:00.000Z', 10)).toEqual([]);
+    expect(messages(bot).at(-1)).toContain(OTHER);
+    expect(logger.lines.find(line => line.msg === GIVEN_UP)).toMatchObject({ level: 'error',
+      scenario: SCENARIO,
+      text: expect.stringContaining(SCENARIO) as string });
+    expect(history.alertState(SCENARIO)?.announced).toBe(false);
+    expect(alerter.health().rejectedInRow).toBe(0);
+  });
+
+  it('a bot that rejects everything drops nothing, grows rejectedInRow and stops the heartbeat', async () => {
+    const { alerter, clock, history, logger } = await setup({ answer: { body: 'FAIL' } });
+
+    queueTwo(alerter, clock);
+    await flushTimes(alerter, clock, 6);
+
+    expect(history.pendingAlerts(clock.wallTime().toISOString(), 10)).toHaveLength(2);
+    expect(alerter.health().rejectedInRow).toBeGreaterThanOrEqual(6);
+    expect(logger.lines.some(line => line.msg === GIVEN_UP)).toBe(false);
+    expect(heartbeatReason({ scheduler: { scheduler: true,
+      storage: true,
+      stuck: [] },
+    alerts: alerter.health(),
+    scenarios: [],
+    lastVerdictAt: () => undefined,
+    freshnessMs: () => 1,
+    nowWallMs: 0,
+    startedWallMs: 0 })).toEqual({ reason: 'alerts are not delivered' });
+  });
+
+  it('a bot that cannot be reached holds the queue', async () => {
+    const { alerter, bot, clock, history, logger } = await setup();
+
+    queueTwo(alerter, clock);
+    await bot.close();
+    await flushTimes(alerter, clock, 6);
+
+    expect(history.pendingAlerts(clock.wallTime().toISOString(), 10)).toHaveLength(2);
+    expect(logger.lines.some(line => line.msg === GIVEN_UP)).toBe(false);
+  });
+
+  it('a delivered message whose mark failed is not sent again', async () => {
+    let failures = 1;
+    const { alerter, bot, clock, history } = await setup({ wrap: base => ({ ...base,
+      alertAttempt: (id, update): void => {
+        if (update.sentAt !== undefined && failures > 0) {
+          failures -= 1;
+          throw new Error('disk full');
+        }
+
+        base.alertAttempt(id, update);
+      } }) });
+
+    alerter.onRunFinished(failedRow(clock), NO_RESULT);
+    await alerter.flush(SIGNAL);
+    expect(bot.requests).toHaveLength(1);
+    expect(history.oldestUnsentAlert()).toBeDefined();
+
+    await alerter.flush(SIGNAL);
+    expect(bot.requests).toHaveLength(1);
+    expect(history.oldestUnsentAlert()).toBeUndefined();
+  });
+});
+
+describe('alerter: the length of an episode', () => {
+  it('RECOVERED counts the downtime from the first failed run of the series', async () => {
+    const { alerter, bot, clock } = await setup({ probeThreshold: 3 });
+    const probe = (status: RunRow['status'], sequence: number): RunRow => failedRow(clock, { scenario: 'endpoints-probe',
+      status,
+      sequence,
+      failedStage: 'garage_availability',
+      errorClass: 'garage_unavailable',
+      stages: status === 'ok'
+        ? [{ name: 'garage_availability',
+            status: 'ok',
+            durationMs: 1 }]
+        : [],
+      runId: `r${String.fromCodePoint(96 + sequence).repeat(16)}` });
+
+    for (const [index, status] of (['failed', 'failed', 'failed'] as const).entries()) {
+      alerter.onRunFinished(probe(status, index + 1), NO_RESULT);
+      await clock.advance(90_000);
+    }
+
+    expect(alerter.onRunFinished(probe('ok', 4), NO_RESULT)).toBe('recovered');
+    await alerter.flush(SIGNAL);
+    expect(messages(bot).at(-1)).toContain('down 4m 30s');
   });
 });

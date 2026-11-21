@@ -660,6 +660,9 @@ describe('serve: heartbeat', () => {
           failureStreak: 1,
           episodeFailures: 1,
           degraded: [],
+          open: [],
+          announced: true,
+          reported: [],
           updatedAt: at }, { text: 'old alert',
           at });
       } });

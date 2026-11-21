@@ -11,6 +11,8 @@ import { formatDuration, formatUtc } from '../time/format.js';
 export const ALERT_TEXT_LIMIT = 3500;
 
 const ELLIPSIS = '…';
+// The newest cause is the one being reported, so the one before it is second from the end.
+const PREVIOUS_CAUSE = 2;
 const WARNING_CLASSES: readonly ErrorClass[] = ['quota_exhausted', 'rate_limited'];
 const STORAGE_MARK = '⚠️';
 
@@ -213,11 +215,20 @@ function failureBlock(input: AlertTextInput): Line[] {
   const failed = row.stages.find(stage => stage.name === row.failedStage);
   const after = failed === undefined ? '' : ` after ${formatDuration(failed.durationMs)}`;
 
+  const earlier = input.kind === 'still_failing' ? input.state.reported.at(-PREVIOUS_CAUSE) : undefined;
+  const length = input.kind === 'still_failing' && input.state.episodeStartedAt !== undefined
+    ? `failing for ${formatDuration(Date.parse(input.now) - Date.parse(input.state.episodeStartedAt))}`
+    : undefined;
+  const history = [earlier === undefined ? undefined : `previously: ${earlier.replace('/', ' / ')}`, length].filter(part => part !== undefined);
+
   return [{ bold: row.failedStage ?? 'run',
     text: ` failed${after}` },
   { text: `class ${row.errorClass ?? '-'} | culprit ${row.culprit ?? '-'}` },
-  { text: row.message ?? '',
-    cutOrder: 1 }];
+  ...history.length === 0 ? [] : [{ text: history.join(' | ') }],
+  ...row.message === undefined || row.message === ''
+    ? []
+    : [{ text: row.message,
+        cutOrder: 1 }]];
 }
 
 /**

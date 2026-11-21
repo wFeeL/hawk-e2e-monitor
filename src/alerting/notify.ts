@@ -1,4 +1,6 @@
 import { CheckError } from '../errors/taxonomy.js';
+import type { Culprit } from '../errors/taxonomy.js';
+import type { NetworkFailure } from '../net/classify.js';
 import { NetworkError, httpRequest } from '../net/http.js';
 import type { Clock } from '../time/clock.js';
 import { HttpStatus } from '../net/http-status.js';
@@ -6,6 +8,12 @@ import { HttpStatus } from '../net/http-status.js';
 const FORM_HEADERS = Object.fromEntries([['content-type', 'application/x-www-form-urlencoded']]);
 const OK_MARK = 'OK!';
 const MAX_BODY_CHARS = 200;
+
+/** A network failure that may name the side to blame. */
+interface BlamedFailure extends NetworkFailure {
+  /** Culprit given by the classifier, when it gives one. */
+  culprit?: Culprit;
+}
 
 /** What `sendNotify` needs besides the address and the text. */
 export interface NotifyDeps {
@@ -42,10 +50,13 @@ export async function sendNotify(url: string, text: string, deps: NotifyDeps, si
     }
 
     const host = URL.canParse(url) ? new URL(url).hostname : 'the notify URL';
+    // The classifier names the culprit for a target that is not Hawk; until it does, the class decides.
+    const failure: BlamedFailure = error.failure;
 
     // The cause is dropped on purpose: it may carry the address with the token.
-    throw new CheckError(error.failure.errorClass, { code: error.failure.code,
-      host }, { message: `codex.bot is not reachable at ${host}: ${error.failure.code}` });
+    throw new CheckError(failure.errorClass, { code: failure.code,
+      host }, { message: `codex.bot is not reachable at ${host}: ${failure.code}`,
+      ...failure.culprit === undefined ? {} : { culprit: failure.culprit } });
   }
 
   if (response.status >= HttpStatus.internalServerError) {
