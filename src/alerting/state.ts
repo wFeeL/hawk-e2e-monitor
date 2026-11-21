@@ -343,6 +343,10 @@ export function decideAlert(previous: AlertStateRow | undefined, row: RunRow, se
  * @returns The decision with the message dropped or added, and `announced` set to match.
  */
 export function shareEpisode(previous: AlertStateRow | undefined, decision: AlertDecision, row: RunRow, leaders: readonly AlertStateRow[]): AlertDecision {
+  if (isIgnored(row)) {
+    return decision;
+  }
+
   const stage = row.status === 'ok' ? undefined : row.failedStage;
   const availability = stage !== undefined && AVAILABILITY_STAGES.includes(stage);
   const led = availability && leaders.some(leader => leader.open.some(item => item.pair.startsWith(`${stage}@`)));
