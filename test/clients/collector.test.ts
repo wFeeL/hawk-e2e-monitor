@@ -933,3 +933,35 @@ describe('gateway answers and oversized bodies', () => {
       message: 'response larger than 65536 bytes' });
   });
 });
+
+describe('secrets in the start of a body', () => {
+  const secretOf = (): string => decodeIntegrationToken(VALID_TOKEN)?.secret ?? '';
+  // The secret starts at 195, so a cut at 200 would leave its first five characters.
+  const bodyWithSecret = (): string => `${'x'.repeat(195)}${secretOf()}${'y'.repeat(100)}`;
+
+  it('is masked before the body is cut, over HTTP and WebSocket', async () => {
+    collector.knobs.reply = { status: 404,
+      body: bodyWithSecret(),
+      contentType: 'text/plain' };
+
+    for (const transport of ['http', 'ws'] as const) {
+      const { error } = rejected(await clientFor().send(message(), transport, signal));
+
+      expect(error.facts.detail).not.toContain(secretOf().slice(0, 5));
+      expect(error.message).not.toContain(secretOf().slice(0, 5));
+    }
+  });
+
+  it('is masked in the answers to a release and an envelope', async () => {
+    collector.knobs.releaseReply = { status: 404,
+      body: bodyWithSecret() };
+    collector.knobs.envelopeReply = { status: 404,
+      body: `${'x'.repeat(195)}${KEY}${'y'.repeat(100)}` };
+
+    const release = rejected(await clientFor().uploadRelease(VALID_TOKEN, 'rel-1', MAP_FILE, signal));
+    const envelope = rejected(await clientFor().sendEnvelope(KEY, ENVELOPE, signal));
+
+    expect(release.error.facts.detail).not.toContain(secretOf().slice(0, 5));
+    expect(envelope.error.facts.detail).not.toContain(KEY.slice(0, 5));
+  });
+});

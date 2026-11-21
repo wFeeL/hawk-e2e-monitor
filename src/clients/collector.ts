@@ -2,7 +2,9 @@ import { Buffer } from 'node:buffer';
 import { COLLECTOR_PANIC_DETAIL } from '../errors/messages.js';
 import { CheckError } from '../errors/taxonomy.js';
 import type { ErrorClass, MessageFacts } from '../errors/taxonomy.js';
-import { stripTokenSecret } from '../errors/redact.js';
+import { createRedactor, stripTokenSecret } from '../errors/redact.js';
+import type { Redactor } from '../errors/redact.js';
+import { decodeIntegrationToken, tokenKey } from '../hawk/token.js';
 import type { CollectorEndpoints } from '../hawk/token.js';
 import { JSON_HEADERS, NetworkError, networkFailureToCheckError, requestWithRetry } from '../net/http.js';
 import { withRetry } from '../net/retry.js';
@@ -196,6 +198,18 @@ function parseObject(text: string): ReplyBody | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Builds the redactor for the answers to a call made with a token.
+ * The client is given no secrets at creation, so each call masks the ones it carries before any text is cut to a snippet.
+ * @param token Base64 integration token, or the Sentry key that is `tokenKey` of it.
+ * @returns Redactor for the token, its secret and its collector key.
+ */
+function redactorFor(token: string): Redactor {
+  const decoded = decodeIntegrationToken(token);
+
+  return createRedactor(decoded === undefined ? [token] : [token, decoded.secret, tokenKey(decoded)]);
 }
 
 /**
@@ -544,7 +558,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
         attempts };
     }
 
-    const verdict = classifyCollectorReply(response.status, response.text, response.truncated);
+    const verdict = classifyCollectorReply(response.status, redactorFor(message.token)(response.text), response.truncated);
 
     return verdict.kind === 'accepted'
       ? { kind: 'accepted',
@@ -576,16 +590,17 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
             attempts };
     }
 
-    const json = parseObject(outcome.text);
+    const text = redactorFor(message.token)(outcome.text);
+    const json = parseObject(text);
 
     if (typeof json?.code !== 'number') {
       return { kind: 'rejected',
         error: new CheckError('collector_unexpected_response', { url: endpoints.wsUrl,
-          detail: flatSnippet(outcome.text) }),
+          detail: flatSnippet(text) }),
         attempts };
     }
 
-    const verdict = classifyCollectorReply(json.code, outcome.text);
+    const verdict = classifyCollectorReply(json.code, text);
 
     return verdict.kind === 'accepted'
       ? { kind: 'accepted',
@@ -644,7 +659,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
         attempts };
     }
 
-    const verdict = classifyCollectorReply(response.status, response.text, response.truncated);
+    const verdict = classifyCollectorReply(response.status, redactorFor(token)(response.text), response.truncated);
 
     if (verdict.kind === 'accepted') {
       return { kind: 'accepted',
@@ -704,7 +719,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
         attempts };
     }
 
-    const verdict = classifyCollectorReply(response.status, response.text, response.truncated);
+    const verdict = classifyCollectorReply(response.status, redactorFor(sentryKey)(response.text), response.truncated);
 
     return verdict.kind === 'accepted'
       ? { kind: 'accepted',

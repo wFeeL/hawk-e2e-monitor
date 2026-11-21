@@ -8,15 +8,26 @@ export const TOKEN_INVALID_PREFIX = 'Integration token invalid';
 export type Redactor = (text: string) => string;
 
 /**
+ * Lists the ways a secret can show up in a text: as it is, percent-encoded in an address, escaped inside a JSON string.
+ * @param secret The secret as the monitor knows it.
+ * @returns The distinct forms, the secret itself first.
+ */
+function formsOf(secret: string): string[] {
+  return [...new Set([secret, encodeURIComponent(secret), JSON.stringify(secret).slice(1, -1)])];
+}
+
+/**
  * Builds a redactor that masks every occurrence of each secret.
  * The caller passes each secret in every form it can appear in, such as
- * the `secret` with dashes and the `tokenKey` without them.
+ * the `secret` with dashes and the `tokenKey` without them; the percent-encoded
+ * and the JSON-escaped form of each one are added here.
  * @param secrets Secret values; those shorter than 4 characters are ignored.
  * @returns Function that replaces secrets with `***`.
  */
 export function createRedactor(secrets: readonly string[]): Redactor {
-  const sorted = secrets
+  const sorted = [...new Set(secrets
     .filter(secret => secret.length >= MIN_SECRET_LENGTH)
+    .flatMap(formsOf))]
     .toSorted((left, right) => right.length - left.length);
 
   return (text) => {
@@ -74,8 +85,9 @@ function isPlain(value: object): boolean {
 }
 
 /**
- * Masks string values in nested objects and arrays. Keys and non-plain
- * objects (dates, errors) are left as they are.
+ * Masks string values and object keys in nested objects and arrays.
+ * An `Error` becomes a plain `{ name, message, stack }` object with those fields masked, so it survives
+ * serialization with its text; other non-plain objects (dates) are left as they are.
  * @param value Data to clean.
  * @param redact Redactor for strings.
  * @returns A copy with masked strings.
@@ -83,6 +95,12 @@ function isPlain(value: object): boolean {
 export function redactDeep<T>(value: T, redact: Redactor): T {
   if (typeof value === 'string') {
     return redact(value) as T;
+  }
+
+  if (value instanceof Error) {
+    return { name: value.name,
+      message: redact(value.message),
+      ...value.stack === undefined ? {} : { stack: redact(value.stack) } } as T;
   }
 
   if (typeof value !== 'object' || value === null || !isPlain(value)) {
@@ -94,7 +112,7 @@ export function redactDeep<T>(value: T, redact: Redactor): T {
   }
 
   return Object.fromEntries(Object.entries(value)
-    .map(([key, item]) => [key, redactDeep(item as unknown, redact)])) as T;
+    .map(([key, item]) => [redact(key), redactDeep(item as unknown, redact)])) as T;
 }
 
 /**
