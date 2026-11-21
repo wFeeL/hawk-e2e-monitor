@@ -16,7 +16,24 @@
 | telegram-delivery | уведомление Hawk доходит до чата в Telegram | выключен, нужен бот |
 | new-project | коллектор принимает токен нового проекта | выключен, только для своего Hawk |
 
-<img src="assets/grafana-dashboard.png" width="640" alt="Дашборд Grafana: статус сценариев и длительность прогонов">
+## Возможности
+
+- Проверяет полный путь события: прием коллектором по HTTP и WebSocket,
+  обработку воркерами, появление в проекте с нужными полями, группировку повтора.
+- Проверяет уведомления: webhook, loop, правило с порогом и доставку в Telegram.
+- Называет место сбоя: этап, один из 59 классов ошибки и вероятного виновника
+  (Hawk, монитор, конфигурация или сеть).
+- Пишет в Telegram о сбое, смене причины и восстановлении.
+- Хранит историю прогонов с длительностью каждого этапа, считает долю успешных
+  и задержки.
+- Отдает метрики Prometheus; в комплекте дашборд Grafana, правила и heartbeat.
+- Переживает рестарты Hawk и свои, убирает за собой тестовые события,
+  запускается вручную одной командой.
+
+<p>
+  <img src="assets/grafana-dashboard.png" height="380" alt="Дашборд Grafana: статус сценариев и длительность прогонов">
+  <img src="assets/telegram-alert.png" height="380" alt="Алерты монитора в Telegram: FAILED и RECOVERED">
+</p>
 
 ## Что нужно от Hawk
 
@@ -291,23 +308,6 @@ sequenceDiagram
 той же причиной новых сообщений не дают. Недоставленный алерт монитор
 повторяет до 24 часов.
 
-Так выглядит сообщение о сбое:
-
-```text
-🔴 FAILED send-and-receive-event
-instance prod | outage
-
-event_visible failed after 2m 0s
-class event_not_found | culprit hawk
-Event did not appear within 2m 0s: API answered 20 times, failed 3 times
-
-run #12 raaaaaaaaaaaaaaaa
-started 2026-03-10 12:00:00 UTC
-
-event latency 2.1 s
-before: collector_availability 120 ms, api_availability 340 ms, collector_accept 80 ms
-```
-
 ### Метрики, Grafana и heartbeat
 
 `GET /metrics` отдает прогоны и падения по сценарию, этапу, классу и
@@ -327,11 +327,8 @@ docker compose --profile observability up -d
 ```
 
 Правила Prometheus только вычисляются и видны на `127.0.0.1:9090/alerts`:
-Alertmanager в compose нет, в Telegram пишет сам монитор.
-
-![Правила алертов в Prometheus](assets/prometheus-alerts.png)
-
-Дашборд и правила рассчитаны на имя job `monitor` из
+Alertmanager в compose нет, в Telegram пишет сам монитор. Дашборд и правила
+рассчитаны на имя job `monitor` из
 `deploy/prometheus/prometheus.yml`. Занятые порты хоста меняются в `.env`
 (`PROMETHEUS_PORT`, `GRAFANA_PORT`). Если Prometheus или Grafana не читают свои
 файлы (клон сделан с umask без чтения для остальных), выполните
@@ -364,7 +361,8 @@ Heartbeat ловит случай, когда остановился сам мо
 (`telegram_not_delivered`), не дошла, значит, сломан @codex_bot или адрес
 (`telegram_bot_unavailable`).
 
-Настройка:
+<details>
+<summary>Настройка</summary>
 
 1. @BotFather: `/newbot`, затем в настройках бота включите Bot-to-Bot
    Communication Mode и выключите Group Privacy (`/setprivacy`, Disable). Без
@@ -384,6 +382,8 @@ Heartbeat ловит случай, когда остановился сам мо
 6. Проверьте цепочку без монитора: `set -a && . ./.env && set +a`, затем
    `curl -X POST "$TELEGRAM_NOTIFY_URL" -d "message=test"` должен дать `OK!` и
    сообщение в группе. Потом `hem run telegram-delivery`.
+
+</details>
 
 Алерты (`ALERT_NOTIFY_URL`) держите в другом чате: тестовую группу монитор
 читает. Токен бота читает только один процесс, не делите бота между
