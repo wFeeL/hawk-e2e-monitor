@@ -30,6 +30,10 @@ interface Answer {
   status: number;
   /** JSON body. */
   body: unknown;
+  /** Pause before the headers go out. */
+  delayMs?: number;
+  /** Drops the socket instead of answering. */
+  destroy?: boolean;
 }
 
 /** What the command did. */
@@ -91,9 +95,17 @@ async function fake(answers: Record<string, Answer>): Promise<Fake> {
     const answer = answers[url.pathname.replace('/runs/', '')] ?? { status: 404,
       body: {} };
 
-    res.statusCode = answer.status;
-    res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify(answer.body));
+    if (answer.destroy === true) {
+      req.socket.destroy();
+
+      return;
+    }
+
+    setTimeout(() => {
+      res.statusCode = answer.status;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify(answer.body));
+    }, answer.delayMs ?? 0);
   });
 
   await new Promise<void>((resolve) => {
@@ -279,5 +291,58 @@ describe('runRunCommand', () => {
 
     expect(result.out).toEqual(['sourcemaps  no answer: TIMEOUT']);
     expect(result.code).toBe(1);
+  });
+
+  it('waits for headers that come late, with no timeout of its own besides the request one', async () => {
+    const { port } = await fake({ sourcemaps: { status: 200,
+      body: OK,
+      delayMs: 400 } });
+    const result = await run(['sourcemaps'], configFor(port), { requestTimeoutMs: () => 2000 });
+
+    expect(result.out).toEqual(['sourcemaps  ok  4.2 s']);
+    expect(result.code).toBe(0);
+  });
+
+  it('stops with exit 2 and the code when the socket is dropped before an answer', async () => {
+    const { port } = await fake({ sourcemaps: { status: 200,
+      body: OK,
+      destroy: true } });
+    const result = await run(['sourcemaps', 'check-notification'], configFor(port));
+
+    expect(result.err).toEqual([`cannot reach serve on 127.0.0.1:${String(port)}: ECONNRESET`]);
+    expect(result.out).toEqual([]);
+    expect(result.code).toBe(2);
+  });
+
+  it('names the reason of a skipped run: the skip reason first, else the first warning', async () => {
+    const { port } = await fake({ [SEND]: { status: 200,
+      body: { status: 'skipped',
+        skipReason: 'rule_cache_warmup',
+        result: { warnings: ['ignored'] } } },
+    [NOTIFY]: { status: 200,
+      body: { status: 'skipped',
+        result: { warnings: [],
+          stages: [{ details: {} }, { details: { warning: 'rule cache is warming up' } }] } } },
+    sourcemaps: { status: 200,
+      body: { status: 'skipped',
+        result: { warnings: ['first', 'second'] } } } });
+    const result = await run([], configFor(port));
+
+    expect(result.out).toEqual([
+      'send-and-receive-event  skipped: rule_cache_warmup',
+      'check-notification      skipped: rule cache is warming up',
+      'sourcemaps              skipped: first',
+    ]);
+    expect(result.code).toBe(1);
+  });
+
+  it('names the class and the message of an aborted run', async () => {
+    const { port } = await fake({ sourcemaps: { status: 200,
+      body: { status: 'aborted',
+        errorClass: 'run_timeout',
+        message: 'the run took too long' } } });
+    const result = await run(['sourcemaps'], configFor(port));
+
+    expect(result.out).toEqual(['sourcemaps  aborted: run_timeout: the run took too long']);
   });
 });

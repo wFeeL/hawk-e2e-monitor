@@ -72,6 +72,15 @@ export const USAGE = [
   '',
 ].join('\n');
 
+/**
+ * Tells which exit code a configuration error ends a command with.
+ * @param command Parsed command.
+ * @returns 2 for `run`, which then cannot ask the service, 1 for the others.
+ */
+export function configErrorExitCode(command: Command): number {
+  return command.kind === 'run' ? 2 : 1;
+}
+
 const MAX_HISTORY_COMMAND_LIMIT = 1000;
 const SEQUENCE_PATTERN = /^[1-9]\d*$/u;
 

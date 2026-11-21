@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseCommand, USAGE } from '../src/cli.js';
+import { configErrorExitCode, parseCommand, USAGE } from '../src/cli.js';
 
 describe('parseCommand', () => {
   it('no arguments means serve', () => {
@@ -190,5 +190,14 @@ describe('parseCommand run', () => {
 
   it('usage lists the run command', () => {
     expect(USAGE).toContain('       hawk-e2e-monitor run [<scenario> ...]\n');
+  });
+});
+
+describe('configErrorExitCode', () => {
+  it('is 2 for run, which says the service cannot be asked, and 1 for the other commands', () => {
+    expect(configErrorExitCode(parseCommand(['run']))).toBe(2);
+    expect(configErrorExitCode(parseCommand(['serve']))).toBe(1);
+    expect(configErrorExitCode(parseCommand(['check', 'sourcemaps']))).toBe(1);
+    expect(configErrorExitCode(parseCommand(['history']))).toBe(1);
   });
 });
