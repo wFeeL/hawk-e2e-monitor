@@ -989,6 +989,65 @@ describe('storage failure', () => {
     expect(real.get('rbbbbbbbbbbbbbbb')?.status).toBe('ok');
   });
 
+  it('retries the final write of a run on the next tick and tells the listeners only once', async () => {
+    const real = createHistory(openDatabase(':memory:'));
+    const failing = { finish: false };
+    const history: History = { ...real,
+      finishRun: (runId, outcome) => {
+        if (failing.finish) {
+          throw new Error('disk full');
+        }
+
+        real.finishRun(runId, outcome);
+      } };
+    const { scheduler, clock, runners, finished, logger } = setup({ scenarios: [SEND],
+      history });
+
+    scheduler.start();
+    await settle(clock);
+    failing.finish = true;
+    callOf(runners[SEND], 0).resolve();
+    await settle(clock);
+    expect(rowOf(real, 'raaaaaaaaaaaaaaa').status).toBe('running');
+    expect(scheduler.health().storage).toBe(false);
+    expect(finished).toHaveLength(1);
+
+    failing.finish = false;
+    await clock.advance(INTERVAL_MS);
+    expect(rowOf(real, 'raaaaaaaaaaaaaaa').status).toBe('ok');
+    expect(scheduler.health().storage).toBe(true);
+    expect(finished).toHaveLength(1);
+    expect(logger.lines.some(line => line.msg === 'history write recovered')).toBe(true);
+  });
+
+  it('drops a pending final write when the row was ended another way', async () => {
+    const real = createHistory(openDatabase(':memory:'));
+    const failing = { finish: false };
+    const history: History = { ...real,
+      finishRun: (runId, outcome) => {
+        if (failing.finish) {
+          throw new Error('disk full');
+        }
+
+        real.finishRun(runId, outcome);
+      } };
+    const { scheduler, clock, runners, logger } = setup({ scenarios: [SEND],
+      history });
+
+    scheduler.start();
+    await settle(clock);
+    failing.finish = true;
+    callOf(runners[SEND], 0).resolve();
+    await settle(clock);
+    expect(scheduler.health().storage).toBe(false);
+
+    real.abortRunning('monitor_restarted', START.toISOString());
+    await clock.advance(INTERVAL_MS);
+    expect(rowOf(real, 'raaaaaaaaaaaaaaa').status).toBe('aborted');
+    expect(scheduler.health().storage).toBe(true);
+    expect(logger.lines.some(line => line.msg === 'history write no longer needed')).toBe(true);
+  });
+
   it('a failing nextSequence falls back to a counter in memory', async () => {
     const real = createHistory(openDatabase(':memory:'));
     const { scheduler, clock, runners } = setup({ scenarios: [SEND],

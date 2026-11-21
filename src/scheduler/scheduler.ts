@@ -209,6 +209,14 @@ interface Handle {
   trigger: RunTrigger;
 }
 
+/** A final write that the history refused. */
+interface PendingFinish {
+  /** Run whose row stays `running`. */
+  runId: string;
+  /** What the row should say. */
+  outcome: RunOutcome;
+}
+
 /** Per-scenario state. */
 interface ScenarioState {
   /** Scenario. */
@@ -233,6 +241,8 @@ interface ScenarioState {
   lastSequence: number;
   /** Number of the last run whose start the history could not store; the next number must follow it. */
   unwritten?: number;
+  /** Final writes the history refused; each is retried on the next tick. */
+  unfinished: PendingFinish[];
 }
 
 /**
@@ -282,7 +292,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       index: states.size,
       hungStreak: 0,
       warmupStreak: 0,
-      lastSequence: 0 });
+      lastSequence: 0,
+      unfinished: [] });
   }
 
   const wallIso = (): string => clock.wallTime().toISOString();
@@ -359,12 +370,21 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
 
     if (handle.startWritten) {
+      let written = false;
+
       try {
         history.finishRun(handle.start.runId, outcome);
+        written = true;
         storageFailed = false;
         row = history.get(handle.start.runId);
       } catch (error) {
         writeFailed('finishRun', error);
+
+        // A row left `running` would never get its result; the next tick tries again.
+        if (!written) {
+          state.unfinished.push({ runId: handle.start.runId,
+            outcome });
+        }
       }
     }
 
@@ -598,11 +618,38 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       stages: [] }, undefined);
   };
 
+  const retryUnfinished = (state: ScenarioState): void => {
+    for (const pending of state.unfinished.splice(0)) {
+      try {
+        // Something else may have ended the row meanwhile; writing again would fail for good.
+        const stored = history.get(pending.runId);
+
+        if (stored !== undefined && stored.status !== 'running') {
+          logger.info('history write no longer needed', { runId: pending.runId });
+
+          continue;
+        }
+      } catch {
+        // Unreadable: try the write itself.
+      }
+
+      try {
+        history.finishRun(pending.runId, pending.outcome);
+        storageFailed = false;
+        logger.info('history write recovered', { runId: pending.runId });
+      } catch (error) {
+        writeFailed('finishRun', error);
+        state.unfinished.push(pending);
+      }
+    }
+  };
+
   const tick = (state: ScenarioState): void => {
     if (stopped) {
       return;
     }
 
+    retryUnfinished(state);
     state.lastTickMono = clock.monotonicMs();
     state.lastTickAt = wallIso();
 
@@ -684,7 +731,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       .map(state => state.name);
 
     return { scheduler: ticking,
-      storage: !storageFailed,
+      storage: !storageFailed && [...states.values()].every(state => state.unfinished.length === 0),
       stuck };
   };
 
