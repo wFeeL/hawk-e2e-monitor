@@ -651,6 +651,9 @@ describe('alerter: unreadable state and failing text', () => {
       episodeStartedAt: clock.wallTime().toISOString(),
       episodeFailures: 3,
       degraded: [],
+      open: [],
+      announced: true,
+      reported: [],
       updatedAt: clock.wallTime().toISOString() });
 
     // The first read fails: ok after ok says nothing, and the derived state must not be kept.

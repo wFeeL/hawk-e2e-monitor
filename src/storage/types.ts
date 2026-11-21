@@ -166,6 +166,14 @@ export interface ScenarioStats {
   lastRun?: Pick<RunRow, 'runId' | 'startedAt' | 'status'>;
 }
 
+/** A failure of an episode that no success has covered yet. */
+export interface OpenPair {
+  /** `<stage>@<transport>`; the transport is `http`, `ws` or `*`, the stage `run` for a failure without one. */
+  pair: string;
+  /** Failed runs that added this pair. */
+  count: number;
+}
+
 /** Alert state of a scenario as stored. */
 export interface AlertStateRow {
   /** Scenario. */
@@ -186,6 +194,14 @@ export interface AlertStateRow {
   episodeFailures: number;
   /** Degradation codes of the last `ok` run. */
   degraded: DegradedCode[];
+  /** Failures not yet covered by a success. */
+  open: OpenPair[];
+  /** False when the failure is held back because another scenario already announced the outage. */
+  announced: boolean;
+  /** Start of the run that began the current series of failures. */
+  streakStartedAt?: string;
+  /** Causes already reported in the episode, `<stage>/<class>`. */
+  reported: string[];
   /** Last change, ISO. */
   updatedAt: string;
 }
@@ -204,6 +220,8 @@ export interface OutboxRow {
   createdAt: string;
   /** Delivery attempts so far. */
   attempts: number;
+  /** Answers that rejected the message itself. */
+  rejections: number;
   /** Earliest next attempt, ISO. */
   nextAttemptAt: string;
 }

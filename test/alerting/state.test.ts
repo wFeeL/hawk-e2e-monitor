@@ -53,6 +53,9 @@ function state(overrides: Partial<AlertStateRow> = {}): AlertStateRow {
     failureStreak: 0,
     episodeFailures: 0,
     degraded: [],
+    open: [],
+    announced: true,
+    reported: [],
     updatedAt: BEFORE,
     ...overrides };
 }
@@ -79,6 +82,9 @@ describe('decideAlert: failures', () => {
       episodeStartedAt: '2026-03-10T11:59:00.000Z',
       episodeFailures: 1,
       degraded: [],
+      open: [],
+      announced: true,
+      reported: [],
       updatedAt: NOW });
   });
 

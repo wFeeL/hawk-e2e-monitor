@@ -79,6 +79,9 @@ function afterFailure(previous: AlertStateRow, row: RunRow, threshold: number, n
     episodeStartedAt: row.startedAt,
     episodeFailures: streak,
     degraded: [],
+    open: [],
+    announced: true,
+    reported: [],
     updatedAt: now },
   kind: 'failed' };
 }
@@ -105,6 +108,9 @@ function afterSuccess(previous: AlertStateRow, row: RunRow, now: string): AlertD
     ...previous.lastRunId === undefined ? {} : { lastRunId: previous.lastRunId },
     ...episode,
     degraded: row.degraded,
+    open: [],
+    announced: true,
+    reported: [],
     updatedAt: now });
 
   switch (previous.state) {
@@ -146,6 +152,9 @@ export function decideAlert(previous: AlertStateRow | undefined, row: RunRow, se
     failureStreak: 0,
     episodeFailures: 0,
     degraded: [],
+    open: [],
+    announced: true,
+    reported: [],
     updatedAt: now };
 
   if (isIgnored(row)) {

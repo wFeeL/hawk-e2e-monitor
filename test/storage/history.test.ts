@@ -566,6 +566,9 @@ describe('alerts', () => {
     episodeStartedAt: at(-1000),
     episodeFailures: 2,
     degraded: ['quota_usage'],
+    open: [],
+    announced: true,
+    reported: [],
     updatedAt: at(0) };
 
   it('saveAlert writes state and outbox, alertState reads them back', () => {
@@ -587,6 +590,7 @@ describe('alerts', () => {
       text: '<b>FAILED</b>',
       createdAt: at(0),
       attempts: 0,
+      rejections: 0,
       nextAttemptAt: at(0) }]);
   });
 
@@ -764,6 +768,9 @@ describe('prune', () => {
         failureStreak: 0,
         episodeFailures: 0,
         degraded: [],
+        open: [],
+        announced: true,
+        reported: [],
         updatedAt: at(0) }, { text: scenario,
         at: old });
     }
@@ -791,6 +798,9 @@ describe('prune', () => {
       failureStreak: 0,
       episodeFailures: 0,
       degraded: [],
+      open: [],
+      announced: true,
+      reported: [],
       updatedAt: at(0) }, { text: 'send alert',
       at: old });
     history.alertAttempt(1, { sentAt: old });
@@ -819,6 +829,9 @@ describe('prune', () => {
       failureStreak: 0,
       episodeFailures: 0,
       degraded: [],
+      open: [],
+      announced: true,
+      reported: [],
       updatedAt: at(0) }, { text: 'old alert',
       at: old });
     history.alertAttempt(1, { sentAt: old });
@@ -852,6 +865,9 @@ describe('prune', () => {
       failureStreak: 0,
       episodeFailures: 0,
       degraded: [],
+      open: [],
+      announced: true,
+      reported: [],
       updatedAt: at(0) }, { text: 'old',
       at: at(-40 * 24 * HOUR_MS) });
     history.alertAttempt(1, { sentAt: at(-40 * 24 * HOUR_MS) });
@@ -860,6 +876,9 @@ describe('prune', () => {
       failureStreak: 0,
       episodeFailures: 0,
       degraded: [],
+      open: [],
+      announced: true,
+      reported: [],
       updatedAt: at(0) }, { text: 'unsent',
       at: at(-40 * 24 * HOUR_MS) });
 

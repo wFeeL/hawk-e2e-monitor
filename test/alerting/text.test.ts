@@ -64,6 +64,9 @@ function stateRow(overrides: Partial<AlertStateRow> = {}): AlertStateRow {
     episodeStartedAt: '2026-03-10T12:00:00.000Z',
     episodeFailures: 3,
     degraded: [],
+    open: [],
+    announced: true,
+    reported: [],
     updatedAt: NOW,
     ...overrides };
 }

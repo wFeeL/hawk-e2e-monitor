@@ -3,7 +3,7 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 /** Version of the schema this code writes. */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 const BUSY_TIMEOUT_MS = 5000;
 
@@ -42,6 +42,14 @@ CREATE TABLE alert_outbox (id INTEGER PRIMARY KEY, scenario TEXT NOT NULL, run_i
 CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `;
 
+const MIGRATE_V2 = `
+ALTER TABLE alert_state ADD COLUMN open TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE alert_state ADD COLUMN announced INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE alert_state ADD COLUMN streak_started_at TEXT;
+ALTER TABLE alert_state ADD COLUMN reported TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE alert_outbox ADD COLUMN rejections INTEGER NOT NULL DEFAULT 0;
+`;
+
 /**
  * Reads the schema version of the file.
  * @param db Open database.
@@ -54,17 +62,22 @@ function versionOf(db: DatabaseSync): number {
 }
 
 /**
- * Brings an empty database to the current version in one transaction.
+ * Brings a database to the current version in one transaction.
  * @param db Open database.
  */
 function migrate(db: DatabaseSync): void {
   db.exec('BEGIN IMMEDIATE');
 
   try {
-    // Another process may have migrated while this one waited for the lock.
+    // Another process may have migrated while this one waited for the lock, so each step reads the version again.
     if (versionOf(db) === 0) {
       db.exec(SCHEMA_V1);
-      db.exec(`PRAGMA user_version = ${String(SCHEMA_VERSION)}`);
+      db.exec('PRAGMA user_version = 1');
+    }
+
+    if (versionOf(db) === 1) {
+      db.exec(MIGRATE_V2);
+      db.exec('PRAGMA user_version = 2');
     }
 
     db.exec('COMMIT');
@@ -114,7 +127,7 @@ export function openDatabase(path: string, options: OpenOptions = {}): DatabaseS
     } else {
       db.exec('PRAGMA journal_mode = WAL');
 
-      if (version === 0) {
+      if (version < SCHEMA_VERSION) {
         migrate(db);
       }
     }
