@@ -3,7 +3,7 @@ import type { AlerterHealth } from '../alerting/alerter.js';
 import type { Redactor } from '../errors/redact.js';
 import type { Logger } from '../log/logger.js';
 import { HttpStatus } from '../net/http-status.js';
-import { NetworkError, httpRequest, networkFailureToCheckError } from '../net/http.js';
+import { NetworkError, SMALL_BODY_BYTES, httpRequest, networkFailureToCheckError } from '../net/http.js';
 import { SCENARIO_TRAITS } from '../scenarios/names.js';
 import type { ScenarioName } from '../scenarios/names.js';
 import type { SchedulerHealth } from '../scheduler/scheduler.js';
@@ -143,6 +143,7 @@ export function createHeartbeat(deps: HeartbeatDeps): Heartbeat {
       const response = await httpRequest({ url,
         method: 'GET',
         timeoutMs: deps.httpTimeoutMs,
+        maxBytes: SMALL_BODY_BYTES,
         signal }, 'heartbeat');
 
       if (response.status >= HttpStatus.ok && response.status <= LAST_OK_STATUS) {

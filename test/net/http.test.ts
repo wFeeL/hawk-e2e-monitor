@@ -59,6 +59,7 @@ function get(url: string, overrides: Partial<HttpRequest> = {}): HttpRequest {
   return { url,
     method: 'GET',
     timeoutMs: 1000,
+    maxBytes: 1024,
     signal: new AbortController().signal,
     ...overrides };
 }

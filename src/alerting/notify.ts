@@ -1,5 +1,5 @@
 import { CheckError } from '../errors/taxonomy.js';
-import { NetworkError, httpRequest } from '../net/http.js';
+import { NetworkError, SMALL_BODY_BYTES, httpRequest } from '../net/http.js';
 import type { Clock } from '../time/clock.js';
 import { HttpStatus } from '../net/http-status.js';
 
@@ -35,6 +35,7 @@ export async function sendNotify(url: string, text: string, deps: NotifyDeps, si
       headers: FORM_HEADERS,
       body: form.toString(),
       timeoutMs: deps.httpTimeoutMs,
+      maxBytes: SMALL_BODY_BYTES,
       signal }, 'notify');
   } catch (error) {
     if (!(error instanceof NetworkError)) {

@@ -9,6 +9,9 @@ import { withRetry } from './retry.js';
 /** Headers for a JSON body. */
 export const JSON_HEADERS: Readonly<Record<string, string>> = Object.fromEntries([['content-type', 'application/json']]);
 
+/** Body limit for answers that are only read for their status or a short message. */
+export const SMALL_BODY_BYTES = 65_536;
+
 /** A request made by `httpRequest`. */
 export interface HttpRequest {
   /** Address. */
@@ -21,8 +24,8 @@ export interface HttpRequest {
   body?: FormData | string;
   /** Deadline of the whole request, body included. */
   timeoutMs: number;
-  /** Reads at most this many bytes of the body and cancels the rest; the whole body when absent. */
-  maxBytes?: number;
+  /** Reads at most this many bytes of the body and cancels the rest. */
+  maxBytes: number;
   /** Caller's abort signal. */
   signal: AbortSignal;
 }
@@ -33,7 +36,7 @@ export interface HttpResponse {
   status: number;
   /** `content-type` header, empty when absent. */
   contentType: string;
-  /** Body text; cut at `maxBytes` of the request when it had one. */
+  /** Body text, cut at `maxBytes` of the request. */
   text: string;
   /** True when the body was longer than `maxBytes` and the rest was dropped. */
   truncated: boolean;
@@ -168,10 +171,7 @@ export async function httpRequest(request: HttpRequest, target: NetTarget): Prom
     }
 
     const response = await fetch(request.url, init);
-    const body = request.maxBytes === undefined
-      ? { text: await response.text(),
-          truncated: false }
-      : await readStart(response, request.maxBytes);
+    const body = await readStart(response, request.maxBytes);
 
     return { status: response.status,
       contentType: response.headers.get('content-type') ?? '',

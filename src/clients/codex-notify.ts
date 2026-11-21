@@ -1,5 +1,5 @@
 import { CheckError } from '../errors/taxonomy.js';
-import { NetworkError, httpRequest } from '../net/http.js';
+import { NetworkError, SMALL_BODY_BYTES, httpRequest } from '../net/http.js';
 import { HttpStatus } from '../net/http-status.js';
 import type { Clock } from '../time/clock.js';
 
@@ -43,6 +43,7 @@ export async function sendProbe(url: string, text: string, deps: ProbeDeps, sign
       headers: FORM_HEADERS,
       body: new URLSearchParams([['message', text]]).toString(),
       timeoutMs: deps.httpTimeoutMs,
+      maxBytes: SMALL_BODY_BYTES,
       signal }, 'notify');
   } catch (error) {
     if (!(error instanceof NetworkError)) {
