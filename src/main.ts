@@ -1,6 +1,6 @@
 import process from 'node:process';
 import { StartupError } from './app.js';
-import { parseCommand } from './cli.js';
+import { configErrorExitCode, parseCommand } from './cli.js';
 import { runCheckCommand } from './commands/check.js';
 import { runHistoryCommand } from './commands/history.js';
 import { runProvisionCommand } from './commands/provision.js';
@@ -151,7 +151,7 @@ async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<nu
   if (!result.ok) {
     process.stderr.write(formatConfigErrors(result.errors));
 
-    return 1;
+    return configErrorExitCode(command);
   }
 
   switch (command.kind) {

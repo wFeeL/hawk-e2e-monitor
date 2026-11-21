@@ -1,3 +1,6 @@
+import { Buffer } from 'node:buffer';
+import { request } from 'node:http';
+import type { IncomingMessage } from 'node:http';
 import type { RunCommand } from '../cli.js';
 import type { Config } from '../config/load.js';
 import { scenarioSettings } from '../config/scenario.js';
@@ -25,11 +28,15 @@ interface Fatal {
   fatal: string;
 }
 
-/** The part of a `fetch` rejection's cause that tells why it failed. */
-interface ErrorCause {
-  /** System error code such as `ECONNREFUSED`. */
-  code?: unknown;
+/** An answer of the service. */
+interface Answer {
+  /** HTTP status. */
+  status: number;
+  /** Parsed JSON body, undefined when it was not JSON. */
+  body: unknown;
 }
+
+const TIMEOUT = 'TIMEOUT';
 
 /** Test hooks of the command. */
 export interface RunDeps {
@@ -73,6 +80,38 @@ function textField(body: unknown, key: string): string {
 }
 
 /**
+ * Finds why a run was skipped.
+ * @param body Run as the service sends it.
+ * @returns The skip reason, else the first warning of the result, else an empty string.
+ */
+function skipReasonOf(body: unknown): string {
+  const reason = textField(body, 'skipReason');
+
+  if (reason !== '') {
+    return reason;
+  }
+
+  const result = field(body, 'result');
+  const warnings = field(result, 'warnings');
+  const stages = field(result, 'stages');
+  const first = Array.isArray(warnings) ? warnings.find((item: unknown) => typeof item === 'string') : undefined;
+
+  if (typeof first === 'string') {
+    return first;
+  }
+
+  for (const stage of Array.isArray(stages) ? stages as unknown[] : []) {
+    const warning = field(field(stage, 'details'), 'warning');
+
+    if (typeof warning === 'string') {
+      return warning;
+    }
+  }
+
+  return '';
+}
+
+/**
  * Describes a finished run (answer 200).
  * @param body Run as the service sends it.
  * @returns Text after the name, and whether the run was ok.
@@ -96,7 +135,9 @@ function finished(body: unknown): Line {
       ok: false };
   }
 
-  return { text: status,
+  const reason = status === 'skipped' ? skipReasonOf(body) : [textField(body, 'errorClass'), textField(body, 'message')].filter(part => part !== '').join(': ');
+
+  return { text: reason === '' ? status : `${status}: ${reason}`,
     ok: false };
 }
 
@@ -131,6 +172,53 @@ function describeAnswer(status: number, body: unknown): Line | Fatal {
 }
 
 /**
+ * Sends one POST and reads the whole answer.
+ * Node's own client is used because `fetch` gives up waiting for headers after 300 s, and a run that waits answers only when it ends.
+ * @param url Address of the run.
+ * @param token Bearer token.
+ * @param timeoutMs Time for the whole answer.
+ * @returns Status and parsed body.
+ * @throws Error with `message` TIMEOUT when the time is up, or the error of the request.
+ */
+async function post(url: string, token: string, timeoutMs: number): Promise<Answer> {
+  return new Promise<Answer>((resolve, reject) => {
+    const req = request(url, { method: 'POST',
+      headers: { authorization: `Bearer ${token}` } });
+    const timer = setTimeout(() => {
+      req.destroy(new Error(TIMEOUT));
+    }, timeoutMs);
+
+    req.on('response', (res: IncomingMessage) => {
+      const chunks: Buffer[] = [];
+
+      res.on('data', (chunk: Buffer) => {
+        chunks.push(chunk);
+      });
+      res.on('error', reject);
+      res.on('end', () => {
+        clearTimeout(timer);
+
+        let body: unknown;
+
+        try {
+          body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        } catch {
+          body = undefined;
+        }
+
+        resolve({ status: res.statusCode ?? 0,
+          body });
+      });
+    });
+    req.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    req.end();
+  });
+}
+
+/**
  * Asks the service for one run.
  * @param url Address of the run.
  * @param token Bearer token.
@@ -140,34 +228,19 @@ function describeAnswer(status: number, body: unknown): Line | Fatal {
  */
 async function ask(url: string, token: string, timeoutMs: number, address: string): Promise<Line | Fatal> {
   try {
-    const response = await fetch(url, { method: 'POST',
-      headers: { authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(timeoutMs) });
-    const text = await response.text();
-    let body: unknown;
+    const { status, body } = await post(url, token, timeoutMs);
 
-    try {
-      body = JSON.parse(text);
-    } catch {
-      body = undefined;
-    }
-
-    return describeAnswer(response.status, body);
+    return describeAnswer(status, body);
   } catch (error) {
-    const cause = error instanceof Error ? (error.cause as ErrorCause | undefined) : undefined;
-    const code = typeof cause?.code === 'string' ? cause.code : undefined;
-
-    if (code === 'ECONNREFUSED') {
-      return { fatal: `serve is not running on ${address}` };
-    }
-
-    if (error instanceof Error && error.name === 'TimeoutError') {
-      return { text: 'no answer: TIMEOUT',
+    if (error instanceof Error && error.message === TIMEOUT) {
+      return { text: `no answer: ${TIMEOUT}`,
         ok: false };
     }
 
-    return { text: `no answer: ${code ?? (error instanceof Error ? error.name : 'UNKNOWN')}`,
-      ok: false };
+    const code = field(error, 'code');
+    const named = typeof code === 'string' ? code : error instanceof Error ? error.name : 'UNKNOWN';
+
+    return { fatal: code === 'ECONNREFUSED' ? `serve is not running on ${address}` : `cannot reach serve on ${address}: ${named}` };
   }
 }
 
