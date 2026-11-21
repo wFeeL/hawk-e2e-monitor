@@ -2,7 +2,9 @@
 
 Синтетический E2E-мониторинг для [Hawk](https://hawk.so). Монитор ведет себя
 как обычный пользователь Hawk и по расписанию запускает сценарии из таблицы
-ниже. Каждый сценарий и есть e2e-тест одного пользовательского пути.
+ниже. Каждый сценарий и есть e2e-тест одного пользовательского пути. О сбое
+монитор пишет в Telegram через @codex_bot: какой этап упал, вероятный виновник
+и время каждого этапа.
 
 | Сценарий | Что проверяет | По умолчанию |
 |---|---|---|
@@ -13,6 +15,8 @@
 | endpoints-probe | коллектор и API отвечают, а также Garage (при `GARAGE_URL`) и приемник за туннелем (при check-notification или telegram-delivery); событий не шлет | каждые 90 с |
 | telegram-delivery | уведомление Hawk доходит до чата в Telegram | выключен, нужен бот |
 | new-project | коллектор принимает токен нового проекта | выключен, только для своего Hawk |
+
+<img src="assets/grafana-dashboard.png" width="640" alt="Дашборд Grafana: статус сценариев и длительность прогонов">
 
 ## Что нужно от Hawk
 
@@ -323,11 +327,15 @@ docker compose --profile observability up -d
 ```
 
 Правила Prometheus только вычисляются и видны на `127.0.0.1:9090/alerts`:
-Alertmanager в compose нет, в Telegram пишет сам монитор. Дашборд и правила
-рассчитаны на имя job `monitor` из `deploy/prometheus/prometheus.yml`. Занятые порты хоста
-меняются в `.env` (`PROMETHEUS_PORT`, `GRAFANA_PORT`). Если Prometheus или
-Grafana не читают свои файлы (клон сделан с umask без чтения для остальных),
-выполните `chmod -R a+rX deploy`. Останавливать стек с тем же профилем:
+Alertmanager в compose нет, в Telegram пишет сам монитор.
+
+![Правила алертов в Prometheus](assets/prometheus-alerts.png)
+
+Дашборд и правила рассчитаны на имя job `monitor` из
+`deploy/prometheus/prometheus.yml`. Занятые порты хоста меняются в `.env`
+(`PROMETHEUS_PORT`, `GRAFANA_PORT`). Если Prometheus или Grafana не читают свои
+файлы (клон сделан с umask без чтения для остальных), выполните
+`chmod -R a+rX deploy`. Останавливать стек с тем же профилем:
 `docker compose --profile observability down`.
 
 Heartbeat ловит случай, когда остановился сам монитор: задайте в
@@ -345,11 +353,6 @@ Heartbeat ловит случай, когда остановился сам мо
   подряд контейнер перезапускается.
 - Контейнер tunnel, который остался `unhealthy` (cloudflared жив, но без
   связи), Docker сам не перезапускает: `docker compose restart tunnel`.
-- Сеть, которая рвет долгие соединения (некоторые VPN), обрывает quick tunnel,
-  и приемник какое-то время отвечает 530. Короткие окна монитор пережидает, а
-  уведомление, пропавшее за время переподключения, помечает
-  `tunnel_reconnected` с виновником `network`. Выход: исключить cloudflared из
-  VPN или задать постоянный адрес в `PUBLIC_BASE_URL`.
 
 ## telegram-delivery
 
