@@ -15,6 +15,8 @@ const REFUSED = 'ECONNREFUSED';
 const MAY_EXIST_WARNING = 'The project of this run may still be created in Hawk; the sweep removes it';
 // Errors that say the request was refused or never left the machine, so no project was made.
 const NOTHING_MADE: readonly ErrorClass[] = ['dns_error', 'api_query_rejected', 'api_auth_failed', 'api_forbidden'];
+const TIMEOUT_FOUND_WARNING = 'Hawk did not confirm the creation in time; the project was found by its name';
+const CREATED_DESPITE_ERROR_WARNING = 'Hawk answered with an error, yet the project was created; cleanup removes it';
 const NO_PROJECT_TEXT = 'There is no project with that id';
 
 /** Time between two sends while the collector may not know the new token yet. */
@@ -105,6 +107,23 @@ export function projectCreatedStage(timeoutMs: number): StageSpec<NewProjectCont
       // Written before the request: an answer that is lost leaves the sweep a name to look for.
       pending.add(plan.runId, clock.wallTime().toISOString());
 
+      const record = (project: CreatedProject): void => {
+        const decoded = decodeIntegrationToken(project.token);
+
+        context.addSecret(project.token);
+
+        if (decoded !== undefined) {
+          context.addSecret(decoded.secret);
+          context.addSecret(tokenKey(decoded));
+        }
+
+        context.created = { id: project.id,
+          token: project.token };
+        context.createdAtMs = clock.monotonicMs();
+        projects.record(project.id);
+        pending.drop(plan.runId);
+      };
+
       try {
         created = await api.createProject(workspaceId, name, signal);
       } catch (error) {
@@ -130,22 +149,23 @@ export function projectCreatedStage(timeoutMs: number): StageSpec<NewProjectCont
             error,
             details: { warning: MAY_EXIST_WARNING } };
         }
+
+        // The recording is shared with the success path so cleanup removes the project in both.
+        record(created);
+
+        if (error.facts.code === 'TIMEOUT') {
+          return { status: 'ok',
+            details: { projectId: created.id,
+              warning: TIMEOUT_FOUND_WARNING } };
+        }
+
+        return { status: 'failed',
+          error,
+          details: { projectId: created.id,
+            warning: CREATED_DESPITE_ERROR_WARNING } };
       }
 
-      const decoded = decodeIntegrationToken(created.token);
-
-      context.addSecret(created.token);
-
-      if (decoded !== undefined) {
-        context.addSecret(decoded.secret);
-        context.addSecret(tokenKey(decoded));
-      }
-
-      context.created = { id: created.id,
-        token: created.token };
-      context.createdAtMs = clock.monotonicMs();
-      projects.record(created.id);
-      pending.drop(plan.runId);
+      record(created);
 
       return { status: 'ok',
         details: { projectId: created.id } };
