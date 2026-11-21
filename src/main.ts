@@ -105,7 +105,8 @@ async function serve(config: Config, env: ParsedEnv): Promise<number> {
       return 0;
     }
 
-    logger.error('startup failed', { error });
+    // The message was printed above; a stack of a startup error says nothing more.
+    logger.error('startup failed', { error: error.message });
 
     return 1;
   }
@@ -146,7 +147,7 @@ async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<nu
     return 2;
   }
 
-  const result = loadConfig(env);
+  const result = loadConfig(env, { command: command.kind });
 
   if (!result.ok) {
     process.stderr.write(formatConfigErrors(result.errors));
