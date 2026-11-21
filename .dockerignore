@@ -14,3 +14,6 @@ data
 .idea
 *.md
 coverage
+test
+assets
+deploy
