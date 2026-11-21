@@ -414,7 +414,8 @@ export async function startServe(deps: ServeDeps): Promise<ServeHandle> {
       redact: masking.redact,
       scheduler,
       alerter,
-      metrics });
+      metrics,
+      kv: history });
 
     if (heartbeat !== undefined) {
       closers.push(() => {

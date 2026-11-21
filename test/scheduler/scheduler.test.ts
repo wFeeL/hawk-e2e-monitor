@@ -4,6 +4,8 @@ import type { Config } from '../../src/config/load.js';
 import type { RunResult } from '../../src/engine/result.js';
 import { createRedactor } from '../../src/errors/redact.js';
 import type { ScenarioName } from '../../src/scenarios/names.js';
+import type { Clock } from '../../src/time/clock.js';
+import { abortedOutcome } from '../../src/storage/outcome.js';
 import { openDatabase } from '../../src/storage/database.js';
 import { createHistory } from '../../src/storage/history.js';
 import type { History } from '../../src/storage/history.js';
@@ -381,6 +383,61 @@ describe('restart', () => {
 
     scheduler.start();
     await clock.advance(INTERVAL_MS - 400_000 - 1);
+    expect(runners[SEND].calls).toHaveLength(0);
+    await clock.advance(1);
+    expect(runners[SEND].calls).toHaveLength(1);
+  });
+
+  /**
+   * Stores a finished run of SEND with a chosen trigger and end.
+   * @param history History to write to.
+   * @param runId Id given to the run.
+   * @param agoMs Age of the start.
+   * @param trigger What started the run.
+   * @param outcome How the run ended.
+   */
+  function seedRow(history: History, runId: string, agoMs: number, trigger: RunRow['trigger'], outcome: RunOutcome): void {
+    history.startRun({ runId,
+      scenario: SEND,
+      sequence: 4,
+      trigger,
+      startedAt: new Date(START.getTime() - agoMs).toISOString() });
+    history.finishRun(runId, outcome);
+  }
+
+  const HOUR_MS = 3_600_000;
+
+  it('reruns after the stagger when the newest scheduled run was stopped by the monitor', async () => {
+    const history = createHistory(openDatabase(':memory:'));
+
+    seedRow(history, 'ryyyyyyyyyyyyyyyy', 3000, 'schedule', abortedOutcome('monitor_stopped', {}, START.toISOString(), 3000));
+
+    const { scheduler, clock, runners } = setup({ history,
+      scenarios: [NOTIFY, SEND],
+      intervalMs: HOUR_MS });
+
+    scheduler.start();
+    await clock.advance(STAGGER_MS - 1);
+    expect(runners[SEND].calls).toHaveLength(0);
+    await clock.advance(1);
+    expect(runners[SEND].calls).toHaveLength(1);
+  });
+
+  it('does not let a manual run move the schedule', async () => {
+    const history = createHistory(openDatabase(':memory:'));
+
+    seed(history, 'rzzzzzzzzzzzzzzzz', 50 * 60_000);
+    seedRow(history, 'ryyyyyyyyyyyyyyyy', 10_000, 'manual', { status: 'ok',
+      finishedAt: START.toISOString(),
+      durationMs: 1,
+      degraded: [] });
+
+    const { scheduler, clock, runners } = setup({ history,
+      scenarios: [NOTIFY, SEND],
+      intervalMs: HOUR_MS });
+
+    scheduler.start();
+    await clock.advance(10 * 60_000 - 1);
     expect(runners[SEND].calls).toHaveLength(0);
     await clock.advance(1);
     expect(runners[SEND].calls).toHaveLength(1);
@@ -823,6 +880,8 @@ describe('health', () => {
     await clock.advance(THRESHOLD_MS + tunnelMs - 1);
     expect(exit).not.toHaveBeenCalled();
     await clock.advance(60_000);
+    // The self-check re-evaluates after setImmediate.
+    await settle(clock);
     expect(exit).toHaveBeenCalledWith(1);
     expect(logger.lines.some(line => line.level === 'error')).toBe(true);
   });
@@ -928,6 +987,65 @@ describe('storage failure', () => {
     await settle(clock);
     expect(scheduler.health().storage).toBe(true);
     expect(real.get('rbbbbbbbbbbbbbbb')?.status).toBe('ok');
+  });
+
+  it('retries the final write of a run on the next tick and tells the listeners only once', async () => {
+    const real = createHistory(openDatabase(':memory:'));
+    const failing = { finish: false };
+    const history: History = { ...real,
+      finishRun: (runId, outcome) => {
+        if (failing.finish) {
+          throw new Error('disk full');
+        }
+
+        real.finishRun(runId, outcome);
+      } };
+    const { scheduler, clock, runners, finished, logger } = setup({ scenarios: [SEND],
+      history });
+
+    scheduler.start();
+    await settle(clock);
+    failing.finish = true;
+    callOf(runners[SEND], 0).resolve();
+    await settle(clock);
+    expect(rowOf(real, 'raaaaaaaaaaaaaaa').status).toBe('running');
+    expect(scheduler.health().storage).toBe(false);
+    expect(finished).toHaveLength(1);
+
+    failing.finish = false;
+    await clock.advance(INTERVAL_MS);
+    expect(rowOf(real, 'raaaaaaaaaaaaaaa').status).toBe('ok');
+    expect(scheduler.health().storage).toBe(true);
+    expect(finished).toHaveLength(1);
+    expect(logger.lines.some(line => line.msg === 'history write recovered')).toBe(true);
+  });
+
+  it('drops a pending final write when the row was ended another way', async () => {
+    const real = createHistory(openDatabase(':memory:'));
+    const failing = { finish: false };
+    const history: History = { ...real,
+      finishRun: (runId, outcome) => {
+        if (failing.finish) {
+          throw new Error('disk full');
+        }
+
+        real.finishRun(runId, outcome);
+      } };
+    const { scheduler, clock, runners, logger } = setup({ scenarios: [SEND],
+      history });
+
+    scheduler.start();
+    await settle(clock);
+    failing.finish = true;
+    callOf(runners[SEND], 0).resolve();
+    await settle(clock);
+    expect(scheduler.health().storage).toBe(false);
+
+    real.abortRunning('monitor_restarted', START.toISOString());
+    await clock.advance(INTERVAL_MS);
+    expect(rowOf(real, 'raaaaaaaaaaaaaaa').status).toBe('aborted');
+    expect(scheduler.health().storage).toBe(true);
+    expect(logger.lines.some(line => line.msg === 'history write no longer needed')).toBe(true);
   });
 
   it('a failing nextSequence falls back to a counter in memory', async () => {
@@ -1553,5 +1671,227 @@ describe('warmup streak', () => {
     await settle(parts.clock);
 
     expect(await skipCall(parts, 0)).toMatchObject({ status: 'skipped' });
+  });
+});
+
+describe('first tick', () => {
+  const DEFAULT_ORDER: ScenarioName[] = [SEND, NOTIFY, 'sourcemaps', 'sentry-envelope', PROBE];
+  const FIRST_DELAY_MS = 30_000;
+
+  /** Scheduler under test with instant runners. */
+  interface Instant {
+    /** The scheduler. */
+    scheduler: Scheduler;
+    /** The `exit` spy. */
+    exit: ReturnType<typeof vi.fn<(code: number) => void>>;
+    /** Calls per scenario. */
+    calls: Map<ScenarioName, number>;
+  }
+
+  /**
+   * Builds a scheduler whose runners end every run at once.
+   * @param scenarios Scenarios to run, in order.
+   * @param staggerMs Stagger between the first ticks.
+   * @param clock Clock to use.
+   * @param deps Other deps.
+   * @returns The scheduler, the `exit` spy and the calls per scenario.
+   */
+  function instant(scenarios: ScenarioName[], staggerMs: number, clock: Clock, deps: Partial<SchedulerDeps> = {}): Instant {
+    const base = testConfig();
+    const config: Config = { ...base,
+      monitoring: { ...base.monitoring,
+        scenarios,
+        intervalMs: INTERVAL_MS,
+        staggerMs } };
+    const calls = new Map<ScenarioName, number>();
+    const exit = vi.fn<(code: number) => void>();
+    const runners: Partial<Record<ScenarioName, (options: ScenarioRunOptions) => Promise<RunResult>>> = {};
+    let counter = 0;
+
+    for (const scenario of scenarios) {
+      runners[scenario] = async (options) => {
+        calls.set(scenario, (calls.get(scenario) ?? 0) + 1);
+
+        return Promise.resolve(runResultFixture({ runId: options.runId,
+          sequence: options.sequence,
+          scenario }));
+      };
+    }
+
+    const scheduler = createScheduler({ runners,
+      history: createHistory(openDatabase(':memory:')),
+      clock,
+      logger: memoryLogger(),
+      config,
+      redact: createRedactor(['hunter2-secret']),
+      newRunId: () => {
+        counter += 1;
+
+        return `r${'a'.repeat(13)}${String.fromCodePoint(97 + Math.floor(counter / 26))}${String.fromCodePoint(97 + (counter % 26))}`;
+      },
+      exit,
+      ...deps });
+
+    cleanups.push(async () => {
+      await scheduler.stop();
+    });
+
+    return { scheduler,
+      exit,
+      calls };
+  }
+
+  it('does not exit while the probe waits for its staggered first tick, and every default scenario runs', async () => {
+    const clock = createFakeClock({ wall: START });
+    const { scheduler, exit, calls } = instant(DEFAULT_ORDER, 60_000, clock);
+
+    scheduler.start();
+    await clock.advance(600_000);
+    expect(exit).not.toHaveBeenCalled();
+
+    for (const scenario of DEFAULT_ORDER) {
+      expect(calls.get(scenario) ?? 0, scenario).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it('does not exit when the probe comes last of seven scenarios and ticks at 180 s', async () => {
+    const all: ScenarioName[] = [SEND, NOTIFY, 'new-project', 'sourcemaps', 'sentry-envelope', 'telegram-delivery', PROBE];
+    const clock = createFakeClock({ wall: START });
+    const { scheduler, exit, calls } = instant(all, 30_000, clock);
+
+    scheduler.start();
+    await clock.advance(600_000);
+    expect(exit).not.toHaveBeenCalled();
+    expect(calls.get(PROBE) ?? 0).toBeGreaterThanOrEqual(1);
+  });
+
+  it('still exits when the first tick of a scenario never comes', async () => {
+    const real = createFakeClock({ wall: START });
+    let blocked = false;
+    const clock: Clock = { ...real,
+      sleep: async (ms, signal) => {
+        if (ms === FIRST_DELAY_MS && !blocked) {
+          blocked = true;
+
+          return new Promise<void>((_resolve, reject) => {
+            signal?.addEventListener('abort', () => {
+              reject(new DOMException('The operation was aborted', 'AbortError'));
+            }, { once: true });
+          });
+        }
+
+        return real.sleep(ms, signal);
+      } };
+    const { scheduler, exit } = instant([SEND, NOTIFY], FIRST_DELAY_MS, clock);
+    const thresholdMs = INTERVAL_MS + WATCHDOG_MS;
+
+    scheduler.start();
+    await real.advance(FIRST_DELAY_MS + thresholdMs);
+    expect(scheduler.health().scheduler).toBe(true);
+    expect(exit).not.toHaveBeenCalled();
+    await real.advance(1);
+    expect(scheduler.health().scheduler).toBe(false);
+    await real.advance(60_000);
+    await real.advance(0);
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  describe('after the process was frozen', () => {
+    const FREEZE_MS = 200_000;
+
+    /** Fake clock whose monotonic reading can jump ahead of its timers, like a paused process. */
+    interface FreezableClock extends Clock {
+      /** Moves the monotonic reading without firing any timer. */
+      freeze(ms: number): void;
+      /** Fires the timers that fall due within the given time. */
+      advance(ms: number): Promise<void>;
+    }
+
+    /**
+     * Wraps a fake clock with a monotonic offset.
+     * @param real Clock that owns the timers.
+     * @param sleep Replacement for its `sleep`, if any.
+     * @returns Clock with `freeze`.
+     */
+    function freezable(real: FakeClock, sleep: Clock['sleep'] = async (ms, signal) => real.sleep(ms, signal)): FreezableClock {
+      let offset = 0;
+
+      return { monotonicMs: () => real.monotonicMs() + offset,
+        wallTime: () => real.wallTime(),
+        sleep,
+        freeze: (ms) => {
+          offset += ms;
+        },
+        advance: async ms => real.advance(ms) };
+    }
+
+    /** Deferred actions that the test runs by hand. */
+    interface Deferral {
+      /** Hook for `SchedulerDeps.defer`. */
+      defer: (action: () => void) => void;
+      /** Runs what was collected. */
+      runAll: () => void;
+    }
+
+    /**
+     * Collects deferred actions so that the test decides when they run.
+     * @returns The deferral hook and a function that runs what it collected.
+     */
+    function deferral(): Deferral {
+      const actions: Array<() => void> = [];
+
+      return { defer: (action) => {
+        actions.push(action);
+      },
+      runAll: () => {
+        for (const action of actions.splice(0)) {
+          action();
+        }
+      } };
+    }
+
+    it('does not exit when the overdue ticks fire in the same turn as the self-check', async () => {
+      const clock = freezable(createFakeClock({ wall: START }));
+      const { defer, runAll } = deferral();
+      const { scheduler, exit, calls } = instant([SEND], 0, clock, { intervalOf: () => 60_000,
+        defer });
+
+      scheduler.start();
+      await clock.advance(1);
+      clock.freeze(FREEZE_MS);
+      await clock.advance(60_000);
+      runAll();
+      expect(exit).not.toHaveBeenCalled();
+      expect(calls.get(SEND)).toBe(2);
+    });
+
+    it('exits after the re-check when a scenario really stopped', async () => {
+      const real = createFakeClock({ wall: START });
+      let blocked = false;
+      const clock = freezable(real, async (ms, signal) => {
+        if (ms === STAGGER_MS && !blocked) {
+          blocked = true;
+
+          return new Promise<void>((_resolve, reject) => {
+            signal?.addEventListener('abort', () => {
+              reject(new DOMException('The operation was aborted', 'AbortError'));
+            }, { once: true });
+          });
+        }
+
+        return real.sleep(ms, signal);
+      });
+      const { defer, runAll } = deferral();
+      const { scheduler, exit } = instant([SEND, NOTIFY], STAGGER_MS, clock, { intervalOf: () => 60_000,
+        defer });
+
+      scheduler.start();
+      await clock.advance(1);
+      clock.freeze(FREEZE_MS);
+      await clock.advance(60_000);
+      expect(exit).not.toHaveBeenCalled();
+      runAll();
+      expect(exit).toHaveBeenCalledWith(1);
+    });
   });
 });

@@ -78,6 +78,8 @@ export interface SchedulerDeps {
   beforeFirstRun?: Partial<Record<ScenarioName, (signal: AbortSignal) => Promise<void>>>;
   /** Called after a row is finished, whatever its status; each listener has its own error handling. */
   onRunFinished?: RunFinishedListener | readonly RunFinishedListener[];
+  /** Runs a function after the timers that are already due; `setImmediate` by default. */
+  defer?: (action: () => void) => void;
   /** Called with code 1 after three hung runs of one scenario in a row, or when a scenario stops ticking. */
   exit: (code: number) => void;
 }
@@ -134,7 +136,7 @@ export interface SchedulerHealth {
 
 /** Starts scenario runs on a schedule and watches them. */
 export interface Scheduler {
-  /** Starts the timers; the first run of the first scenario begins at once. */
+  /** Starts the timers; each scenario ticks first after its stagger, or when the old schedule says so after a restart. */
   start(): void;
   /**
    * Aborts running runs and records `monitor_stopped`; does not wait for the runs themselves.
@@ -207,6 +209,14 @@ interface Handle {
   trigger: RunTrigger;
 }
 
+/** A final write that the history refused. */
+interface PendingFinish {
+  /** Run whose row stays `running`. */
+  runId: string;
+  /** What the row should say. */
+  outcome: RunOutcome;
+}
+
 /** Per-scenario state. */
 interface ScenarioState {
   /** Scenario. */
@@ -219,6 +229,8 @@ interface ScenarioState {
   lastTickMono?: number;
   /** Wall-clock time of the last tick. */
   lastTickAt?: string;
+  /** Monotonic time the first tick is due; the silence before it counts from here. */
+  firstDueMono?: number;
   /** Run that keeps the scenario busy. */
   running?: Handle;
   /** Hung runs in a row. */
@@ -229,6 +241,8 @@ interface ScenarioState {
   lastSequence: number;
   /** Number of the last run whose start the history could not store; the next number must follow it. */
   unwritten?: number;
+  /** Final writes the history refused; each is retried on the next tick. */
+  unfinished: PendingFinish[];
 }
 
 /**
@@ -257,6 +271,9 @@ function verdictTime(row: RunRow): number {
 export function createScheduler(deps: SchedulerDeps): Scheduler {
   const { history, clock, logger, config, redact } = deps;
   const { monitoring } = config;
+  const defer = deps.defer ?? ((action: () => void): void => {
+    setImmediate(action);
+  });
   const newRunId = deps.newRunId ?? ((): string => createRunId());
   const settingsOf = (scenario: ScenarioName): ScenarioSettings => scenarioSettings(config, scenario);
   const intervalOf = deps.intervalOf ?? ((scenario: ScenarioName): number => settingsOf(scenario).intervalMs);
@@ -275,7 +292,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       index: states.size,
       hungStreak: 0,
       warmupStreak: 0,
-      lastSequence: 0 });
+      lastSequence: 0,
+      unfinished: [] });
   }
 
   const wallIso = (): string => clock.wallTime().toISOString();
@@ -352,12 +370,21 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
 
     if (handle.startWritten) {
+      let written = false;
+
       try {
         history.finishRun(handle.start.runId, outcome);
+        written = true;
         storageFailed = false;
         row = history.get(handle.start.runId);
       } catch (error) {
         writeFailed('finishRun', error);
+
+        // A row left `running` would never get its result; the next tick tries again.
+        if (!written) {
+          state.unfinished.push({ runId: handle.start.runId,
+            outcome });
+        }
       }
     }
 
@@ -591,11 +618,38 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       stages: [] }, undefined);
   };
 
+  const retryUnfinished = (state: ScenarioState): void => {
+    for (const pending of state.unfinished.splice(0)) {
+      try {
+        // Something else may have ended the row meanwhile; writing again would fail for good.
+        const stored = history.get(pending.runId);
+
+        if (stored !== undefined && stored.status !== 'running') {
+          logger.info('history write no longer needed', { runId: pending.runId });
+
+          continue;
+        }
+      } catch {
+        // Unreadable: try the write itself.
+      }
+
+      try {
+        history.finishRun(pending.runId, pending.outcome);
+        storageFailed = false;
+        logger.info('history write recovered', { runId: pending.runId });
+      } catch (error) {
+        writeFailed('finishRun', error);
+        state.unfinished.push(pending);
+      }
+    }
+  };
+
   const tick = (state: ScenarioState): void => {
     if (stopped) {
       return;
     }
 
+    retryUnfinished(state);
     state.lastTickMono = clock.monotonicMs();
     state.lastTickAt = wallIso();
 
@@ -613,14 +667,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   /**
    * Finds when the first tick of a scenario is due.
    * @param state Scenario.
-   * @returns Delay in milliseconds: the rest of the old schedule when the last run is younger than the interval, otherwise the stagger.
+   * @returns Delay in milliseconds: the rest of the old schedule when the last scheduled run is younger than the interval, otherwise the stagger; a manual run, an overlap skip and a run the monitor itself interrupted do not count, so an interrupted run is repeated after the stagger.
    */
   const firstDelay = (state: ScenarioState): number => {
     const stagger = state.index * monitoring.staggerMs;
 
     try {
       const last = history.list({ scenario: state.name,
-        limit: LAST_RUNS_LOOKED_AT }).find(row => !(row.status === 'skipped' && row.skipReason === 'overlap'));
+        limit: LAST_RUNS_LOOKED_AT }).find(row => row.trigger === 'schedule' && !isMonitorAbort(row) && !(row.status === 'skipped' && row.skipReason === 'overlap'));
 
       if (last !== undefined) {
         const due = Date.parse(last.startedAt) + intervalOf(state.name) - clock.wallTime().getTime();
@@ -638,6 +692,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
   const firstTick = async (state: ScenarioState): Promise<void> => {
     const delay = firstDelay(state);
+
+    state.firstDueMono = clock.monotonicMs() + delay;
 
     if (delay > 0) {
       try {
@@ -667,7 +723,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // Before its first tick a scenario with a gate may wait for the tunnel, which is bounded by its own timeout.
     const allowedMs = (state: ScenarioState): number => thresholdOf(state.name)
       + (state.lastTickMono === undefined && deps.beforeFirstRun?.[state.name] !== undefined ? monitoring.tunnelReadyTimeoutMs : 0);
-    const ticking = started && !stopped && [...states.values()].every(state => nowMonoMs - (state.lastTickMono ?? startedMono ?? nowMonoMs) <= allowedMs(state));
+    const ticking = started && !stopped && [...states.values()].every(state => nowMonoMs - (state.lastTickMono ?? state.firstDueMono ?? startedMono ?? nowMonoMs) <= allowedMs(state));
 
     // The watchdog abandons a run at `watchdogMs` and the scenario is held for one more cleanup timeout.
     const stuck = [...states.values()]
@@ -675,20 +731,33 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       .map(state => state.name);
 
     return { scheduler: ticking,
-      storage: !storageFailed,
+      storage: !storageFailed && [...states.values()].every(state => state.unfinished.length === 0),
       stuck };
   };
 
   const selfCheck = (): void => {
     after(SELF_CHECK_MS, stopper.signal, () => {
-      if (!evaluate(clock.monotonicMs()).scheduler) {
-        logger.error('a scenario stopped ticking; exiting');
-        deps.exit(1);
+      if (evaluate(clock.monotonicMs()).scheduler) {
+        selfCheck();
 
         return;
       }
 
-      selfCheck();
+      // After a freeze of the process this timer fires before the overdue ticks; give them their turn.
+      defer(() => {
+        if (stopped) {
+          return;
+        }
+
+        if (evaluate(clock.monotonicMs()).scheduler) {
+          selfCheck();
+
+          return;
+        }
+
+        logger.error('a scenario stopped ticking; exiting');
+        deps.exit(1);
+      });
     });
   };
 
