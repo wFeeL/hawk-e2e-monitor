@@ -1,7 +1,7 @@
 import { formatDuration } from '../../time/format.js';
 import type { FoundEvent } from '../../clients/hawk-api.js';
 import type { notificationSettings } from '../../config/load.js';
-import type { StageDetails } from '../../engine/result.js';
+import type { StageDetails, StageName } from '../../engine/result.js';
 import type { StageOutcome, StageSpec } from '../../engine/stages.js';
 import { CheckError, isCheckError } from '../../errors/taxonomy.js';
 import { probeReceiver } from '../../notifications/address.js';
@@ -81,7 +81,7 @@ export const UNREADABLE_REGISTRATIONS = 'The tunnel registration counter could n
  * @param waitedMs How long the wait lasted.
  * @param signal Aborts the read.
  * @param channel Channel that did not arrive, when the stage waits for one.
- * @returns `error` when the counter grew, `warning` when it cannot be compared, nothing otherwise.
+ * @returns `error` when the counter changed, `warning` when it cannot be compared, nothing otherwise.
  */
 export async function tunnelReconnect(context: NotificationContext, waitedMs: number, signal: AbortSignal, channel?: ArrivalKind): Promise<ReconnectVerdict> {
   if (context.address?.source !== 'tunnel' || context.tunnelRegistrations === undefined) {
@@ -100,13 +100,45 @@ export async function tunnelReconnect(context: NotificationContext, waitedMs: nu
     return { warning: UNREADABLE_REGISTRATIONS };
   }
 
-  if (after > before) {
+  // A restarted cloudflared counts from zero again, so a lower value is a reconnect too.
+  if (after !== before) {
     return { error: new CheckError('tunnel_reconnected', { waitedMs,
       detail: `registrations ${String(before)} → ${String(after)}`,
       ...channel === undefined ? {} : { channel } }) };
   }
 
   return {};
+}
+
+/**
+ * Probes the receiver once after a wait in which nothing arrived, to tell a dead receiver from a silent Hawk.
+ * @param context Context of the stage; its address is probed.
+ * @param signal Timeout of the stage.
+ * @param stage Name of the calling stage, for the text of an internal error.
+ * @returns The error of a failed probe, or undefined when the receiver answered.
+ * @throws Whatever is not a `CheckError`.
+ */
+export async function probeAfterEmptyWait(context: NotificationContext, signal: AbortSignal, stage: StageName): Promise<CheckError | undefined> {
+  const { address, clock, config, receiver, settings } = context;
+
+  if (address === undefined) {
+    return new CheckError('monitor_internal', { detail: `${stage} ran without a public address` });
+  }
+
+  try {
+    await probeReceiver(address, settings.receiverSecret, receiver.nonce, { httpTimeoutMs: config.httpTimeoutMs,
+      clock,
+      attempts: 1,
+      retry: config.retry }, signal);
+  } catch (error) {
+    if (isCheckError(error)) {
+      return error;
+    }
+
+    throw error;
+  }
+
+  return undefined;
 }
 
 /** An event of a webhook body. */
@@ -443,10 +475,7 @@ export function notificationFormedStage(timeoutMs: number): StageSpec<Notificati
       const details: StageDetails = { unmatched: arrivals.unmatched };
 
       notification.arrivals = arrivals;
-
       if (missing.length === channels.length) {
-        const { address } = context;
-
         details.waitedMs = waitedMs;
 
         const reconnect = await tunnelReconnect(context, waitedMs, signal);
@@ -461,23 +490,12 @@ export function notificationFormedStage(timeoutMs: number): StageSpec<Notificati
           details.warning = reconnect.warning;
         }
 
-        try {
-          if (address === undefined) {
-            throw new CheckError('monitor_internal', { detail: 'notification_formed ran without a public address' });
-          }
+        const probeError = await probeAfterEmptyWait(context, signal, 'notification_formed');
 
-          await probeReceiver(address, settings.receiverSecret, receiver.nonce, { httpTimeoutMs: config.httpTimeoutMs,
-            clock,
-            attempts: 1,
-            retry: config.retry }, signal);
-        } catch (error) {
-          if (isCheckError(error)) {
-            return { status: 'failed',
-              error,
-              details };
-          }
-
-          throw error;
+        if (probeError !== undefined) {
+          return { status: 'failed',
+            error: probeError,
+            details };
         }
 
         return { status: 'failed',
@@ -608,6 +626,14 @@ export function thresholdFormedStage(timeoutMs: number): StageSpec<NotificationC
 
         if (reconnect.warning !== undefined) {
           details.warning = reconnect.warning;
+        }
+
+        const probeError = await probeAfterEmptyWait(context, signal, 'threshold_formed');
+
+        if (probeError !== undefined) {
+          return { status: 'failed',
+            error: probeError,
+            details };
         }
 
         return { status: 'failed',

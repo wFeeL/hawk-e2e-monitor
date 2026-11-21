@@ -946,6 +946,16 @@ describe('notificationFormedStage through a tunnel', () => {
     expect(result.message).toContain('registrations 3 → 4');
   });
 
+  it('a counter that fell makes it tunnel_reconnected', async () => {
+    const { parts } = await silent({ before: 3,
+      after: 1 });
+    const result = await run(notificationFormedStage(FORMED_TIMEOUT_MS), parts.context);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'tunnel_reconnected' });
+    expect(result.message).toContain('registrations 3 → 1');
+  });
+
   it('the same counter keeps notification_timeout', async () => {
     const { parts } = await silent({ before: 3,
       after: 3 });
@@ -1046,6 +1056,69 @@ describe('thresholdFormedStage through a tunnel', () => {
       errorClass: 'tunnel_reconnected',
       culprit: 'network' });
     expect(result.message).toContain('No threshold notification arrived');
+  });
+});
+
+/**
+ * Builds a repeat run that is ready for the threshold stage, with a rule that waits for no POST.
+ * @returns The scenario after send, search and repeat.
+ */
+async function emptyThreshold(): Promise<NotificationTestScenario> {
+  const parts = await scenario({ repeat: true,
+    env: { NOTIFICATION_TIMEOUT_MS: '300',
+      NOTIFICATION_PAIR_WAIT_MS: '100' } });
+
+  hawk.rules.remove(hawk.projectId, hawk.rules.list(hawk.projectId).find(rule => rule.whatToReceive === 'SEEN_MORE' && rule.including.length === 1)?.id ?? '');
+
+  const { context } = parts;
+
+  await sendEvent(context);
+  await run(eventVisibleStage(TIMEOUT_MS), context);
+  await run(eventRepeatedStage(TIMEOUT_MS, thresholdBeforeRepeat(context)), context);
+
+  return parts;
+}
+
+describe('thresholdFormedStage after an empty wait', () => {
+  it('a counter that fell makes it tunnel_reconnected for the threshold channel', async () => {
+    const { context, receiver } = await emptyThreshold();
+
+    context.address = httpAddress(receiver.port, 'tunnel');
+    context.tunnelRegistrations = () => Promise.resolve(1);
+    context.notification.registrationsAtSetup = 3;
+
+    const result = await run(thresholdFormedStage(FORMED_TIMEOUT_MS), context);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'tunnel_reconnected' });
+    expect(result.message).toContain('registrations 3 → 1');
+    expect(result.message).toContain('No threshold notification arrived');
+  });
+
+  it('blames the receiver when it does not answer after an empty wait', async () => {
+    const { context } = await emptyThreshold();
+
+    context.address = httpAddress(await deadPort(), 'tunnel');
+    context.tunnelRegistrations = () => Promise.resolve(3);
+    context.notification.registrationsAtSetup = 3;
+
+    const result = await run(thresholdFormedStage(FORMED_TIMEOUT_MS), context);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'receiver_unreachable' });
+    expect(result.details).toHaveProperty('unmatched');
+  });
+
+  it('probes the receiver once before notification_timeout', async () => {
+    const { context } = await emptyThreshold();
+    const probe = await probeServer(() => Promise.resolve(context.receiver.nonce));
+
+    context.address = probe.address;
+
+    const result = await run(thresholdFormedStage(FORMED_TIMEOUT_MS), context);
+
+    expect(result.errorClass).toBe('notification_timeout');
+    expect(probe.hits()).toBe(1);
   });
 });
 
