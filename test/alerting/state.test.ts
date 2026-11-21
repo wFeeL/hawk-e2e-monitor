@@ -107,7 +107,7 @@ describe('decideAlert: failures', () => {
         count: 1 }],
       announced: true,
       streakStartedAt: '2026-03-10T11:59:00.000Z',
-      reported: [],
+      reported: ['event_visible/event_not_found'],
       updatedAt: NOW });
   });
 
@@ -633,5 +633,41 @@ describe('decideAlert: every stage that can fail closes within a bounded number 
     }
 
     expect(recovered.length).toBeGreaterThan(0);
+  });
+});
+
+describe('decideAlert: episodes and causes', () => {
+  const settings = settingsOf(3);
+
+  it('opens the episode at the first failure of the series and reports its cause', () => {
+    const first = failedAt('event_visible', [], { startedAt: '2026-03-10T11:50:00.000Z' });
+    const { kinds, last } = play([[first, HTTP], [failedAt('event_visible'), HTTP], [failedAt('event_visible'), HTTP]], settings);
+
+    expect(kinds).toEqual([undefined, undefined, 'failed']);
+    expect(last).toMatchObject({ episodeStartedAt: '2026-03-10T11:50:00.000Z',
+      reported: ['event_visible/event_not_found'] });
+  });
+
+  it('sends STILL FAILING once for each new cause of the episode', () => {
+    const a = failedAt('event_visible');
+    const b = failedAt('collector_accept', [], { errorClass: 'collector_unavailable' });
+    const { kinds, last } = play([[a, HTTP], [b, HTTP], [a, HTTP], [b, HTTP], [b, HTTP]], SETTINGS);
+
+    expect(kinds).toEqual(['failed', 'still_failing', undefined, undefined, undefined]);
+    expect(last.reported).toEqual(['event_visible/event_not_found', 'collector_accept/collector_unavailable']);
+  });
+
+  it('a stageless cause is reported as run/<class>', () => {
+    const hung = row({ status: 'aborted',
+      errorClass: 'run_hung' });
+    const { last } = play([[hung, HTTP]], SETTINGS);
+
+    expect(last.reported).toEqual(['run/run_hung']);
+  });
+
+  it('the end of the episode clears the causes', () => {
+    const { last } = play([[failedAt('event_visible'), HTTP], [passed([stage('event_visible')]), HTTP]], SETTINGS);
+
+    expect(last.reported).toEqual([]);
   });
 });

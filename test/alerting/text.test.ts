@@ -115,6 +115,24 @@ describe('escapeHtml', () => {
   });
 });
 
+describe('alertText: empty message', () => {
+  it('leaves no empty line group when the failure has no message', () => {
+    const text = alertText(input({ row: failedRow({ message: undefined }) }), IDENTITY);
+
+    expect(text).not.toContain('\n\n\n');
+    expect(text).toContain('class event_not_found | culprit hawk\n\nrun #12');
+  });
+
+  it('STILL FAILING without an earlier cause names only how long it has lasted', () => {
+    const text = alertText(input({ kind: 'still_failing',
+      state: stateRow({ reported: ['event_visible/event_not_found'],
+        episodeStartedAt: new Date(Date.parse(NOW) - 60_000).toISOString() }) }), IDENTITY);
+
+    expect(text).toContain('failing for 1m 0s');
+    expect(text).not.toContain('previously');
+  });
+});
+
 describe('alertText: the layout of every kind', () => {
   it('FAILED', () => {
     expect(alertText(input(), IDENTITY)).toBe([
@@ -147,12 +165,15 @@ describe('alertText: the layout of every kind', () => {
           durationMs: 0 },
         { name: 'cleanup',
           status: 'skipped',
-          durationMs: 0 }] }) }), IDENTITY)).toBe([
+          durationMs: 0 }] }),
+      state: stateRow({ episodeStartedAt: new Date(Date.parse(NOW) - 1_800_000).toISOString(),
+        reported: ['event_visible/event_not_found', 'collector_availability/collector_unavailable'] }) }), IDENTITY)).toBe([
       '🟠 <b>STILL FAILING</b> send-and-receive-event',
       'instance prod | outage',
       '',
       '<b>collector_availability</b> failed after 10.0 s',
       'class collector_unavailable | culprit hawk',
+      'previously: event_visible / event_not_found | failing for 30m 0s',
       'Collector http://collector:3000/health did not respond: TIMEOUT, waited 10.0 s',
       '',
       'run #12 raaaaaaaaaaaaaaaa',

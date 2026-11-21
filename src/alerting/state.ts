@@ -187,8 +187,10 @@ function afterFailure(previous: AlertStateRow, row: RunRow, threshold: number, n
     ...row.failedStage === undefined ? {} : { lastStage: row.failedStage },
     lastRunId: row.runId };
 
+  const cause = `${row.failedStage ?? 'run'}/${row.errorClass ?? '-'}`;
+
   if (previous.state === 'failing') {
-    const changed = row.errorClass !== previous.lastClass || row.failedStage !== previous.lastStage;
+    const changed = (row.errorClass !== previous.lastClass || row.failedStage !== previous.lastStage) && !previous.reported.includes(cause);
     const { lastClass: _class, lastStage: _stage, ...kept } = previous;
 
     return { state: { ...kept,
@@ -197,6 +199,7 @@ function afterFailure(previous: AlertStateRow, row: RunRow, threshold: number, n
       episodeFailures: previous.episodeFailures + 1,
       open,
       streakStartedAt,
+      reported: previous.reported.includes(cause) ? previous.reported : [...previous.reported, cause],
       updatedAt: now },
     ...changed ? { kind: 'still_failing' } : {} };
   }
@@ -213,13 +216,13 @@ function afterFailure(previous: AlertStateRow, row: RunRow, threshold: number, n
     state: 'failing',
     failureStreak: streak,
     ...last,
-    episodeStartedAt: row.startedAt,
+    episodeStartedAt: streakStartedAt,
     episodeFailures: open.reduce((total, item) => total + item.count, 0),
     degraded: [],
     open,
     announced: true,
     streakStartedAt,
-    reported: [],
+    reported: [cause],
     updatedAt: now },
   kind: 'failed' };
 }

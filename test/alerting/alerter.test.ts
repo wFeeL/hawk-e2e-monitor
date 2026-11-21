@@ -1092,3 +1092,29 @@ describe('alerter: a rejected head does not hold the queue for a day', () => {
     expect(history.oldestUnsentAlert()).toBeUndefined();
   });
 });
+
+describe('alerter: the length of an episode', () => {
+  it('RECOVERED counts the downtime from the first failed run of the series', async () => {
+    const { alerter, bot, clock } = await setup({ probeThreshold: 3 });
+    const probe = (status: RunRow['status'], sequence: number): RunRow => failedRow(clock, { scenario: 'endpoints-probe',
+      status,
+      sequence,
+      failedStage: 'garage_availability',
+      errorClass: 'garage_unavailable',
+      stages: status === 'ok'
+        ? [{ name: 'garage_availability',
+            status: 'ok',
+            durationMs: 1 }]
+        : [],
+      runId: `r${String.fromCodePoint(96 + sequence).repeat(16)}` });
+
+    for (const [index, status] of (['failed', 'failed', 'failed'] as const).entries()) {
+      alerter.onRunFinished(probe(status, index + 1), NO_RESULT);
+      await clock.advance(90_000);
+    }
+
+    expect(alerter.onRunFinished(probe('ok', 4), NO_RESULT)).toBe('recovered');
+    await alerter.flush(SIGNAL);
+    expect(messages(bot).at(-1)).toContain('down 4m 30s');
+  });
+});
