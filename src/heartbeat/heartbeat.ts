@@ -75,6 +75,8 @@ export interface HeartbeatInput {
   nowWallMs: number;
   /** Wall-clock milliseconds of the start of the process, the age of a scenario that has no verdict yet. */
   startedWallMs: number;
+  /** Wall-clock milliseconds a scenario without a verdict was first seen, kept across restarts; the start of the process when absent. */
+  firstSeenAt?: (scenario: ScenarioName) => number | undefined;
 }
 
 /**
@@ -100,7 +102,7 @@ export function heartbeatReason(input: HeartbeatInput): SkipReason | undefined {
   }
 
   for (const scenario of input.scenarios.filter(name => SCENARIO_TRAITS[name].inHeartbeat)) {
-    const ageMs = input.nowWallMs - (input.lastVerdictAt(scenario) ?? input.startedWallMs);
+    const ageMs = input.nowWallMs - (input.lastVerdictAt(scenario) ?? input.firstSeenAt?.(scenario) ?? input.startedWallMs);
 
     if (ageMs > input.freshnessMs(scenario)) {
       return { reason: `${scenario} has no verdict`,

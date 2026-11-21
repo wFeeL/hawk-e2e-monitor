@@ -60,6 +60,16 @@ function reasonOf(input: HeartbeatInput): string | undefined {
 }
 
 describe('heartbeatReason', () => {
+  it('counts a scenario without a verdict from the first sighting when one is given', () => {
+    const input = healthy({ lastVerdictAt: () => undefined,
+      startedWallMs: NOW - MINUTE_MS,
+      firstSeenAt: () => NOW - FRESH_MS - MINUTE_MS });
+
+    expect(reasonOf(input)).toBe(`${SEND} has no verdict`);
+    expect(reasonOf({ ...input,
+      firstSeenAt: () => undefined })).toBeUndefined();
+  });
+
   it('is undefined for a healthy monitor', () => {
     expect(reasonOf(healthy())).toBeUndefined();
   });
