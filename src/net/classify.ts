@@ -2,6 +2,16 @@ import type { ErrorClass } from '../errors/taxonomy.js';
 
 const MAX_CHAIN_DEPTH = 8;
 const TLS_CODE = /^(ERR_TLS_|ERR_SSL_|CERT_|UNABLE_TO_|DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN)/u;
+// Record errors come after the handshake, when the request may have arrived, so only handshake and certificate codes count as not sent.
+const TLS_BEFORE_SEND = new RegExp([
+  '^(CERT_|UNABLE_TO_|',
+  'DEPTH_ZERO_SELF_SIGNED_CERT$|SELF_SIGNED_CERT_IN_CHAIN$|',
+  'ERR_TLS_CERT_ALTNAME_INVALID$|ERR_TLS_HANDSHAKE_TIMEOUT$|',
+  'ERR_SSL_WRONG_VERSION_NUMBER$|ERR_SSL_SSLV3_ALERT_HANDSHAKE_FAILURE$|',
+  'ERR_SSL_TLSV1_ALERT_PROTOCOL_VERSION$|ERR_SSL_TLSV1_UNRECOGNIZED_NAME$|',
+  'ERR_SSL_UNSUPPORTED_PROTOCOL$|ERR_SSL_NO_PROTOCOLS_AVAILABLE$|',
+  'ERR_SSL_TLSV1_ALERT_UNKNOWN_CA$)',
+].join(''), 'u');
 const ABORT_NAMES = new Set(['AbortError', 'TimeoutError']);
 
 /** Which side a request goes to. */
@@ -116,10 +126,16 @@ export function classifyNetworkError(error: unknown, target: NetTarget): Network
       beforeSend: true };
   }
 
+  if (code === 'UND_ERR_CONNECT_TIMEOUT') {
+    return { errorClass: unavailable,
+      code,
+      beforeSend: true };
+  }
+
   if (code !== undefined && TLS_CODE.test(code)) {
     return { errorClass: 'tls_error',
       code,
-      beforeSend: true };
+      beforeSend: TLS_BEFORE_SEND.test(code) };
   }
 
   if (code === undefined && chain.some(item => item instanceof Error && ABORT_NAMES.has(item.name))) {

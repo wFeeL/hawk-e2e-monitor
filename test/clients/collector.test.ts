@@ -132,6 +132,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await collector.close();
 });
 
@@ -243,6 +244,34 @@ describe('send over HTTP', () => {
     expect(outcome.cause.facts).toMatchObject({ status: 503,
       url: collector.url });
     expect(outcome.attempts).toBe(1);
+    expect(collector.posts).toBe(1);
+  });
+
+  it('a tls handshake alert is resent, as nothing was sent', async () => {
+    const real = globalThis.fetch;
+    const spy = vi.spyOn(globalThis, 'fetch');
+
+    spy.mockImplementationOnce(async () => Promise.reject(new TypeError('fetch failed', { cause: Object.assign(new Error('handshake failure'), { code: 'ERR_SSL_SSLV3_ALERT_HANDSHAKE_FAILURE' }) })));
+    spy.mockImplementation(real);
+
+    const outcome = accepted(await clientFor().send(message(), 'http', signal));
+
+    expect(outcome.attempts).toBe(2);
+    expect(collector.posts).toBe(1);
+  });
+
+  it('a tls record error after the request is uncertain and not resent', async () => {
+    const real = globalThis.fetch;
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (...args) => {
+      const response = await real(...args);
+
+      await response.arrayBuffer();
+
+      throw new TypeError('fetch failed', { cause: Object.assign(new Error('bad record mac'), { code: 'ERR_SSL_DECRYPTION_FAILED_OR_BAD_RECORD_MAC' }) });
+    });
+
+    uncertain(await clientFor().send(message(), 'http', signal));
     expect(collector.posts).toBe(1);
   });
 
