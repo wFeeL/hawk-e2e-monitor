@@ -90,7 +90,8 @@
             "lastNotNull"
           ]
         }
-      }
+      },
+      "description": "Status of the last run of each scenario, endpoints-probe included; the probe does not alert through ScenarioFailing."
     },
     {
       "id": 2,
@@ -113,7 +114,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (scenario) (increase(hawk_e2e_runs_total{status=\"ok\"}[24h])) / sum by (scenario) (increase(hawk_e2e_runs_total{status=~\"ok|failed|aborted\"}[24h]))",
+          "expr": "sum by (scenario) (increase(hawk_e2e_runs_total{status=\"ok\"}[24h])) / (sum by (scenario) (increase(hawk_e2e_runs_total{status=~\"ok|failed|aborted\"}[24h])) > 0)",
           "legendFormat": "{{scenario}}"
         }
       ],
