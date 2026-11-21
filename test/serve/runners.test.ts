@@ -6,6 +6,7 @@ import type { Closer, RunnerContext } from '../../src/serve/scenario-setup.js';
 import { openDatabase } from '../../src/storage/database.js';
 import { createHistory } from '../../src/storage/history.js';
 import { systemClock } from '../../src/time/clock.js';
+import { httpAddress } from '../support/address.js';
 import { TEST_RECEIVER_SECRET } from '../support/env.js';
 import { startFakeHawk } from '../support/fake-hawk/index.js';
 import type { FakeHawk } from '../support/fake-hawk/index.js';
@@ -28,9 +29,10 @@ afterEach(async () => {
  * Builds the context of the runners for the given scenarios.
  * @param scenarios Comma-separated names the configuration enables.
  * @param env Variables that replace the test defaults; undefined removes one.
+ * @param overrides Test replacements of the parts that talk to the outside.
  * @returns Context over a fake Hawk and an in-memory history.
  */
-async function contextFor(scenarios: string, env: Record<string, string | undefined> = {}): Promise<RunnerContext> {
+async function contextFor(scenarios: string, env: Record<string, string | undefined> = {}, overrides: RunnerContext['overrides'] = {}): Promise<RunnerContext> {
   hawk = await startFakeHawk();
 
   const { deps } = createTestDeps(hawk, { env: { SCENARIOS: scenarios,
@@ -47,7 +49,7 @@ async function contextFor(scenarios: string, env: Record<string, string | undefi
   masking: createMutableRedactor([]),
   api: deps.api,
   collector: deps.collector,
-  overrides: {},
+  overrides,
   closers };
 }
 
@@ -163,5 +165,55 @@ describe('buildRunners', () => {
 
     expect(result).toMatchObject({ status: 'ok',
       scenario: 'sentry-envelope' });
+  });
+
+  it('starts the wait for the tunnel when the probe is set up beside a notification scenario, before any run', async () => {
+    let lookups = 0;
+
+    await buildRunners(await contextFor('endpoints-probe,check-notification', {}, { resolveAddress: () => {
+      lookups += 1;
+
+      return Promise.reject(new Error('no tunnel yet'));
+    },
+    tunnelPollMs: 5 }));
+
+    await expect.poll(() => lookups).toBeGreaterThan(0);
+  });
+
+  it('gives the probe the receiver stage when a notification scenario is enabled', async () => {
+    // The receiver listens on a port of its own, known once the runners are built.
+    let port = 0;
+
+    const built = await buildRunners(await contextFor('endpoints-probe,check-notification', {}, { resolveAddress: async () => Promise.resolve(httpAddress(port)),
+      tunnelPollMs: 5 }));
+
+    port = built.receiverPort ?? 0;
+    await built.beforeFirstRun['check-notification']?.(new AbortController().signal);
+
+    const result = await built.runners['endpoints-probe']?.({ runId: 'raaaaaaaaaaaaaaae',
+      sequence: 1,
+      signal: new AbortController().signal });
+
+    expect(result?.stages.map(stage => [stage.name, stage.status])).toEqual([
+      ['collector_availability', 'ok'],
+      ['api_availability', 'ok'],
+      ['receiver_availability', 'ok'],
+    ]);
+  });
+
+  it('gives the probe no receiver stage and no tunnel lookup without a notification scenario', async () => {
+    let lookups = 0;
+    const built = await buildRunners(await contextFor('endpoints-probe', {}, { resolveAddress: () => {
+      lookups += 1;
+
+      return Promise.reject(new Error('unused'));
+    } }));
+    const result = await built.runners['endpoints-probe']?.({ runId: 'raaaaaaaaaaaaaaaf',
+      sequence: 1,
+      signal: new AbortController().signal });
+
+    expect(result?.stages.map(stage => stage.name)).toEqual(['collector_availability', 'api_availability']);
+    expect(lookups).toBe(0);
+    expect(built.receiverPort).toBeUndefined();
   });
 });

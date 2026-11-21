@@ -137,6 +137,27 @@ describe('sharedReceiver', () => {
     expect(lookups).toBe(afterSecond);
   });
 
+  it('tunnelWaited is false before any wait, true after a wait that resolved, and stays false after a cancelled wait', async () => {
+    const context = await contextFor({ resolveAddress: () => Promise.reject(new Error('no tunnel yet')),
+      tunnelPollMs: 5 });
+    const runtime = await sharedReceiver({ ...context,
+      config: { ...context.config,
+        monitoring: { ...context.config.monitoring,
+          tunnelReadyTimeoutMs: 40 } } });
+
+    expect(runtime.tunnelWaited()).toBe(false);
+
+    const cancelled = new AbortController();
+    const first = runtime.waitForTunnel(cancelled.signal);
+
+    cancelled.abort();
+    await first;
+    expect(runtime.tunnelWaited()).toBe(false);
+
+    await runtime.waitForTunnel(new AbortController().signal);
+    expect(runtime.tunnelWaited()).toBe(true);
+  });
+
   it('marks a late POST to /hooks/telegram as a late notification of that channel', async () => {
     const context = await contextFor();
     const { receiver } = await sharedReceiver(context);

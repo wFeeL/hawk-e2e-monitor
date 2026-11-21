@@ -1,7 +1,10 @@
 import type { ScenarioRunner } from '../scheduler/scheduler.js';
 import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, NEW_PROJECT, SEND_AND_RECEIVE_EVENT, SENTRY_ENVELOPE, SOURCEMAPS, TELEGRAM_DELIVERY } from '../scenarios/names.js';
 import type { ScenarioName } from '../scenarios/names.js';
+import { usesTunnel } from '../config/scenario.js';
+import { probeReceiver, resolvePublicAddress } from '../notifications/address.js';
 import { runEndpointsProbe } from '../scenarios/endpoints-probe/run.js';
+import type { ReceiverCheck } from '../scenarios/endpoints-probe/stages.js';
 import { runSentryEnvelope } from '../scenarios/sentry-envelope/run.js';
 import { runSourcemaps } from '../scenarios/sourcemaps/run.js';
 import { runNewProject } from '../scenarios/new-project/run.js';
@@ -9,6 +12,7 @@ import { createdProjects } from '../storage/created-projects.js';
 import { pendingProjects } from '../storage/pending-projects.js';
 import { runSendAndReceive } from '../scenarios/send-and-receive/run.js';
 import type { Check } from '../http/internal-server.js';
+import { sharedReceiver } from './receiver-setup.js';
 import { setupCheckNotification } from './notification-setup.js';
 import { setupTelegramDelivery } from './telegram-setup.js';
 import type { RunnerContext, ScenarioSetup, SetupScenario } from './scenario-setup.js';
@@ -47,12 +51,37 @@ const setupSendAndReceive: SetupScenario = async (context): Promise<ScenarioSetu
 };
 
 /**
- * Sets up `endpoints-probe`, which needs nothing besides the clients.
+ * Sets up `endpoints-probe`, which needs the clients and, beside a notification scenario, the receiver and its tunnel.
+ * The wait for the tunnel starts here, not at the first notification run, so the stage is not skipped for a whole interval after a restart.
  * @param context Everything a scenario needs to be set up.
  * @returns Its runner.
  */
 const setupProbe: SetupScenario = async (context): Promise<ScenarioSetup> => {
-  const { config, clock, logger, masking, api, collector } = context;
+  const { config, clock, logger, masking, api, collector, overrides } = context;
+  let receiverCheck: ReceiverCheck | undefined;
+
+  if (usesTunnel(config.monitoring.scenarios)) {
+    const runtime = await sharedReceiver(context);
+    const stop = new AbortController();
+
+    context.closers.push(() => {
+      stop.abort();
+    });
+    void runtime.waitForTunnel(stop.signal);
+    receiverCheck = {
+      // One attempt each: a short gap fails one probe, and the alert needs several in a row.
+      findAddress: signal => (overrides.resolveAddress ?? resolvePublicAddress)(runtime.settings, { httpTimeoutMs: config.httpTimeoutMs,
+        clock,
+        retry: { attempts: 1,
+          delaysMs: [] } }, signal),
+      probe: async (address, signal) => probeReceiver(address, runtime.settings.receiverSecret, runtime.receiver.nonce, { httpTimeoutMs: config.httpTimeoutMs,
+        clock,
+        attempts: 1,
+        retry: config.retry }, signal),
+      tunnelWaited: runtime.tunnelWaited,
+      addSecret: masking.add,
+    };
+  }
 
   return Promise.resolve({
     runner: async ({ runId, sequence, signal }) => runEndpointsProbe({ config,
@@ -61,6 +90,7 @@ const setupProbe: SetupScenario = async (context): Promise<ScenarioSetup> => {
       clock,
       logger,
       redact: masking.redact,
+      ...receiverCheck === undefined ? {} : { receiverCheck },
       signal }, { sequence,
       runId }),
   });
