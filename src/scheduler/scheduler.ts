@@ -191,6 +191,8 @@ interface Handle {
   settled: boolean;
   /** True once the row was finished. */
   finished: boolean;
+  /** True once the start row is in the history. */
+  startWritten: boolean;
   /** Resolves `done`. */
   resolveDone: (row: RunRow) => void;
   /** Trigger of the run. */
@@ -331,12 +333,24 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
     let row: RunRow | undefined;
 
-    try {
-      history.finishRun(handle.start.runId, outcome);
-      storageFailed = false;
-      row = history.get(handle.start.runId);
-    } catch (error) {
-      writeFailed('finishRun', error);
+    // The start row failed to write, so finishRun would update nothing; write the whole row now.
+    if (!handle.startWritten) {
+      try {
+        history.startRun(handle.start);
+        handle.startWritten = true;
+      } catch (error) {
+        writeFailed('startRun', error);
+      }
+    }
+
+    if (handle.startWritten) {
+      try {
+        history.finishRun(handle.start.runId, outcome);
+        storageFailed = false;
+        row = history.get(handle.start.runId);
+      } catch (error) {
+        writeFailed('finishRun', error);
+      }
     }
 
     const finalRow = row ?? rowOf(handle.start, outcome);
@@ -496,11 +510,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       abandoned: false,
       settled: false,
       finished: false,
+      startWritten: false,
       resolveDone,
       trigger };
 
     try {
       history.startRun(start);
+      handle.startWritten = true;
       storageFailed = false;
       state.unwritten = undefined;
     } catch (error) {

@@ -986,6 +986,102 @@ describe('sequence while the history cannot be written', () => {
   });
 });
 
+/** A history whose start write fails, with its spies. */
+interface FailingStart {
+  /** The wrapped history. */
+  history: History;
+  /** Spy on `finishRun`. */
+  finishRun: ReturnType<typeof vi.fn<History['finishRun']>>;
+}
+
+describe('a run whose start was not written', () => {
+  /**
+   * Wraps a history whose `startRun` fails a number of times.
+   * @param real History to wrap.
+   * @param failures Number of failing calls, `Infinity` for all.
+   * @returns The wrapped history and the spy on `finishRun`.
+   */
+  function failingStart(real: History, failures: number): FailingStart {
+    let calls = 0;
+    const finishRun = vi.fn<History['finishRun']>((runId, outcome) => {
+      real.finishRun(runId, outcome);
+    });
+
+    return { history: { ...real,
+      startRun: (start) => {
+        calls += 1;
+
+        if (calls <= failures) {
+          throw new Error('disk full');
+        }
+
+        real.startRun(start);
+      },
+      finishRun },
+    finishRun };
+  }
+
+  it('is written whole at its end', async () => {
+    const real = createHistory(openDatabase(':memory:'));
+    const { history } = failingStart(real, 1);
+    const { scheduler, clock, runners, finished } = setup({ scenarios: [SEND],
+      history });
+
+    scheduler.start();
+    await settle(clock);
+
+    const call = callOf(runners[SEND], 0);
+
+    expect(scheduler.health().storage).toBe(false);
+    call.resolve();
+    await settle(clock);
+
+    const row = rowOf(real, call.runId);
+
+    expect(row).toMatchObject({ status: 'ok',
+      sequence: call.sequence });
+    expect(row.startedAt).toBe(START.toISOString());
+    expect(scheduler.health().storage).toBe(true);
+    expect(finished.at(-1)?.row).toEqual(row);
+  });
+
+  it('is reported from memory when the start cannot be written at the end either', async () => {
+    const real = createHistory(openDatabase(':memory:'));
+    const { history, finishRun } = failingStart(real, Infinity);
+    const { scheduler, clock, runners, finished } = setup({ scenarios: [SEND],
+      history });
+
+    scheduler.start();
+    await settle(clock);
+    callOf(runners[SEND], 0).resolve();
+    await settle(clock);
+
+    expect(finished).toHaveLength(1);
+    expect(finished[0]?.row).toMatchObject({ id: 0,
+      status: 'ok' });
+    expect(scheduler.health().storage).toBe(false);
+    expect(finishRun).not.toHaveBeenCalled();
+    expect(scheduler.failures()).toBe(2);
+    await clock.advance(INTERVAL_MS);
+    expect(callOf(runners[SEND], 1).sequence).toBe(callOf(runners[SEND], 0).sequence + 1);
+  });
+
+  it('stopped before its start was written is recorded as monitor_stopped', async () => {
+    const real = createHistory(openDatabase(':memory:'));
+    const { history } = failingStart(real, 1);
+    const { scheduler, clock, runners } = setup({ scenarios: [SEND],
+      history });
+
+    scheduler.start();
+    await settle(clock);
+
+    const call = callOf(runners[SEND], 0);
+
+    await scheduler.stop();
+    expect(rowOf(real, call.runId).errorClass).toBe('monitor_stopped');
+  });
+});
+
 describe('subscribers', () => {
   it('calls every subscriber in its own try, and an error of one does not stop the others', async () => {
     const seen: string[] = [];
