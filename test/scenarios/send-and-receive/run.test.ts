@@ -679,15 +679,15 @@ describe('late duplicate', () => {
     expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
   });
 
-  it('a recheck that finds no card does not fail the run', async () => {
+  it('a recheck that finds no card keeps the run passed, with a warning and without a removal', async () => {
     const { deps } = createTestDeps(hawk);
     const result = await runSendAndReceive({ ...deps,
       api: hookCleanupCard(deps.api, 2, () => null) }, { sequence: 1 });
 
     expect(result.status).toBe('ok');
     expect(stageOf(result, 'cleanup').details).toMatchObject({ recheck: 'missing' });
-    expect(result.warnings).toEqual([]);
-    expect(hawk.api.removeCalls).toBe(1);
+    expect(result.warnings).toEqual(['event was already gone before cleanup']);
+    expect(hawk.api.removeCalls).toBe(0);
   });
 
   it('a wait cut by the cleanup limit fails the run as monitor_internal and removes nothing', async () => {

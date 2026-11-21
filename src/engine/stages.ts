@@ -18,8 +18,8 @@ export interface StageSpec<C> {
   name: StageName;
   /** Time the body may take before its signal aborts. */
   timeoutMs: number;
-  /** Body; must stop when the signal aborts. */
-  run: (context: C, signal: AbortSignal) => Promise<StageOutcome>;
+  /** Body; must stop when the signal aborts. The runner of a scenario passes the stages recorded so far to a stage that needs them, such as the cleanup. */
+  run: (context: C, signal: AbortSignal, earlier?: readonly StageResult[]) => Promise<StageOutcome>;
 }
 
 /** Clock and run-wide deadline of the stage runner. */
