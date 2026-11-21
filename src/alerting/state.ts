@@ -16,6 +16,9 @@ export const REPEAT_STAGES: readonly StageName[] = ['event_repeated', 'threshold
 /** Scenarios that send their event over HTTP whatever the configuration says. */
 export const FORCED_HTTP: readonly ScenarioName[] = [SOURCEMAPS, SENTRY_ENVELOPE, NEW_PROJECT];
 
+/** Stages whose failure says that Hawk itself is down, whichever scenario noticed it. */
+export const AVAILABILITY_STAGES: readonly StageName[] = ['collector_availability', 'api_availability'];
+
 /** A transport, or `*` for a failure that does not depend on one. */
 export type PairTransport = Transport | '*';
 
@@ -316,4 +319,50 @@ export function decideAlert(previous: AlertStateRow | undefined, row: RunRow, se
   }
 
   return afterFailure(open, row, settings.alertAfterFailures, now, pairOf(row, run.transport));
+}
+
+/**
+ * Holds back the message of a scenario whose outage another scenario already announced.
+ * @param previous State before the run, absent for a scenario never seen.
+ * @param decision What `decideAlert` decided.
+ * @param row Finished run.
+ * @param leaders States of the other scenarios that may lead: frequent, failing, announced and fresh.
+ * @returns The decision with the message dropped or added, and `announced` set to match.
+ */
+export function shareEpisode(previous: AlertStateRow | undefined, decision: AlertDecision, row: RunRow, leaders: readonly AlertStateRow[]): AlertDecision {
+  const stage = row.status === 'ok' ? undefined : row.failedStage;
+  const availability = stage !== undefined && AVAILABILITY_STAGES.includes(stage);
+  const led = availability && leaders.some(leader => leader.open.some(item => item.pair.startsWith(`${stage}@`)));
+  const { state, kind } = decision;
+
+  if (kind === 'failed' && led) {
+    return { state: { ...state,
+      announced: false } };
+  }
+
+  if (previous?.state !== 'failing' || previous.announced) {
+    return decision;
+  }
+
+  if (kind === 'recovered') {
+    return { state };
+  }
+
+  if (kind === 'recovered_degraded') {
+    return { state,
+      kind: 'degraded' };
+  }
+
+  if (stage === undefined || (!availability && kind === undefined)) {
+    return decision;
+  }
+
+  if (led) {
+    return { state: { ...state,
+      announced: false } };
+  }
+
+  return { state: { ...state,
+    announced: true },
+  kind: 'failed' };
 }

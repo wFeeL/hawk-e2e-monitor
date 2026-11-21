@@ -9,7 +9,7 @@ import type { AlertStateRow } from '../storage/types.js';
 import type { RunRow } from '../storage/types.js';
 import type { Clock } from '../time/clock.js';
 import { sendNotify } from './notify.js';
-import { decideAlert, plannedTransport } from './state.js';
+import { AVAILABILITY_STAGES, decideAlert, plannedTransport, shareEpisode } from './state.js';
 import type { AlertKind } from './state.js';
 import { alertText, plainAlertText, storageFailingText } from './text.js';
 import type { AlertTextInput } from './text.js';
@@ -121,6 +121,8 @@ export function createAlerter(deps: AlerterDeps): Alerter {
   let storageFailing = false;
   let storageNoticeSent = false;
   let storageFailures = 0;
+  // States whose write failed; they go to the database with the next write that works.
+  const dirty = new Set<ScenarioName>();
 
   const nowIso = (): string => clock.wallTime().toISOString();
   // A health probe only reads; it raises the flag but is not a failed write, so it stays out of the counter.
@@ -136,6 +138,79 @@ export function createAlerter(deps: AlerterDeps): Alerter {
   const storageWorked = (): void => {
     storageFailing = false;
     storageNoticeSent = false;
+  };
+
+  /** Writes the states that missed an earlier write; the ones that fail again stay in the set. */
+  const writeDirty = (): void => {
+    for (const scenario of [...dirty]) {
+      const state = memory.get(scenario);
+
+      try {
+        if (state !== undefined) {
+          history.saveAlert(state, undefined);
+        }
+
+        dirty.delete(scenario);
+      } catch (error) {
+        storageFailed(error, 'save');
+
+        return;
+      }
+    }
+  };
+
+  /**
+   * Finds the states of the scenarios that may lead an outage for `scenario`: other scenarios of this monitor that run at least as often as `CHECK_INTERVAL_MS`, fail and announced it, and ran recently.
+   * @param scenario Scenario the leaders are looked up for.
+   * @returns The leading states; empty when the stored states cannot be read, so that nothing is held back.
+   */
+  const leadersOf = (scenario: ScenarioName): AlertStateRow[] => {
+    try {
+      const states = new Map(history.alertStates().map(state => [state.scenario, state]));
+
+      for (const [name, state] of memory) {
+        states.set(name, state);
+      }
+
+      return [...states.values()].filter((state) => {
+        if (state.scenario === scenario || !monitoring.scenarios.includes(state.scenario)) {
+          return false;
+        }
+
+        const { intervalMs, watchdogMs } = scenarioSettings(config, state.scenario);
+
+        return intervalMs <= monitoring.intervalMs && state.state === 'failing' && state.announced
+          && Date.parse(nowIso()) - Date.parse(state.updatedAt) <= intervalMs + watchdogMs;
+      });
+    } catch (error) {
+      storageFailed(error, 'read', false);
+
+      return [];
+    }
+  };
+
+  /**
+   * Marks the failing state of a scenario as not announced, so that the next failed run of any scenario announces the outage again.
+   * @param scenario Scenario whose message was given up on.
+   */
+  const unannounce = (scenario: ScenarioName): void => {
+    try {
+      const state = memory.get(scenario) ?? history.alertState(scenario);
+
+      if (state?.state !== 'failing' || !state.announced) {
+        return;
+      }
+
+      const next = { ...state,
+        announced: false };
+
+      memory.set(scenario, next);
+      dirty.add(scenario);
+      history.saveAlert(next, undefined);
+      dirty.delete(scenario);
+    } catch (error) {
+      storageFailed(error, 'save');
+    }
   };
 
   /**
@@ -189,6 +264,7 @@ export function createAlerter(deps: AlerterDeps): Alerter {
       if (Date.parse(now) - Date.parse(row.createdAt) > MS_PER_DAY) {
         history.alertAttempt(row.id, { droppedAt: now,
           error: 'dropped after 24 hours' });
+        unannounce(row.scenario);
         logger.error('alert dropped', { scenario: row.scenario,
           runId: row.runId,
           createdAt: row.createdAt });
@@ -301,9 +377,13 @@ export function createAlerter(deps: AlerterDeps): Alerter {
         }
       }
 
-      const decision = decideAlert(previous, row, { alertAfterFailures: scenarioSettings(config, row.scenario).alertAfterFailures,
+      const first = decideAlert(previous, row, { alertAfterFailures: scenarioSettings(config, row.scenario).alertAfterFailures,
         repeatsOn: config.repeatEveryNRuns > 0,
         transportMode: config.transportMode }, now, { transport: result?.transport ?? plannedTransport(row.scenario, row.sequence, config.transportMode) });
+      const heldBack = previous?.state === 'failing' && !previous.announced;
+      const outage = row.status !== 'ok' && row.failedStage !== undefined && AVAILABILITY_STAGES.includes(row.failedStage);
+      const needsLeaders = readError === undefined && (heldBack || outage);
+      const decision = shareEpisode(previous, first, row, needsLeaders ? leadersOf(row.scenario) : []);
       const { kind } = decision;
 
       // A state derived without the stored one would hide the real episode from every later run, so it is not kept.
@@ -342,6 +422,7 @@ export function createAlerter(deps: AlerterDeps): Alerter {
         }
       } catch (error) {
         storageFailed(error, 'save');
+        dirty.add(row.scenario);
 
         if (text !== undefined) {
           sendAfterStorageFailure(text, row.scenario, error);
@@ -349,6 +430,8 @@ export function createAlerter(deps: AlerterDeps): Alerter {
 
         return kind;
       }
+
+      writeDirty();
 
       if (kind !== undefined) {
         requestFlush();
@@ -401,6 +484,7 @@ export function createAlerter(deps: AlerterDeps): Alerter {
       if (storageFailing) {
         history.probeAlertStorage(nowIso());
         storageFailing = false;
+        writeDirty();
       }
     } catch (error) {
       storageFailed(error, 'health', false);

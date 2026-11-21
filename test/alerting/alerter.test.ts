@@ -6,7 +6,10 @@ import type { Redactor } from '../../src/errors/redact.js';
 import { openDatabase } from '../../src/storage/database.js';
 import { createHistory } from '../../src/storage/history.js';
 import type { History } from '../../src/storage/history.js';
-import type { RunRow } from '../../src/storage/types.js';
+import type { AlertStateRow, RunRow } from '../../src/storage/types.js';
+import type { ScenarioName } from '../../src/scenarios/names.js';
+import { SCENARIO_NAMES } from '../../src/scenarios/names.js';
+import { tempDatabase } from '../support/database.js';
 import { testConfig } from '../support/config.js';
 import { createFakeClock } from '../support/fake-clock.js';
 import type { FakeClock } from '../support/fake-clock.js';
@@ -54,6 +57,10 @@ interface SetupOptions {
   threshold?: number;
   /** Failed probes in a row that raise the alert. */
   probeThreshold?: number;
+  /** History file; `:memory:` by default. */
+  database?: string;
+  /** Scenarios of the monitor; the defaults when absent. */
+  scenarios?: readonly ScenarioName[];
 }
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -71,13 +78,14 @@ afterEach(async () => {
  */
 async function setup(options: SetupOptions = {}): Promise<Setup> {
   const bot = await startFakeNotify(options.answer);
-  const history = createHistory(openDatabase(':memory:'));
+  const history = createHistory(openDatabase(options.database ?? ':memory:'));
   const clock = createFakeClock({ wall: START });
   const logger = memoryLogger();
   const base = testConfig();
   const config: Config = { ...base,
     httpTimeoutMs: options.httpTimeoutMs ?? 3000,
     monitoring: { ...base.monitoring,
+      ...options.scenarios === undefined ? {} : { scenarios: [...options.scenarios] },
       ...options.noUrl === true ? {} : { alertNotifyUrl: bot.url },
       alertRetryMs: RETRY_MS,
       alertAfterFailures: options.threshold ?? 1,
@@ -756,5 +764,205 @@ describe('alerter: injected send', () => {
     expect(sendNotify).toBeTypeOf('function');
     await alerter.stop();
     history.close();
+  });
+});
+
+describe('alerter: one alert for an outage of Hawk', () => {
+  const PROBE = 'endpoints-probe';
+  const SOURCEMAPS = 'sourcemaps';
+  const ENVELOPE = 'sentry-envelope';
+  const CHECK = 'check-notification';
+  const AVAILABLE = { name: 'collector_availability',
+    status: 'ok',
+    durationMs: 1 } as const;
+
+  /**
+   * Builds a run that failed at an availability stage.
+   * @param clock Clock that gives the start time.
+   * @param scenario Scenario that ran.
+   * @param errorClass Class of the failure.
+   * @returns Failed run row.
+   */
+  function down(clock: FakeClock, scenario: ScenarioName, errorClass: RunRow['errorClass'] = 'collector_unavailable'): RunRow {
+    return failedRow(clock, { scenario,
+      runId: `r${scenario.replaceAll(/[^a-z]/gu, '').slice(0, 15)
+.padEnd(15, 'x')}`,
+      failedStage: 'collector_availability',
+      errorClass,
+      stages: [] });
+  }
+
+  /**
+   * Builds an `ok` run of a scenario.
+   * @param clock Clock that gives the start time.
+   * @param scenario Scenario of the run.
+   * @param overrides Other fields.
+   * @returns Run row.
+   */
+  function up(clock: FakeClock, scenario: ScenarioName, overrides: Partial<RunRow> = {}): RunRow {
+    return { ...down(clock, scenario),
+      status: 'ok',
+      stages: [AVAILABLE],
+      ...overrides };
+  }
+
+  /**
+   * Builds the stored state of a scenario that announced an outage.
+   * @param clock Clock that gives the time of the state.
+   * @param scenario Scenario whose failure the state holds.
+   * @param overrides Other fields.
+   * @returns Alert state.
+   */
+  function announcedDown(clock: FakeClock, scenario: ScenarioName, overrides: Partial<AlertStateRow> = {}): AlertStateRow {
+    return { scenario,
+      state: 'failing',
+      failureStreak: 1,
+      episodeStartedAt: clock.wallTime().toISOString(),
+      episodeFailures: 1,
+      degraded: [],
+      open: [{ pair: 'collector_availability@*',
+        count: 1 }],
+      announced: true,
+      reported: [],
+      updatedAt: clock.wallTime().toISOString(),
+      ...overrides };
+  }
+
+  it('an hourly scenario that fails first announces itself, then the frequent one announces again', async () => {
+    const { alerter, clock } = await setup({ scenarios: SCENARIO_NAMES,
+      probeThreshold: 1 });
+
+    expect(alerter.onRunFinished(down(clock, SOURCEMAPS), NO_RESULT)).toBe('failed');
+    expect(alerter.onRunFinished(down(clock, SCENARIO), NO_RESULT)).toBe('failed');
+  });
+
+  it('five scenarios with mixed classes send one FAILED, from the frequent one that failed first', async () => {
+    const { alerter, bot, clock } = await setup({ scenarios: SCENARIO_NAMES,
+      probeThreshold: 1 });
+    const kinds = [
+      alerter.onRunFinished(down(clock, SCENARIO), NO_RESULT),
+      alerter.onRunFinished(down(clock, CHECK, 'network_error'), NO_RESULT),
+      alerter.onRunFinished(down(clock, ENVELOPE, 'dns_error'), NO_RESULT),
+      alerter.onRunFinished(down(clock, PROBE, 'network_error'), NO_RESULT),
+      alerter.onRunFinished(down(clock, PROBE), NO_RESULT),
+    ];
+
+    await alerter.flush(SIGNAL);
+    expect(kinds).toEqual(['failed', undefined, undefined, undefined, undefined]);
+    expect(messages(bot)).toHaveLength(1);
+  });
+
+  it('a follower that recovers first says nothing, the leader that recovers says RECOVERED', async () => {
+    const { alerter, bot, clock } = await setup({ scenarios: SCENARIO_NAMES,
+      probeThreshold: 1 });
+
+    alerter.onRunFinished(down(clock, SCENARIO), NO_RESULT);
+    alerter.onRunFinished(down(clock, PROBE), NO_RESULT);
+    expect(alerter.onRunFinished(up(clock, PROBE), NO_RESULT)).toBeUndefined();
+    expect(alerter.onRunFinished(up(clock, SCENARIO), NO_RESULT)).toBe('recovered');
+    await alerter.flush(SIGNAL);
+    expect(messages(bot)).toHaveLength(2);
+  });
+
+  it('a follower that recovers with a warning sends DEGRADED', async () => {
+    const { alerter, clock } = await setup({ scenarios: SCENARIO_NAMES,
+      probeThreshold: 1 });
+
+    alerter.onRunFinished(down(clock, SCENARIO), NO_RESULT);
+    alerter.onRunFinished(down(clock, PROBE), NO_RESULT);
+    expect(alerter.onRunFinished(up(clock, PROBE, { degraded: ['quota_usage'] }), NO_RESULT)).toBe('degraded');
+  });
+
+  it('a follower with a new cause outside the availability stages sends FAILED', async () => {
+    const { alerter, clock } = await setup({ scenarios: SCENARIO_NAMES,
+      probeThreshold: 1 });
+
+    alerter.onRunFinished(down(clock, SCENARIO), NO_RESULT);
+    alerter.onRunFinished(down(clock, CHECK), NO_RESULT);
+    expect(alerter.onRunFinished(failedRow(clock, { scenario: CHECK,
+      stages: [AVAILABLE] }), NO_RESULT)).toBe('failed');
+  });
+
+  it('a leader that is not in the scenarios does not hold back a follower', async () => {
+    const { alerter, clock, history } = await setup({ scenarios: [PROBE, CHECK],
+      probeThreshold: 1 });
+
+    history.saveAlert(announcedDown(clock, SCENARIO), undefined);
+    expect(alerter.onRunFinished(down(clock, PROBE), NO_RESULT)).toBe('failed');
+  });
+
+  it('a leader that has been silent longer than its interval and watchdog does not hold back a follower', async () => {
+    const { alerter, clock, history } = await setup({ scenarios: SCENARIO_NAMES,
+      probeThreshold: 1 });
+
+    history.saveAlert(announcedDown(clock, SCENARIO), undefined);
+    await clock.advance(30 * 60_000);
+    expect(alerter.onRunFinished(down(clock, PROBE), NO_RESULT)).toBe('failed');
+  });
+
+  it('a leader whose FAILED was dropped ends the suppression', async () => {
+    const { alerter, clock, history } = await setup({ scenarios: SCENARIO_NAMES,
+      probeThreshold: 1 });
+    const old = new Date(clock.wallTime().getTime() - 25 * HOUR_MS).toISOString();
+
+    history.saveAlert(announcedDown(clock, SCENARIO), { text: 'FAILED',
+      at: old });
+    await alerter.flush(SIGNAL);
+    expect(history.alertState(SCENARIO)?.announced).toBe(false);
+    expect(alerter.onRunFinished(down(clock, PROBE), NO_RESULT)).toBe('failed');
+  });
+
+  it('a failed read of the other states suppresses nothing', async () => {
+    const { alerter, clock, history } = await setup({ scenarios: SCENARIO_NAMES,
+      probeThreshold: 1,
+      wrap: base => ({ ...base,
+        alertStates: (): AlertStateRow[] => {
+          throw new Error('unreadable');
+        } }) });
+
+    history.saveAlert(announcedDown(clock, SCENARIO), undefined);
+    expect(alerter.onRunFinished(down(clock, PROBE), NO_RESULT)).toBe('failed');
+  });
+
+  it('a restart between the runs keeps the leader and the follower apart', async () => {
+    const database = await tempDatabase();
+
+    cleanups.push(async () => database.remove());
+
+    const first = await setup({ scenarios: SCENARIO_NAMES,
+      probeThreshold: 1,
+      database: database.path });
+
+    first.alerter.onRunFinished(down(first.clock, SCENARIO), NO_RESULT);
+    await first.alerter.stop();
+
+    const second = await setup({ scenarios: SCENARIO_NAMES,
+      probeThreshold: 1,
+      database: database.path });
+
+    expect(second.alerter.onRunFinished(down(second.clock, PROBE), NO_RESULT)).toBeUndefined();
+    expect(second.alerter.onRunFinished(up(second.clock, PROBE), NO_RESULT)).toBeUndefined();
+    expect(second.alerter.onRunFinished(up(second.clock, SCENARIO), NO_RESULT)).toBe('recovered');
+  });
+
+  it('a state saved while the storage failed is written with the next successful save', async () => {
+    const control = { broken: true };
+    const { alerter, clock, history } = await setup({ scenarios: SCENARIO_NAMES,
+      probeThreshold: 1,
+      wrap: base => ({ ...base,
+        saveAlert: (...args): void => {
+          if (control.broken) {
+            throw new Error('disk full');
+          }
+
+          base.saveAlert(...args);
+        } }) });
+
+    alerter.onRunFinished(down(clock, SCENARIO), NO_RESULT);
+    expect(history.alertState(SCENARIO)).toBeUndefined();
+    control.broken = false;
+    alerter.onRunFinished(down(clock, PROBE), NO_RESULT);
+    expect(history.alertState(SCENARIO)?.state).toBe('failing');
+    expect(history.alertState(PROBE)?.state).toBe('failing');
   });
 });
