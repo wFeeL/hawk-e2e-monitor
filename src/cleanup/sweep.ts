@@ -4,6 +4,7 @@ import { CheckError } from '../errors/taxonomy.js';
 import type { Logger } from '../log/logger.js';
 import { buildTitle } from '../scenarios/shared/plan.js';
 import { EVENT_SCENARIOS, SENTRY_ENVELOPE } from '../scenarios/names.js';
+import { EXCEPTION_TYPE } from '../scenarios/sentry-envelope/envelope.js';
 import { createdProjects } from '../storage/created-projects.js';
 import type { History } from '../storage/history.js';
 import { pendingProjects } from '../storage/pending-projects.js';
@@ -15,7 +16,7 @@ const TIMEOUT_FACTOR = 4;
 const FIRST_PASS_DELAY_MS = 300_000;
 const RUN_ID_PATTERN = /^[a-z]{16}$/u;
 // The collector puts the type of the exception in front of the value to make the title of an event that came as an envelope.
-const SENTRY_PREFIX = 'E2eMonitorCheck: ';
+const SENTRY_PREFIX = `${EXCEPTION_TYPE}: `;
 
 /** What one pass of the sweep did. */
 export interface SweepReport {
@@ -375,7 +376,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
         signal.throwIfAborted();
 
         // Hawk parses the search as a regex, so no brackets; the title prefix is checked on the results.
-        const events = await api.findEvents(projectId, `e2e:${config.instanceId}`, signal);
+        const { events, more } = await api.findEventsPage(projectId, `e2e:${config.instanceId}`, signal);
         const removedBefore = report.removed;
 
         report.pages += 1;
@@ -391,7 +392,9 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
           report.skipped += outcome.removed ? 0 : 1;
         }
 
-        if (events.length < PAGE_SIZE || report.removed === removedBefore) {
+        // Hawk names a cursor only when more rows match, and one group seen on two days is two rows and one event here,
+        // so a page can look short; a full page goes on even without a cursor, in case Hawk stops sending it.
+        if ((!more && events.length < PAGE_SIZE) || report.removed === removedBefore) {
           break;
         }
       }

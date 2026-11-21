@@ -690,7 +690,7 @@ describe('late duplicate', () => {
     expect(hawk.api.removeCalls).toBe(1);
   });
 
-  it('a wait cut by the cleanup limit skips the recheck and warns', async () => {
+  it('a wait cut by the cleanup limit fails the run as monitor_internal and removes nothing', async () => {
     const { deps } = createTestDeps(hawk);
     const result = await runSendAndReceive({ ...deps,
       config: { ...deps.config,
@@ -699,7 +699,10 @@ describe('late duplicate', () => {
           cleanup: 100 } } }, { sequence: 1 });
 
     expect(stageOf(result, 'cleanup').details).toMatchObject({ recheck: 'skipped' });
-    expect(result.warnings).toEqual(['The event count was not rechecked: the cleanup time limit cut the wait']);
+    expect(result).toMatchObject({ status: 'failed',
+      failedStage: 'cleanup',
+      errorClass: 'monitor_internal' });
+    expect(hawk.api.removeCalls).toBe(0);
   });
 
   it('a healthy recheck leaves no trace in the details', async () => {

@@ -300,7 +300,8 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
       return failure('Invalid regular expression pattern', 'INTERNAL_SERVER_ERROR');
     }
 
-    const rows: unknown[] = store.search(target, search).slice(0, PAGE_LIMIT)
+    const matched = store.search(target, search);
+    const rows: unknown[] = matched.slice(0, PAGE_LIMIT)
       .map(event => ({
         id: event.id,
         count: event.totalCount,
@@ -321,7 +322,15 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
             context: {} } } });
     }
 
-    return success({ project: { dailyEventsPortion: { dailyEvents: rows } } });
+    // Hawk names a cursor only when more rows match than the page holds.
+    const nextCursor = matched.length > PAGE_LIMIT
+      ? { groupingTimestampBoundary: 0,
+          sortValueBoundary: 0,
+          idBoundary: objectIdLike() }
+      : null;
+
+    return success({ project: { dailyEventsPortion: { dailyEvents: rows,
+      nextCursor } } });
   };
 
   const removeEvent = (target: string, eventId: string): Outcome | 'hang' => {

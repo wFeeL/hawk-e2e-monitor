@@ -18,6 +18,7 @@ import { memoryLogger } from '../support/logger.js';
 import type { MemoryLogger } from '../support/logger.js';
 import { createTestDeps } from '../support/scenario.js';
 import { systemClock } from '../../src/time/clock.js';
+import { EXCEPTION_TYPE } from '../../src/scenarios/sentry-envelope/envelope.js';
 import { createSweeper } from '../../src/cleanup/sweep.js';
 import type { Sweeper } from '../../src/cleanup/sweep.js';
 
@@ -301,6 +302,42 @@ describe('sweepOnce', () => {
     expect(hawk.store.all(hawk.projectId)).toHaveLength(0);
   });
 
+  it('goes on after a page that looks short when Hawk says there is more', async () => {
+    for (let index = 0; index < 50; index += 1) {
+      leftover(runIdOf(index));
+    }
+
+    let calls = 0;
+    const report = await sweeper({ api: { ...api,
+      findEventsPage: async (projectId, search, signal) => {
+        calls += 1;
+
+        const page = await api.findEventsPage(projectId, search, signal);
+
+        if (calls === 1) {
+          return { events: page.events.slice(0, 49),
+            more: true };
+        }
+
+        return page;
+      } } }).sweepOnce(SIGNAL);
+
+    expect(report).toMatchObject({ pages: 2,
+      removed: 50 });
+  });
+
+  it('goes on after a full page even without a cursor', async () => {
+    for (let index = 0; index < 60; index += 1) {
+      leftover(runIdOf(index));
+    }
+
+    const report = await sweeper({ api: { ...api,
+      findEventsPage: async (projectId, search, signal) => ({ ...await api.findEventsPage(projectId, search, signal),
+        more: false }) } }).sweepOnce(SIGNAL);
+
+    expect(report.removed).toBe(60);
+  });
+
   it('stops when a full page had nothing to remove', async () => {
     for (let index = 0; index < 55; index += 1) {
       leftover(runIdOf(index), { ageMs: 1000 });
@@ -390,10 +427,11 @@ describe('the timer', () => {
   function counting(sweepIntervalMs: number): Counting {
     let searches = 0;
     const clock = createFakeClock();
-    const counter = { findEvents: () => {
+    const counter = { findEventsPage: () => {
       searches += 1;
 
-      return Promise.resolve([]);
+      return Promise.resolve({ events: [],
+        more: false });
     } } as unknown as HawkApi;
     const base = testConfig();
     const instance = createSweeper({ api: counter,
@@ -487,7 +525,7 @@ function leftoverProject(runId: string, options: ProjectOptions = {}): string {
  */
 function sentryLeftover(runId: string, options: LeftoverOptions = {}): string {
   const instanceId = options.instanceId ?? INSTANCE;
-  const stored = hawk.store.ingest(hawk.projectId, 'errors/default', { title: options.title ?? `E2eMonitorCheck: ${buildTitle(INSTANCE, runId, 'sentry-envelope')}`,
+  const stored = hawk.store.ingest(hawk.projectId, 'errors/default', { title: options.title ?? `${EXCEPTION_TYPE}: ${buildTitle(INSTANCE, runId, 'sentry-envelope')}`,
     ...options.noContext === true
       ? {}
       : { context: { e2e: { runId,
@@ -535,7 +573,7 @@ describe('sweepOnce of events from the Sentry path', () => {
     const young = sentryLeftover('raaaaaaaaaaaaaaa', { noContext: true,
       ageMs: 60_000 });
     const foreign = sentryLeftover('rbbbbbbbbbbbbbbb', { noContext: true,
-      title: `E2eMonitorCheck: ${buildTitle('other', 'rbbbbbbbbbbbbbbb', 'sentry-envelope')}` });
+      title: `${EXCEPTION_TYPE}: ${buildTitle('other', 'rbbbbbbbbbbbbbbb', 'sentry-envelope')}` });
 
     await sweeper().sweepOnce(SIGNAL);
 
@@ -557,8 +595,8 @@ describe('sweepOnce of events from the Sentry path', () => {
   it.each([
     ['another instance in the context', { instanceId: 'other' }],
     ['a title with another prefix', { title: `Other: ${buildTitle(INSTANCE, 'raaaaaaaaaaaaaaa', 'sentry-envelope')}` }],
-    ['a title with a prefix and another scenario', { title: `E2eMonitorCheck: ${buildTitle(INSTANCE, 'raaaaaaaaaaaaaaa', 'sourcemaps')}x` }],
-    ['text after the title', { title: `E2eMonitorCheck: ${buildTitle(INSTANCE, 'raaaaaaaaaaaaaaa', 'sentry-envelope')} and more` }],
+    ['a title with a prefix and another scenario', { title: `${EXCEPTION_TYPE}: ${buildTitle(INSTANCE, 'raaaaaaaaaaaaaaa', 'sourcemaps')}x` }],
+    ['text after the title', { title: `${EXCEPTION_TYPE}: ${buildTitle(INSTANCE, 'raaaaaaaaaaaaaaa', 'sentry-envelope')} and more` }],
   ])('does not touch an event with %s', async (_name, options) => {
     const id = sentryLeftover('raaaaaaaaaaaaaaa', options);
 
@@ -568,7 +606,7 @@ describe('sweepOnce of events from the Sentry path', () => {
   });
 
   it('does not take the plain context of another scenario for the Sentry one', async () => {
-    const stored = hawk.store.ingest(hawk.projectId, 'errors/default', { title: `E2eMonitorCheck: ${buildTitle(INSTANCE, 'raaaaaaaaaaaaaaa', 'sentry-envelope')}`,
+    const stored = hawk.store.ingest(hawk.projectId, 'errors/default', { title: `${EXCEPTION_TYPE}: ${buildTitle(INSTANCE, 'raaaaaaaaaaaaaaa', 'sentry-envelope')}`,
       context: { instanceId: 'other',
         runId: 'raaaaaaaaaaaaaaa' } });
 

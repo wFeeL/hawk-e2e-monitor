@@ -7,10 +7,8 @@ import { SENTRY_ENVELOPE } from '../names.js';
 import type { RunPlan } from '../shared/plan.js';
 import type { EventShape } from '../shared/event.js';
 import type { ScenarioContext } from '../shared/context.js';
-import { buildEnvelope } from './envelope.js';
+import { EXCEPTION_TYPE, buildEnvelope } from './envelope.js';
 
-/** Type of the exception in the envelope, which Hawk puts in front of the value to make the title. */
-export const EXCEPTION_TYPE = 'E2eMonitorCheck';
 /** Catcher type the collector gives an event of a Sentry SDK that is not a JavaScript one. */
 export const DEFAULT_CATCHER = 'errors/default';
 

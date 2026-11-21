@@ -1,5 +1,5 @@
 import { runStage } from '../../../src/engine/stages.js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { systemClock } from '../../../src/time/clock.js';
 import { collectorAcceptStage, eventVisibleStage } from '../../../src/scenarios/shared/delivery.js';
 import { cleanupStage } from '../../../src/scenarios/shared/cleanup.js';
@@ -9,7 +9,7 @@ import { TIMEOUT_MS, run, scenario, useStageHarness } from '../../support/stage-
 useStageHarness();
 
 describe('cleanupStage pause', () => {
-  it('skips the recheck when the pause is cut by the timeout, and still tries to remove', async () => {
+  it('ends as monitor_internal when the pause is cut by the timeout, without a removal', async () => {
     const { context } = scenario();
 
     await run(collectorAcceptStage(TIMEOUT_MS), context);
@@ -18,11 +18,14 @@ describe('cleanupStage pause', () => {
     const slow: ScenarioContext = { ...context,
       config: { ...context.config,
         lateDuplicateWaitMs: 5000 } };
+    const removeEvent = vi.spyOn(context.api, 'removeEvent');
     const result = await runStage(cleanupStage(100), slow, { clock: systemClock,
       runSignal: new AbortController().signal });
 
     expect(result.details).toMatchObject({ recheck: 'skipped' });
     expect(result).toMatchObject({ status: 'failed',
-      errorClass: 'cleanup_failed' });
+      errorClass: 'monitor_internal',
+      culprit: 'monitor' });
+    expect(removeEvent).not.toHaveBeenCalled();
   });
 });

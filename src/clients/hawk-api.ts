@@ -43,6 +43,14 @@ export interface FoundEvent {
   timestamp?: number;
 }
 
+/** One page of the event search. */
+export interface EventsPage {
+  /** Events of the page, one per group. */
+  events: FoundEvent[];
+  /** True when Hawk names a cursor, so more rows match than this page holds. */
+  more: boolean;
+}
+
 /** Event card as the page of an event in Garage reads it: a search row and the fields of the payload. */
 export interface EventCard extends FoundEvent {
   /** Event type, such as the error class. */
@@ -166,6 +174,14 @@ export interface HawkApi {
    * @returns Events, one per group, in order of first appearance.
    */
   findEvents(projectId: string, search: string, signal: AbortSignal): Promise<FoundEvent[]>;
+  /**
+   * Searches events like `findEvents` and tells whether Hawk has more rows for the same search.
+   * @param projectId 24-character hex id of the project.
+   * @param search Text looked for in titles and contexts.
+   * @param signal Deadline of the caller.
+   * @returns The events of the page and whether more match.
+   */
+  findEventsPage(projectId: string, search: string, signal: AbortSignal): Promise<EventsPage>;
   /**
    * Reads one event card.
    * @param projectId 24-character hex id of the project.
@@ -383,6 +399,8 @@ interface FindEventsProject {
 
 /** Portion of daily events. */
 interface DailyPortion {
+  /** Cursor of the next portion; null or absent when nothing more matches. */
+  nextCursor?: object | null;
   /** Rows, possibly with nulls. */
   dailyEvents: (DailyRow | null)[] | null;
 }
@@ -708,7 +726,7 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
       eventsCount: workspace.billingPeriodEventsCount ?? 0 };
   };
 
-  const findEvents: HawkApi['findEvents'] = async (projectId, search, signal) => {
+  const findEventsPage: HawkApi['findEventsPage'] = async (projectId, search, signal) => {
     const data = await authorized<FindEventsData>(PROJECT_DAILY_EVENTS, { projectId,
       search }, signal);
 
@@ -729,8 +747,11 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
       }
     }
 
-    return [...byGroup.values()];
+    return { events: [...byGroup.values()],
+      more: (data.project.dailyEventsPortion?.nextCursor ?? null) !== null };
   };
+
+  const findEvents: HawkApi['findEvents'] = async (projectId, search, signal) => (await findEventsPage(projectId, search, signal)).events;
 
   const notificationRules: HawkApi['notificationRules'] = async (projectId, signal) => {
     const data = await authorized<NotificationRulesData>(NOTIFICATION_RULES, { projectId }, signal);
@@ -858,6 +879,7 @@ export function createHawkApi(options: HawkApiOptions): HawkApi {
     projectInfo,
     workspaceQuota,
     findEvents,
+    findEventsPage,
     notificationRules,
     createNotificationRule,
     updateNotificationRule,
