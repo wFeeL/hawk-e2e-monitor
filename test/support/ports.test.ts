@@ -9,6 +9,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { reservedPort, sweepPortLocks } from './ports.js';
 
 const LOCK_DIR = join(tmpdir(), 'hawk-e2e-monitor-ports');
+// The search gives up after this many candidates.
+const MAX_TRIES = 200;
 const servers: Server[] = [];
 const locks: string[] = [];
 
@@ -81,6 +83,18 @@ function lock(port: number, content: number | string): void {
   locks.push(lockPath(port));
 }
 
+/**
+ * Checks that the search went past a port and did not take it.
+ * The very next port may be locked by a test process that runs in parallel, so any later candidate is right.
+ * @param port Port the search had to skip.
+ */
+async function expectSkipped(port: number): Promise<void> {
+  const taken = await reservedPort();
+
+  expect(taken).toBeGreaterThan(port);
+  expect(taken).toBeLessThan(port + MAX_TRIES);
+}
+
 describe('reservedPort', () => {
   it('gives a different port on every call', async () => {
     const first = await reservedPort();
@@ -102,7 +116,7 @@ describe('reservedPort', () => {
     startAt(port);
     await occupy(port);
 
-    expect(await reservedPort()).toBe(port + 1);
+    await expectSkipped(port);
   });
 
   it('skips a port that a live process has locked', async () => {
@@ -111,7 +125,7 @@ describe('reservedPort', () => {
     startAt(port);
     lock(port, process.pid);
 
-    expect(await reservedPort()).toBe(port + 1);
+    await expectSkipped(port);
   });
 
   it('skips a lock of a dead process, it does not take it over', async () => {
@@ -121,7 +135,7 @@ describe('reservedPort', () => {
     startAt(port);
     lock(port, pid);
 
-    expect(await reservedPort()).toBe(port + 1);
+    await expectSkipped(port);
     expect(existsSync(lockPath(port))).toBe(true);
   });
 });
