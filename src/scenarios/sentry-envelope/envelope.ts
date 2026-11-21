@@ -1,6 +1,8 @@
 const SDK_NAME = 'sentry.python';
 const SDK_VERSION = '2.0.0';
-const EXCEPTION_TYPE = 'E2eMonitorCheck';
+
+/** Type of the exception in the Sentry event; the collector puts it in front of the title. */
+export const EXCEPTION_TYPE = 'E2eMonitorCheck';
 
 /** What goes into an envelope. */
 export interface EnvelopeInput {

@@ -4,6 +4,7 @@ import { CheckError } from '../errors/taxonomy.js';
 import type { Logger } from '../log/logger.js';
 import { buildTitle } from '../scenarios/shared/plan.js';
 import { EVENT_SCENARIOS, SENTRY_ENVELOPE } from '../scenarios/names.js';
+import { EXCEPTION_TYPE } from '../scenarios/sentry-envelope/envelope.js';
 import { createdProjects } from '../storage/created-projects.js';
 import type { History } from '../storage/history.js';
 import { pendingProjects } from '../storage/pending-projects.js';
@@ -15,7 +16,7 @@ const TIMEOUT_FACTOR = 4;
 const FIRST_PASS_DELAY_MS = 300_000;
 const RUN_ID_PATTERN = /^[a-z]{16}$/u;
 // The collector puts the type of the exception in front of the value to make the title of an event that came as an envelope.
-const SENTRY_PREFIX = 'E2eMonitorCheck: ';
+const SENTRY_PREFIX = `${EXCEPTION_TYPE}: `;
 
 /** What one pass of the sweep did. */
 export interface SweepReport {

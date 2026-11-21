@@ -81,9 +81,10 @@ export function cleanupStage(timeoutMs: number): StageSpec<ScenarioContext> {
         }
 
         if (cut) {
-          // The timeout ran out during the pause; removal still gets its try.
-          details.recheck = 'skipped';
-          details.warning = 'The event count was not rechecked: the cleanup time limit cut the wait';
+          // The stage signal is already aborted here, so a removal would fail at once and blame Hawk.
+          return { status: 'failed',
+            error: new CheckError('monitor_internal', { detail: 'the cleanup time limit ran out during the wait for a late copy; the sweep removes the event' }),
+            details: { recheck: 'skipped' } };
         } else {
           // The read gets one HTTP timeout of its own, so retries inside the transport cannot eat the time the removal needs.
           const recheck = new AbortController();
