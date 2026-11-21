@@ -35,7 +35,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "hawk_e2e_last_status{scenario!=\"endpoints-probe\"}",
+          "expr": "hawk_e2e_last_status",
           "legendFormat": "{{scenario}}"
         }
       ],
@@ -90,7 +90,8 @@
             "lastNotNull"
           ]
         }
-      }
+      },
+      "description": "Status of the last run of each scenario, endpoints-probe included; the probe does not alert through ScenarioFailing."
     },
     {
       "id": 2,
@@ -113,13 +114,34 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (scenario) (increase(hawk_e2e_runs_total{status=\"ok\"}[24h])) / sum by (scenario) (increase(hawk_e2e_runs_total{status=~\"ok|failed|aborted\"}[24h]))",
+          "expr": "sum by (scenario) (increase(hawk_e2e_runs_total{status=\"ok\"}[24h])) / (sum by (scenario) (increase(hawk_e2e_runs_total{status=~\"ok|failed|aborted\"}[24h])) > 0)",
           "legendFormat": "{{scenario}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit"
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.9
+              },
+              {
+                "color": "green",
+                "value": 0.99
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "no runs"
         },
         "overrides": []
       },
@@ -128,7 +150,8 @@
           "calcs": [
             "lastNotNull"
           ]
-        }
+        },
+        "colorMode": "background"
       },
       "description": "Includes endpoints-probe; the alert rules exclude it."
     },
@@ -153,7 +176,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.5, sum by (le, scenario) (rate(hawk_e2e_run_duration_seconds_bucket[6h])))",
+          "expr": "histogram_quantile(0.5, sum by (le, scenario) (rate(hawk_e2e_run_duration_seconds_bucket{scenario!=\"endpoints-probe\"}[6h])))",
           "legendFormat": "p50 {{scenario}}"
         },
         {
@@ -162,7 +185,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, scenario) (rate(hawk_e2e_run_duration_seconds_bucket[6h])))",
+          "expr": "histogram_quantile(0.95, sum by (le, scenario) (rate(hawk_e2e_run_duration_seconds_bucket{scenario!=\"endpoints-probe\"}[6h])))",
           "legendFormat": "p95 {{scenario}}"
         }
       ],

@@ -98,6 +98,32 @@ tests:
         alertname: SuccessRateLow
         exp_alerts: []
 
+  # Six hourly runs, one failed: too few runs for this rule, ScenarioFailing covers it.
+  - interval: 1m
+    input_series:
+      - series: 'hawk_e2e_runs_total{scenario="sourcemaps", status="ok", trigger="schedule"}'
+        values: "0x29 1x59 2x59 3x59 4x59 5x59 5x30"
+      - series: 'hawk_e2e_runs_total{scenario="sourcemaps", status="failed", trigger="schedule"}'
+        values: "0x329 1x30"
+    alert_rule_test:
+      - eval_time: 6h
+        alertname: SuccessRateLow
+        exp_alerts: []
+
+  # Seven runs in six hours, one failed (86%): enough runs, so it fires.
+  - interval: 1m
+    input_series:
+      - series: 'hawk_e2e_runs_total{scenario="check-notification", status="ok", trigger="schedule"}'
+        values: "0x9 1x49 2x49 3x49 4x49 5x49 6x49 6x50"
+      - series: 'hawk_e2e_runs_total{scenario="check-notification", status="failed", trigger="schedule"}'
+        values: "0x309 1x50"
+    alert_rule_test:
+      - eval_time: 6h
+        alertname: SuccessRateLow
+        exp_alerts:
+          - exp_labels: { scenario: check-notification }
+            exp_annotations: { summary: "Less than 90% of check-notification runs passed in 6 hours." }
+
   - interval: 1m
     input_series:
       - series: hawk_e2e_alert_backlog_seconds

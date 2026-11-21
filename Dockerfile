@@ -10,8 +10,7 @@ COPY src ./src
 RUN npm run build
 
 FROM ${NODE_IMAGE} AS runtime
-ENV NODE_ENV=production \
-    INTERNAL_HOST=0.0.0.0 \
+ENV INTERNAL_HOST=0.0.0.0 \
     RECEIVER_HOST=0.0.0.0
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -19,6 +18,7 @@ RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY --from=build /app/dist ./dist
 COPY LICENSE ./
 RUN mkdir -p /app/data && chown node:node /app/data
+VOLUME /app/data
 USER node
 # The internal port is not published: no EXPOSE on purpose.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --start-interval=1s \

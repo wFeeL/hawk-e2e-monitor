@@ -62,6 +62,7 @@ services:
 
   prometheus:
     profiles: [observability]
+    # Keep the tag and digest equal to the promtool image in .github/workflows/ci.yml.
     image: docker.io/prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06
     command:
       - --config.file=/etc/prometheus/prometheus.yml
