@@ -76,7 +76,6 @@ export async function runTelegramDelivery(deps: TelegramDeliveryDeps, options: P
       clock,
       retry: config.retry }, signal)),
     addSecret: deps.addSecret,
-    ...deps.lastHostname === undefined ? {} : { lastHostname: deps.lastHostname },
     ...deps.addressPollMs === undefined ? {} : { addressPollMs: deps.addressPollMs },
     ...tunnelRegistrations === undefined ? {} : { tunnelRegistrations },
     notification,

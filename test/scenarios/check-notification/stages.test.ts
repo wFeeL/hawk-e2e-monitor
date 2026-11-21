@@ -291,65 +291,13 @@ describe('notificationSetupStage', () => {
   });
 });
 
-describe('notificationSetupStage after the address changed', () => {
-  it('waits until the new address answers the self-check, then provisions and remembers the host', async () => {
-    const parts = await scenario({ preProvision: false });
-    const server = await probeServer(hit => Promise.resolve(hit < 3 ? 'not the receiver' : parts.receiver.nonce));
-
-    parts.context.resolveAddress = () => Promise.resolve(server.address);
-    parts.context.lastHostname = { value: 'old.example.test' };
-    parts.context.addressPollMs = 20;
-
-    const result = await run(notificationSetupStage(TIMEOUT_MS), parts.context);
-
-    expect(result.status).toBe('ok');
-    expect(server.hits()).toBe(3);
-    expect(parts.context.lastHostname.value).toBe(server.address.hostname);
-    expect(parts.context.notification.provisioning?.action).toBe('created');
-  });
-
-  it('fails with the last self-check error when the timeout ends first, and leaves the rule and the remembered host alone', async () => {
-    const parts = await scenario({ preProvision: false });
-    const server = await probeServer(() => Promise.resolve('not the receiver'));
-    const before = hawk.rules.version(hawk.projectId);
-
-    parts.context.resolveAddress = () => Promise.resolve(server.address);
-    parts.context.lastHostname = { value: 'old.example.test' };
-    parts.context.addressPollMs = 20;
-
-    const result = await run(notificationSetupStage(400), parts.context);
-
-    expect(result).toMatchObject({ status: 'failed',
-      errorClass: 'receiver_unreachable' });
-    expect(server.hits()).toBeGreaterThan(1);
-    expect(hawk.rules.version(hawk.projectId)).toBe(before);
-    expect(parts.context.lastHostname.value).toBe('old.example.test');
-  });
-
-  it('does not wait for the first address of the process and remembers it', async () => {
+describe('notificationSetupStage for a configured address', () => {
+  it('makes one ordinary probe for a configured address', async () => {
     const parts = await scenario();
-
-    parts.context.lastHostname = {};
-
     const result = await run(notificationSetupStage(TIMEOUT_MS), parts.context);
 
     expect(result.status).toBe('ok');
-    expect(parts.context.lastHostname.value).toBe(parts.address.hostname);
-  });
-
-  it('does not wait when the host is the same as before', async () => {
-    const parts = await scenario({ env: { HTTP_TIMEOUT_MS: '300' } });
-    const server = await probeServer(() => Promise.resolve('not the receiver'));
-
-    parts.context.resolveAddress = () => Promise.resolve(server.address);
-    parts.context.lastHostname = { value: server.address.hostname };
-
-    const result = await run(notificationSetupStage(TIMEOUT_MS), parts.context);
-
-    expect(result).toMatchObject({ status: 'failed',
-      errorClass: 'receiver_unreachable' });
-    // The ordinary probe, not the waiting loop, judged it.
-    expect(server.hits()).toBeLessThanOrEqual(3);
+    expect(result.details?.probes).toBe(1);
   });
 });
 
@@ -540,19 +488,31 @@ describe('notificationSetupStage through a tunnel', () => {
     expect(ms).toBeLessThan(950);
   });
 
-  it('waits for a new tunnel host inside the same window', async () => {
+  it('waits for a tunnel address inside the window', async () => {
     const server = await statusServer(() => ({ status: 200,
       body: 'not the receiver' }));
     const parts = await tunnelScenario(server.address);
-
-    parts.context.lastHostname = { value: 'old.example.test' };
 
     const { result, ms } = await timed(notificationSetupStage(3000), parts.context);
 
     expect(result).toMatchObject({ status: 'failed',
       errorClass: 'receiver_unreachable' });
     expect(ms).toBeLessThan(2700);
-    expect(parts.context.lastHostname.value).toBe('old.example.test');
+  });
+
+  it('a tunnel address gets one ordinary probe when the window is not positive', async () => {
+    const server = await statusServer(() => ({ status: 530,
+      body: 'gap' }));
+    const parts = await tunnelScenario(server.address, { HTTP_TIMEOUT_MS: '500',
+      RETRY_ATTEMPTS: '3',
+      RETRY_DELAYS_MS: '10,10' });
+
+    const { result, ms } = await timed(notificationSetupStage(1000), parts.context);
+
+    expect(result).toMatchObject({ status: 'failed',
+      errorClass: 'receiver_unreachable' });
+    expect(server.hits()).toBe(3);
+    expect(ms).toBeLessThan(1000);
   });
 
   it('keeps the ordinary probe for a fixed address', async () => {
