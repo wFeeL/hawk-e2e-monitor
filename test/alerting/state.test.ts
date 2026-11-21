@@ -694,6 +694,23 @@ describe('shareEpisode: a message that was given up on', () => {
     expect(shareEpisode(first.state, decideAlert(first.state, ok, SETTINGS, NOW, HTTP), ok, []).kind).toBe('recovered');
   });
 
+  it.each([
+    ['skipped for overlap', row({ status: 'skipped',
+      skipReason: 'overlap' })],
+    ['skipped for the rule cache warmup', row({ status: 'skipped',
+      skipReason: 'rule_cache_warmup' })],
+    ['aborted by a stop of the monitor', row({ status: 'aborted',
+      errorClass: 'monitor_stopped' })],
+    ['aborted by a restart of the monitor', row({ status: 'aborted',
+      errorClass: 'monitor_restarted' })],
+  ])('a run that is %s leaves the held back state alone and says nothing', (_name, ignored) => {
+    const result = shareEpisode(dropped, decideAlert(dropped, ignored, SETTINGS, NOW, HTTP), ignored, []);
+
+    expect(result.kind).toBeUndefined();
+    expect(result.state).toEqual(dropped);
+    expect(result.state.announced).toBe(false);
+  });
+
   it('a hung run of a held back scenario sends FAILED', () => {
     const hung = row({ status: 'aborted',
       errorClass: 'run_hung' });
