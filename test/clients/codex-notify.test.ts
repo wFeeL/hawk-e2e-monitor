@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { sendProbe } from '../../src/clients/codex-notify.js';
 import { createTelegramClient } from '../../src/clients/telegram.js';
@@ -5,7 +7,6 @@ import { isCheckError } from '../../src/errors/taxonomy.js';
 import type { CheckError } from '../../src/errors/taxonomy.js';
 import { systemClock } from '../../src/time/clock.js';
 import { startDeadPort } from '../support/dead-port.js';
-import { startEndlessServer } from '../support/endless-server.js';
 import { startFakeCodexNotify } from '../support/fake-codex-notify.js';
 import type { FakeCodexNotify } from '../support/fake-codex-notify.js';
 import { startFakeTelegram } from '../support/fake-telegram.js';
@@ -117,12 +118,20 @@ describe('sendProbe', () => {
     expect(refused.culprit).toBe('network');
     expect(refused.facts.code).toBeDefined();
 
-    // An answer whose body never ends.
-    const endless = await startEndlessServer();
+    // A service that accepts the request and never answers.
+    const silent = createServer();
 
-    open.push(async () => endless.close());
+    await new Promise<void>((resolve) => {
+      silent.listen(0, '127.0.0.1', resolve);
+    });
+    open.push(async () => new Promise<void>((resolve) => {
+      silent.closeAllConnections();
+      silent.close(() => {
+        resolve();
+      });
+    }));
 
-    const slow = await failure(`${endless.url}/u/secretPathToken9`, { ...DEPS,
+    const slow = await failure(`http://127.0.0.1:${String((silent.address() as AddressInfo).port)}/u/secretPathToken9`, { ...DEPS,
       httpTimeoutMs: 100 });
 
     expect(slow.errorClass).toBe('telegram_bot_unavailable');

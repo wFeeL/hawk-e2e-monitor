@@ -1,5 +1,5 @@
 import { CheckError } from '../errors/taxonomy.js';
-import { NetworkError, requestWithRetry } from '../net/http.js';
+import { NetworkError, SMALL_BODY_BYTES, requestWithRetry } from '../net/http.js';
 import type { RetryPolicy } from '../net/retry.js';
 import type { HttpResponse } from '../net/http.js';
 import type { Clock } from '../time/clock.js';
@@ -72,6 +72,7 @@ async function get(url: string, deps: AddressDeps, attempts: number, signal: Abo
   const { response } = await requestWithRetry({ url,
     method: 'GET',
     timeoutMs: deps.httpTimeoutMs,
+    maxBytes: SMALL_BODY_BYTES,
     signal }, 'api', { attempts,
     delaysMs: deps.retry.delaysMs,
     clock: deps.clock,
