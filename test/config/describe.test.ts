@@ -42,7 +42,10 @@ describe('describeConfig', () => {
   });
 
   it('strips userinfo from URLs', () => {
-    const value = summarize({ HAWK_API_URL: 'https://user:pa55@hawk.local/graphql' }).values.HAWK_API_URL;
+    // The loader refuses such an address, so the summary gets it by hand.
+    const env = expectOk(loadConfig(validEnv())).env;
+    const value = describeConfig({ ...env,
+      HAWK_API_URL: 'https://user:pa55@hawk.local/graphql' }).values.HAWK_API_URL;
 
     expect(value).toBe('https://hawk.local/graphql');
     expect(value).not.toContain('user');

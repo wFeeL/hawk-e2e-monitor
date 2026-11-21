@@ -155,11 +155,11 @@ describe('monitoring configuration', () => {
       SCENARIOS: 'check-notification' })));
   });
 
-  it('CHECK_INTERVAL_MS must exceed the run, cleanup and grace', () => {
-    // 480000 + 30000 + 30000 = 540000 with the defaults.
-    expect(messagesOf({ CHECK_INTERVAL_MS: '540000' }, 'CHECK_INTERVAL_MS')[0])
-      .toContain('RUN_TIMEOUT_MS + CLEANUP_TIMEOUT_MS + WATCHDOG_GRACE_MS');
-    expectOk(loadConfig(validEnv({ CHECK_INTERVAL_MS: '540001' })));
+  it('CHECK_INTERVAL_MS must exceed the run, two cleanups and the grace', () => {
+    // 480000 + 2 * 30000 + 30000 = 570000 with the defaults.
+    expect(messagesOf({ CHECK_INTERVAL_MS: '570000' }, 'CHECK_INTERVAL_MS')[0])
+      .toContain('RUN_TIMEOUT_MS + 2 * CLEANUP_TIMEOUT_MS + WATCHDOG_GRACE_MS');
+    expectOk(loadConfig(validEnv({ CHECK_INTERVAL_MS: '570001' })));
   });
 
   it('RULE_CACHE_WARMUP_MS plus the margin must stay below CHECK_INTERVAL_MS with check-notification', () => {

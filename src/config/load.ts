@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import { ENV_SHAPE, envSchema } from './schema.js';
+import { ENV_SHAPE, envSchema, fieldsSchema } from './schema.js';
 import type { LogLevel, ParsedEnv, TransportMode } from './schema.js';
 import type { RetryPolicy } from '../net/retry.js';
 import type { ScenarioName } from '../scenarios/names.js';
@@ -277,6 +277,27 @@ function toConfigError(issue: z.core.$ZodIssue, input: Readonly<Record<string, s
 }
 
 /**
+ * Drops errors that repeat a variable and a text already listed.
+ * @param errors Errors in the order they were found.
+ * @returns The first of each kind, in the same order.
+ */
+function uniqueErrors(errors: readonly ConfigError[]): ConfigError[] {
+  const seen = new Set<string>();
+
+  return errors.filter((error) => {
+    const key = `${error.variable}\u0000${error.message}`;
+
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+
+    return true;
+  });
+}
+
+/**
  * Validates environment variables and builds the configuration.
  * @param env Raw environment; empty strings count as missing.
  * @returns Configuration or all errors found.
@@ -290,11 +311,13 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): L
     input[name] = value === '' ? undefined : value;
   }
 
-  const parsed = envSchema.safeParse(input);
+  // The checks that compare variables run only when every variable is fine on its own, so one bad value yields one line.
+  const fields = fieldsSchema.safeParse(input);
+  const parsed = fields.success ? envSchema.safeParse(input) : fields;
 
   if (!parsed.success) {
     return { ok: false,
-      errors: parsed.error.issues.map(issue => toConfigError(issue, input)) };
+      errors: uniqueErrors(parsed.error.issues.map(issue => toConfigError(issue, input))) };
   }
 
   const values = parsed.data;

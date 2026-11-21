@@ -23,7 +23,6 @@ export function durationMs(defaultMs: number, options: DurationOptions = {}): z.
     .transform(Number)
     .pipe(
       z.number()
-        .int()
         .min(lowest, lowest === 0 ? 'must be 0 or more' : 'must be greater than 0')
         .max(MAX_DURATION_MS, `must not exceed ${MAX_DURATION_MS} ms`)
     )
@@ -43,7 +42,7 @@ export function boundedDurationMs(defaultMs: number, min: number, max: number): 
   return z.string()
     .regex(/^\d+$/, message)
     .transform(Number)
-    .pipe(z.number().int()
+    .pipe(z.number()
       .min(min, message)
       .max(max, message))
     .default(defaultMs);

@@ -130,12 +130,30 @@ function rejectBlockedPort(value: string, ctx: z.RefinementCtx): void {
 }
 
 /**
+ * Tells whether a URL carries no user name or password, which `fetch` refuses and logs would leak.
+ * @param value Address to check.
+ * @returns True when there are no credentials or the text is no URL at all.
+ */
+function hasNoCredentials(value: string): boolean {
+  // Zod runs the refinements even when the URL check failed, and that failure is already reported.
+  if (!URL.canParse(value)) {
+    return true;
+  }
+
+  const url = new URL(value);
+
+  return url.username === '' && url.password === '';
+}
+
+/**
  * Builds the schema for an http(s) URL variable.
  * @returns URL schema with a fixed error message.
  */
 function httpUrl(): z.ZodType<string> {
   return z.url({ protocol: /^https?$/,
-    message: 'must be an http(s) URL' }).superRefine(rejectBlockedPort);
+    message: 'must be an http(s) URL' })
+    .refine(value => hasNoCredentials(value), 'must not contain a user name or password')
+    .superRefine(rejectBlockedPort);
 }
 
 /**
@@ -147,8 +165,8 @@ function httpOrigin(): z.ZodType<string> {
     .refine((value) => {
       const url = new URL(value);
 
-      return url.pathname === '/' && url.search === '' && url.hash === '' && url.username === '' && url.password === '';
-    }, 'must be an origin: scheme, host and optional port, without a path, query or credentials')
+      return url.pathname === '/' && url.search === '' && url.hash === '';
+    }, 'must be an origin: scheme, host and optional port, without a path or query')
     .transform(value => new URL(value).origin);
 }
 
@@ -161,7 +179,7 @@ function portVar(defaultPort: number): z.ZodType<number> {
   return z.string()
     .regex(/^\d+$/, PORT_MESSAGE)
     .transform(Number)
-    .pipe(z.number().int()
+    .pipe(z.number()
       .min(1, PORT_MESSAGE)
       .max(MAX_PORT, PORT_MESSAGE))
     .default(defaultPort);
@@ -196,7 +214,7 @@ function intRange(defaultValue: number, min: number, max: number): z.ZodType<num
   return z.string()
     .regex(/^\d+$/, message)
     .transform(Number)
-    .pipe(z.number().int()
+    .pipe(z.number()
       .min(min, message)
       .max(max, message))
     .default(defaultValue);
@@ -493,12 +511,13 @@ function checkProbe(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx): voi
  */
 function checkMonitoring(env: z.output<typeof baseSchema>, ctx: z.RefinementCtx): void {
   const runAndCleanup = env.RUN_TIMEOUT_MS + env.CLEANUP_TIMEOUT_MS;
-  const watchdog = runAndCleanup + env.WATCHDOG_GRACE_MS;
+  // A hung run keeps the scenario busy for the watchdog and then for one more cleanup.
+  const watchdog = runAndCleanup + env.CLEANUP_TIMEOUT_MS + env.WATCHDOG_GRACE_MS;
 
   if (env.CHECK_INTERVAL_MS <= watchdog) {
     ctx.addIssue({ code: 'custom',
       path: ['CHECK_INTERVAL_MS'],
-      message: `must be greater than RUN_TIMEOUT_MS + CLEANUP_TIMEOUT_MS + WATCHDOG_GRACE_MS (${String(watchdog)} ms)` });
+      message: `must be greater than RUN_TIMEOUT_MS + 2 * CLEANUP_TIMEOUT_MS + WATCHDOG_GRACE_MS (${String(watchdog)} ms)` });
   }
 
   if (env.SCENARIO_STAGGER_MS > env.CHECK_INTERVAL_MS) {
@@ -542,6 +561,14 @@ function checkCombinations(env: z.output<typeof baseSchema>, ctx: z.RefinementCt
 
   if (!URL.canParse(env.HAWK_API_URL) || numbers.some(name => typeof env[name] !== 'number') || !Array.isArray(env.RETRY_DELAYS_MS)) {
     return;
+  }
+
+  if (env.ALERT_NOTIFY_URL !== undefined && env.TELEGRAM_NOTIFY_URL !== undefined
+    && URL.canParse(env.ALERT_NOTIFY_URL) && URL.canParse(env.TELEGRAM_NOTIFY_URL)
+    && new URL(env.ALERT_NOTIFY_URL).href === new URL(env.TELEGRAM_NOTIFY_URL).href) {
+    ctx.addIssue({ code: 'custom',
+      path: ['ALERT_NOTIFY_URL'],
+      message: 'must differ from TELEGRAM_NOTIFY_URL: alerts must not go to the test group' });
   }
 
   // After the wait cleanup reads the card once, capped at one HTTP timeout, then removes the event in up to three attempts.
@@ -594,6 +621,9 @@ function checkCombinations(env: z.output<typeof baseSchema>, ctx: z.RefinementCt
 }
 
 const baseSchema = z.object(ENV_SHAPE);
+
+/** Schema of the single variables, without the checks that compare several of them. */
+export const fieldsSchema = baseSchema;
 
 /** Schema of the whole environment. */
 export const envSchema = baseSchema.superRefine(checkCombinations);

@@ -298,8 +298,8 @@ describe('loadConfig', () => {
     // The check-notification sum is the larger one, so 465000 satisfies both.
     expectOk(loadConfig(validEnv({ RUN_TIMEOUT_MS: '465000',
       CLEANUP_TIMEOUT_MS: '99999999',
-      CHECK_INTERVAL_MS: '200000000',
-      SWEEP_MIN_AGE_MS: '200000000' })));
+      CHECK_INTERVAL_MS: '300000000',
+      SWEEP_MIN_AGE_MS: '300000000' })));
 
     expect(expectErrors(loadConfig(validEnv({ RUN_TIMEOUT_MS: '279999' })))).toContainEqual({ variable: 'RUN_TIMEOUT_MS',
       message: 'must be at least the sum of the timeouts of stages 1-5 (280000 ms)' });
