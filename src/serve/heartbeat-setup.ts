@@ -6,7 +6,7 @@ import { createHeartbeat, heartbeatReason } from '../heartbeat/heartbeat.js';
 import type { Heartbeat } from '../heartbeat/heartbeat.js';
 import type { Logger } from '../log/logger.js';
 import type { MonitorMetrics } from '../metrics/metrics.js';
-import { SCENARIO_TRAITS } from '../scenarios/names.js';
+import { SCENARIO_NAMES, SCENARIO_TRAITS } from '../scenarios/names.js';
 import type { ScenarioName } from '../scenarios/names.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import { heartbeatFirstSeenKey } from '../storage/keys.js';
@@ -62,6 +62,18 @@ export function createServeHeartbeat(setup: HeartbeatSetup): Heartbeat | undefin
         firstSeen.set(scenario, Number.isNaN(seen) ? startedWallMs : seen);
       } catch (error) {
         setup.logger.warn('could not read or store the first sighting of a scenario; counting from the start of the process', { scenario,
+          error });
+      }
+    }
+  }
+
+  // A scenario taken out of the configuration leaves its key behind; it would be stale if the scenario returned.
+  if (setup.kv !== undefined) {
+    for (const scenario of SCENARIO_NAMES.filter(name => !config.monitoring.scenarios.includes(name))) {
+      try {
+        setup.kv.deleteKv(heartbeatFirstSeenKey(scenario));
+      } catch (error) {
+        setup.logger.warn('could not delete the first sighting of a scenario', { scenario,
           error });
       }
     }

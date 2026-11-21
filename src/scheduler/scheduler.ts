@@ -649,7 +649,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       return;
     }
 
-    retryUnfinished(state);
+    // The scenario that owes a write may tick once a day, so every tick retries the writes of all.
+    for (const other of states.values()) {
+      retryUnfinished(other);
+    }
+
     state.lastTickMono = clock.monotonicMs();
     state.lastTickAt = wallIso();
 
@@ -673,8 +677,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     const stagger = state.index * monitoring.staggerMs;
 
     try {
-      const last = history.list({ scenario: state.name,
-        limit: LAST_RUNS_LOOKED_AT }).find(row => row.trigger === 'schedule' && !isMonitorAbort(row) && !(row.status === 'skipped' && row.skipReason === 'overlap'));
+      const scheduled = history.list({ scenario: state.name,
+        limit: LAST_RUNS_LOOKED_AT }).filter(row => row.trigger === 'schedule' && !(row.status === 'skipped' && row.skipReason === 'overlap'));
+      const [newest, older] = scheduled;
+      // A run that keeps killing the process must not restart after every stagger: the second interruption in a row keeps the old schedule.
+      const crashLoop = newest !== undefined && older !== undefined && isMonitorAbort(newest) && isMonitorAbort(older);
+      const last = crashLoop ? newest : scheduled.find(row => !isMonitorAbort(row));
 
       if (last !== undefined) {
         const due = Date.parse(last.startedAt) + intervalOf(state.name) - clock.wallTime().getTime();

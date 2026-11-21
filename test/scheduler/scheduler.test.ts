@@ -423,6 +423,25 @@ describe('restart', () => {
     expect(runners[SEND].calls).toHaveLength(1);
   });
 
+  it('goes back to the old schedule when the two newest scheduled runs were both interrupted', async () => {
+    const history = createHistory(openDatabase(':memory:'));
+
+    seedRow(history, 'rzzzzzzzzzzzzzzzz', 70 * 60_000, 'schedule', abortedOutcome('monitor_restarted', {}, START.toISOString(), 1));
+    seedRow(history, 'ryyyyyyyyyyyyyyyy', 10 * 60_000, 'schedule', abortedOutcome('monitor_stopped', {}, START.toISOString(), 1));
+
+    const { scheduler, clock, runners } = setup({ history,
+      scenarios: [NOTIFY, SEND],
+      intervalMs: HOUR_MS });
+
+    scheduler.start();
+    await clock.advance(STAGGER_MS);
+    expect(runners[SEND].calls).toHaveLength(0);
+    await clock.advance(50 * 60_000 - STAGGER_MS - 1);
+    expect(runners[SEND].calls).toHaveLength(0);
+    await clock.advance(1);
+    expect(runners[SEND].calls).toHaveLength(1);
+  });
+
   it('does not let a manual run move the schedule', async () => {
     const history = createHistory(openDatabase(':memory:'));
 
@@ -1018,6 +1037,33 @@ describe('storage failure', () => {
     expect(scheduler.health().storage).toBe(true);
     expect(finished).toHaveLength(1);
     expect(logger.lines.some(line => line.msg === 'history write recovered')).toBe(true);
+  });
+
+  it('retries the pending write of a slow scenario on the tick of another one', async () => {
+    const real = createHistory(openDatabase(':memory:'));
+    const failing = { finish: false };
+    const history: History = { ...real,
+      finishRun: (runId, outcome) => {
+        if (failing.finish) {
+          throw new Error('disk full');
+        }
+
+        real.finishRun(runId, outcome);
+      } };
+    const { scheduler, clock, runners } = setup({ scenarios: [NOTIFY, PROBE],
+      history,
+      deps: { intervalOf: scenario => scenario === NOTIFY ? 24 * 3_600_000 : 90_000 } });
+
+    scheduler.start();
+    await settle(clock);
+    failing.finish = true;
+    callOf(runners[NOTIFY], 0).resolve();
+    await settle(clock);
+    expect(scheduler.health().storage).toBe(false);
+    failing.finish = false;
+    await clock.advance(STAGGER_MS);
+    expect(rowOf(real, 'raaaaaaaaaaaaaaa').status).toBe('ok');
+    expect(scheduler.health().storage).toBe(true);
   });
 
   it('drops a pending final write when the row was ended another way', async () => {
