@@ -615,14 +615,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   /**
    * Finds when the first tick of a scenario is due.
    * @param state Scenario.
-   * @returns Delay in milliseconds: the rest of the old schedule when the last run is younger than the interval, otherwise the stagger.
+   * @returns Delay in milliseconds: the rest of the old schedule when the last scheduled run is younger than the interval, otherwise the stagger; a manual run, an overlap skip and a run the monitor itself interrupted do not count, so an interrupted run is repeated after the stagger.
    */
   const firstDelay = (state: ScenarioState): number => {
     const stagger = state.index * monitoring.staggerMs;
 
     try {
       const last = history.list({ scenario: state.name,
-        limit: LAST_RUNS_LOOKED_AT }).find(row => !(row.status === 'skipped' && row.skipReason === 'overlap'));
+        limit: LAST_RUNS_LOOKED_AT }).find(row => row.trigger === 'schedule' && !isMonitorAbort(row) && !(row.status === 'skipped' && row.skipReason === 'overlap'));
 
       if (last !== undefined) {
         const due = Date.parse(last.startedAt) + intervalOf(state.name) - clock.wallTime().getTime();

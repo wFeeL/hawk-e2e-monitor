@@ -5,6 +5,7 @@ import type { RunResult } from '../../src/engine/result.js';
 import { createRedactor } from '../../src/errors/redact.js';
 import type { ScenarioName } from '../../src/scenarios/names.js';
 import type { Clock } from '../../src/time/clock.js';
+import { abortedOutcome } from '../../src/storage/outcome.js';
 import { openDatabase } from '../../src/storage/database.js';
 import { createHistory } from '../../src/storage/history.js';
 import type { History } from '../../src/storage/history.js';
@@ -382,6 +383,61 @@ describe('restart', () => {
 
     scheduler.start();
     await clock.advance(INTERVAL_MS - 400_000 - 1);
+    expect(runners[SEND].calls).toHaveLength(0);
+    await clock.advance(1);
+    expect(runners[SEND].calls).toHaveLength(1);
+  });
+
+  /**
+   * Stores a finished run of SEND with a chosen trigger and end.
+   * @param history History to write to.
+   * @param runId Id given to the run.
+   * @param agoMs Age of the start.
+   * @param trigger What started the run.
+   * @param outcome How the run ended.
+   */
+  function seedRow(history: History, runId: string, agoMs: number, trigger: RunRow['trigger'], outcome: RunOutcome): void {
+    history.startRun({ runId,
+      scenario: SEND,
+      sequence: 4,
+      trigger,
+      startedAt: new Date(START.getTime() - agoMs).toISOString() });
+    history.finishRun(runId, outcome);
+  }
+
+  const HOUR_MS = 3_600_000;
+
+  it('reruns after the stagger when the newest scheduled run was stopped by the monitor', async () => {
+    const history = createHistory(openDatabase(':memory:'));
+
+    seedRow(history, 'ryyyyyyyyyyyyyyyy', 3000, 'schedule', abortedOutcome('monitor_stopped', {}, START.toISOString(), 3000));
+
+    const { scheduler, clock, runners } = setup({ history,
+      scenarios: [NOTIFY, SEND],
+      intervalMs: HOUR_MS });
+
+    scheduler.start();
+    await clock.advance(STAGGER_MS - 1);
+    expect(runners[SEND].calls).toHaveLength(0);
+    await clock.advance(1);
+    expect(runners[SEND].calls).toHaveLength(1);
+  });
+
+  it('does not let a manual run move the schedule', async () => {
+    const history = createHistory(openDatabase(':memory:'));
+
+    seed(history, 'rzzzzzzzzzzzzzzzz', 50 * 60_000);
+    seedRow(history, 'ryyyyyyyyyyyyyyyy', 10_000, 'manual', { status: 'ok',
+      finishedAt: START.toISOString(),
+      durationMs: 1,
+      degraded: [] });
+
+    const { scheduler, clock, runners } = setup({ history,
+      scenarios: [NOTIFY, SEND],
+      intervalMs: HOUR_MS });
+
+    scheduler.start();
+    await clock.advance(10 * 60_000 - 1);
     expect(runners[SEND].calls).toHaveLength(0);
     await clock.advance(1);
     expect(runners[SEND].calls).toHaveLength(1);
