@@ -23,6 +23,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:smoke": "vitest run --config vitest.smoke.config.ts",
     "start": "node dist/main.js",
     "start:dev": "node --env-file-if-exists=.env dist/main.js"
   },
