@@ -450,6 +450,23 @@ describe('busy scenario', () => {
   });
 });
 
+describe('runNow after stop', () => {
+  it('starts nothing', async () => {
+    const { scheduler, clock, runners, history } = setup({ scenarios: [SEND] });
+
+    scheduler.start();
+    await settle(clock);
+    await scheduler.stop();
+
+    const calls = runners[SEND].calls.length;
+
+    expect(scheduler.runNow(SEND, 'manual')).toEqual({ started: false,
+      stopped: true });
+    expect(runners[SEND].calls).toHaveLength(calls);
+    expect(history.list({ limit: 100 }).filter(row => row.status === 'running')).toEqual([]);
+  });
+});
+
 describe('failures of the runner', () => {
   it('a runner that throws is aborted monitor_internal with a masked text, and the next tick goes on', async () => {
     const { scheduler, clock, runners, history, logger } = setup({ scenarios: [SEND] });

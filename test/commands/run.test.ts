@@ -219,6 +219,15 @@ describe('runRunCommand', () => {
     expect(result.code).toBe(0);
   });
 
+  it('prints not started for 503', async () => {
+    const { port } = await fake({ sourcemaps: { status: 503,
+      body: { error: 'stopping' } } });
+    const result = await run(['sourcemaps'], configFor(port));
+
+    expect(result.out).toEqual(['sourcemaps  not started: the service is stopping']);
+    expect(result.code).toBe(1);
+  });
+
   it('without names asks every enabled scenario in config order and exits 0 when all are ok', async () => {
     const { port, seen } = await fake({ [SEND]: { status: 200,
       body: OK },

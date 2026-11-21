@@ -67,7 +67,7 @@ function scenarioOf(pathname: string, enabled: readonly ScenarioName[]): Scenari
 
 /**
  * Builds the handler of `POST /runs/<scenario>`, to be registered only when a token is configured.
- * Order of the answers: 401 without the right bearer token, 404 for an unknown or disabled scenario, 409 when the scenario is busy, 429 when the last manual run is too recent, then 202 with the run id, or 200 with the finished run after `?wait=true`.
+ * Order of the answers: 401 without the right bearer token, 404 for an unknown or disabled scenario, 409 when the scenario is busy, 429 when the last manual run is too recent, 503 when the scheduler is stopping, then 202 with the run id, or 200 with the finished run after `?wait=true`.
  * @param deps Scheduler, history, configuration and clock.
  * @returns Route handler.
  */
@@ -133,6 +133,12 @@ export function manualRunHandler(deps: ManualRunsDeps): RouteHandler {
     }
 
     const run = scheduler.runNow(scenario, 'manual');
+
+    if (!run.started && 'stopped' in run) {
+      sendJson(res, HttpStatus.serviceUnavailable, { error: 'stopping' });
+
+      return;
+    }
 
     if (!run.started) {
       sendJson(res, HttpStatus.conflict, { runningRunId: run.runningRunId });

@@ -114,6 +114,14 @@ export interface BusyScenario {
   runningRunId: string;
 }
 
+/** A run that was not started because the scheduler has stopped. */
+export interface StoppedScheduler {
+  /** Discriminant. */
+  started: false;
+  /** Marks the answer as the one of a stopped scheduler. */
+  stopped: true;
+}
+
 /** Health split by reason. */
 export interface SchedulerHealth {
   /** Every scenario ticked in time and the scheduler is running. */
@@ -137,9 +145,9 @@ export interface Scheduler {
    * Starts a run now unless the scenario is busy; does not move the schedule.
    * @param scenario Scenario to run.
    * @param trigger What asked for the run.
-   * @returns The started run or the run in the way.
+   * @returns The started run, the run in the way, or a note that the scheduler has stopped and takes no run.
    */
-  runNow(scenario: ScenarioName, trigger: RunTrigger): BusyScenario | StartedRun;
+  runNow(scenario: ScenarioName, trigger: RunTrigger): BusyScenario | StartedRun | StoppedScheduler;
   /**
    * Describes every scheduled scenario.
    * @returns One entry per scenario.
@@ -756,6 +764,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
     if (state === undefined) {
       throw new Error(`Scenario ${scenario} is not scheduled`);
+    }
+
+    if (stopped) {
+      return { started: false,
+        stopped: true };
     }
 
     if (state.running !== undefined) {

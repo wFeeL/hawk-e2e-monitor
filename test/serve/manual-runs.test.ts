@@ -175,6 +175,18 @@ describe('POST /runs/<scenario>: refusals', () => {
     expect(scheduler.runNow).not.toHaveBeenCalled();
   });
 
+  it('answers 503 while the scheduler is stopping', async () => {
+    const { post, scheduler } = await rig();
+
+    scheduler.runNow.mockReturnValueOnce({ started: false,
+      stopped: true });
+
+    const response = await post(`/runs/${SEND}`);
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: 'stopping' });
+  });
+
   it('answers 429 with Retry-After in whole seconds, rounded up, for a second manual run too soon', async () => {
     const { post, scheduler, clock } = await rig();
 
