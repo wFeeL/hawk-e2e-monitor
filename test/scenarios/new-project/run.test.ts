@@ -269,8 +269,29 @@ describe('failures', () => {
       api: lost }, { sequence: 1 });
 
     expect(result.status).toBe('ok');
+    expect(result.warnings.join('\n')).toContain('did not confirm the creation in time');
     expect(hawk.projects.inWorkspace('fake-workspace')).toHaveLength(1);
     expect(base.record.ids()).toEqual([]);
+  });
+
+  it('a create that fails after the project was made fails the run and the project is removed', async () => {
+    const base = setup();
+    const result = await runNewProject({ ...base.deps,
+      api: { ...base.deps.api,
+        createProject: async (workspaceId, name, signal) => {
+          await base.deps.api.createProject(workspaceId, name, signal);
+
+          throw new CheckError('api_error', { detail: 'index failed' });
+        } } }, { sequence: 1 });
+
+    expect(result).toMatchObject({ status: 'failed',
+      failedStage: 'project_created',
+      errorClass: 'api_error' });
+    expect(result.warnings.join('\n')).toContain('yet the project was created');
+    // The one project left is the monitored one.
+    expect(hawk.projects.inWorkspace('fake-workspace')).toHaveLength(1);
+    expect(base.record.ids()).toEqual([]);
+    expect(base.pending.list()).toEqual([]);
   });
 
   it('a lost answer for a project that was never made is the original failure', async () => {
@@ -434,6 +455,7 @@ describe('a project whose id the monitor may not learn', () => {
         } } }, { sequence: 1 });
 
     expect(result.status).toBe('ok');
+    expect(result.warnings.join('\n')).toContain('did not confirm the creation in time');
     expect(base.pending.list()).toEqual([]);
   });
 

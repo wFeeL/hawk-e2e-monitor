@@ -80,6 +80,15 @@ function textField(body: unknown, key: string): string {
 }
 
 /**
+ * Keeps the strings of a parsed value that should be a list.
+ * @param value Parsed JSON of any shape.
+ * @returns The string items, empty when the value is not an array.
+ */
+function strings(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+/**
  * Finds why a run was skipped.
  * @param body Run as the service sends it.
  * @returns The skip reason, else the first warning of the result, else an empty string.
@@ -122,7 +131,23 @@ function finished(body: unknown): Line {
   if (status === 'ok') {
     const duration = field(body, 'durationMs');
 
-    return { text: typeof duration === 'number' ? `ok  ${formatDuration(duration)}` : 'ok',
+    const degraded = strings(field(body, 'degraded'));
+    const warnings = strings(field(field(body, 'result'), 'warnings'));
+    const parts = ['ok'];
+
+    if (typeof duration === 'number') {
+      parts.push(formatDuration(duration));
+    }
+
+    if (degraded.length > 0) {
+      parts.push(`degraded: ${degraded.join(', ')}`);
+    }
+
+    if (warnings.length > 0) {
+      parts.push(`(${warnings.length} ${warnings.length === 1 ? 'warning' : 'warnings'})`);
+    }
+
+    return { text: parts.join('  '),
       ok: true };
   }
 

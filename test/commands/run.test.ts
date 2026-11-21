@@ -181,6 +181,44 @@ describe('runRunCommand', () => {
     expect(result.code).toBe(1);
   });
 
+  it('names the degraded codes of an ok run', async () => {
+    const { port } = await fake({ sourcemaps: { status: 200,
+      body: { status: 'ok',
+        durationMs: 6100,
+        degraded: ['accept_uncertain', 'quota_usage'],
+        result: { warnings: ['w'] } } } });
+    const result = await run(['sourcemaps'], configFor(port));
+
+    expect(result.out).toEqual(['sourcemaps  ok  6.1 s  degraded: accept_uncertain, quota_usage  (1 warning)']);
+    expect(result.code).toBe(0);
+  });
+
+  it('counts the warnings of an ok run without degraded codes', async () => {
+    const { port } = await fake({ sourcemaps: { status: 200,
+      body: { status: 'ok',
+        durationMs: 1,
+        degraded: [],
+        result: { warnings: ['a', 'b'] } } } });
+    const result = await run(['sourcemaps'], configFor(port));
+
+    expect(result.out[0]).toContain('(2 warnings)');
+    expect(result.out[0]).not.toContain('degraded:');
+    expect(result.code).toBe(0);
+  });
+
+  it('names degraded codes without warnings', async () => {
+    const { port } = await fake({ sourcemaps: { status: 200,
+      body: { status: 'ok',
+        durationMs: 1,
+        degraded: ['quota_usage'],
+        result: { warnings: [] } } } });
+    const result = await run(['sourcemaps'], configFor(port));
+
+    expect(result.out[0]).toContain('degraded: quota_usage');
+    expect(result.out[0]).not.toContain('warning');
+    expect(result.code).toBe(0);
+  });
+
   it('without names asks every enabled scenario in config order and exits 0 when all are ok', async () => {
     const { port, seen } = await fake({ [SEND]: { status: 200,
       body: OK },

@@ -116,7 +116,9 @@ export function releaseUploadedStage(timeoutMs: number): StageSpec<SourcemapsCon
         case 'uncertain':
           return { status: 'uncertain',
             error: outcome.cause,
-            details: { attempts: outcome.attempts } };
+            details: { attempts: outcome.attempts,
+              warning: `The collector did not confirm the release (${outcome.cause.message}); uploads of users may see an error`,
+              degraded: ['accept_uncertain'] } };
         case 'rejected':
           return { status: 'failed',
             error: outcome.error,
