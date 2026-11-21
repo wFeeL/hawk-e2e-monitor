@@ -103,7 +103,7 @@ function settle(run: () => Promise<StageOutcome>): Promise<Settled> {
 
 /**
  * Builds the stage result from the body's end state.
- * @param name Which stage was skipped.
+ * @param name Stage whose body ended.
  * @param settled How the body ended, or `undefined` when it never did.
  * @param reason What aborted the stage, if anything.
  * @param cancelled Whether the run was cancelled from outside.

@@ -92,7 +92,7 @@ export async function tunnelReconnect(context: NotificationContext, waitedMs: nu
     return { warning: UNREADABLE_REGISTRATIONS };
   }
 
-  // A restarted cloudflared counts from zero again, so a lower value is a reconnect too.
+  // A changed value means a reconnect; a restart that leaves the counter at 1 is not seen.
   if (after !== before) {
     return { error: new CheckError('tunnel_reconnected', { waitedMs,
       detail: `registrations ${String(before)} → ${String(after)}`,

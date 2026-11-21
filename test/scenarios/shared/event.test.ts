@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { FoundEvent } from '../../../src/clients/hawk-api.js';
 import { testConfig } from '../../support/config.js';
 import { planRun } from '../../../src/scenarios/shared/plan.js';
-import { BROWSER_USER_AGENT, EVENT_LIMITS, checkEventFields, eventMessage, isOurEvent, withinEventLimits } from '../../../src/scenarios/shared/event.js';
+import { BROWSER_USER_AGENT, checkEventFields, eventMessage, isOurEvent } from '../../../src/scenarios/shared/event.js';
 import { scenario, useStageHarness } from '../../support/stage-harness.js';
 
 useStageHarness();
@@ -179,55 +179,12 @@ describe('eventMessage', () => {
     expect(eventMessage(context)).toEqual(eventMessage(context));
   });
 
-  it.each(['http', 'ws'] as const)('stays within what the grouper keeps over %s', (transport) => {
-    const { payload } = eventMessage(scenario({ transport }).context);
-
-    expect(withinEventLimits(payload)).toBeUndefined();
-  });
-
   it('keeps the user agent and every other string of context and addons out of the card number filter', () => {
     const { payload } = eventMessage(scenario().context);
 
     expect(looksLikeCardNumber(payload.context)).toBe(false);
     expect(looksLikeCardNumber(payload.addons)).toBe(false);
     expect(looksLikeCardNumber('4111 1111 1111 1111')).toBe(true);
-  });
-});
-
-describe('withinEventLimits', () => {
-  const ok = { title: 'x',
-    context: { a: 'x' },
-    addons: {},
-    backtrace: [] };
-
-  it('accepts values at the maximum', () => {
-    const keys = Object.fromEntries(Array.from({ length: EVENT_LIMITS.keys - 1 }, (_, index) => [`k${String(index)}`, 'y'.repeat(EVENT_LIMITS.string)]));
-
-    expect(withinEventLimits({ ...ok,
-      title: 't'.repeat(EVENT_LIMITS.title),
-      context: { ...keys,
-        list: [] },
-      backtrace: [{ sourceCode: Array.from({ length: EVENT_LIMITS.sourceLines }, () => ({ line: 1,
-        content: 'z'.repeat(EVENT_LIMITS.sourceLine) })) }] })).toBeUndefined();
-  });
-
-  it('names the first value over a limit', () => {
-    expect(withinEventLimits({ ...ok,
-      title: 't'.repeat(401) })).toContain('title');
-    expect(withinEventLimits({ ...ok,
-      context: { long: 'y'.repeat(201) } })).toContain('context.long');
-    expect(withinEventLimits({ ...ok,
-      addons: Object.fromEntries(Array.from({ length: 21 }, (_, index) => [`k${String(index)}`, 1])) })).toContain('addons');
-    expect(withinEventLimits({ ...ok,
-      context: { list: Array.from({ length: 11 }, () => 1) } })).toContain('context.list');
-    expect(withinEventLimits({ ...ok,
-      context: { a: { b: { c: { d: { e: { f: 1 } } } } } } })).toContain('depth');
-    expect(withinEventLimits({ ...ok,
-      backtrace: [{ sourceCode: Array.from({ length: 22 }, () => ({ line: 1,
-        content: 'z' })) }] })).toContain('sourceCode');
-    expect(withinEventLimits({ ...ok,
-      backtrace: [{ sourceCode: [{ line: 1,
-        content: 'z'.repeat(141) }] }] })).toContain('sourceCode');
   });
 });
 

@@ -8,7 +8,7 @@ import type { ScenarioContext } from './context.js';
 import { shapeOf, workerMissing } from './event.js';
 
 /**
- * Stage 3: sends the event over the planned transport.
+ * Stage `collector_accept`: sends the event over the planned transport.
  * @param timeoutMs Time limit of the stage.
  * @param beforeSend Called right before the first send, for what must be in place before the event leaves.
  * @returns Stage spec.
@@ -58,7 +58,7 @@ export function collectorAcceptStage(timeoutMs: number, beforeSend?: () => void)
 }
 
 /**
- * Stage 4: waits until the event is visible in the API and checks its fields.
+ * Stage `event_visible`: waits until the event is visible in the API and checks its fields.
  * @param timeoutMs Time limit of the stage.
  * @returns Stage spec.
  */
@@ -103,8 +103,6 @@ export function eventVisibleStage(timeoutMs: number): StageSpec<ScenarioContext>
         timer.abort();
         signal.removeEventListener('abort', onStageAbort);
       }
-
-      state.pollSummary = poll;
 
       if (poll.outcome === 'not_found') {
         const now = clock.monotonicMs();
@@ -167,7 +165,7 @@ export function eventVisibleStage(timeoutMs: number): StageSpec<ScenarioContext>
 }
 
 /**
- * Stage 5: sends the event again and waits until Hawk counts it twice.
+ * Stage `event_repeated`: sends the event again and waits until Hawk counts it twice.
  * @param timeoutMs Time limit of the stage.
  * @param beforeSend Called right before the second send, for what must be known before the repeat leaves.
  * @returns Stage spec.
@@ -196,7 +194,6 @@ export function eventRepeatedStage(timeoutMs: number, beforeSend?: () => void): 
       const startedMs = clock.monotonicMs();
       const outcome = await collector.send(shape.message(context), plan.transport, signal);
 
-      state.repeatOutcome = outcome;
       state.repeatAcceptedAtMs = outcome.kind === 'accepted' ? clock.monotonicMs() : startedMs;
 
       if (outcome.kind === 'rejected') {

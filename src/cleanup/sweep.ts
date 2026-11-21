@@ -2,7 +2,7 @@ import type { EventsCursor, FoundEvent, HawkApi } from '../clients/hawk-api.js';
 import type { Config } from '../config/load.js';
 import { CheckError } from '../errors/taxonomy.js';
 import type { Logger } from '../log/logger.js';
-import { buildTitle } from '../scenarios/shared/plan.js';
+import { RUN_ID_PATTERN, RUN_ID_SOURCE, buildTitle } from '../scenarios/shared/plan.js';
 import { EVENT_SCENARIOS, SENTRY_ENVELOPE } from '../scenarios/names.js';
 import { EXCEPTION_TYPE } from '../scenarios/sentry-envelope/envelope.js';
 import { createdProjects } from '../storage/created-projects.js';
@@ -14,7 +14,6 @@ const PAGE_SIZE = 50;
 const MAX_PAGES = 10;
 const TIMEOUT_FACTOR = 4;
 const FIRST_PASS_DELAY_MS = 300_000;
-const RUN_ID_PATTERN = /^[a-z]{16}$/u;
 // The collector puts the type of the exception in front of the value to make the title of an event that came as an envelope.
 const SENTRY_PREFIX = `${EXCEPTION_TYPE}: `;
 
@@ -133,7 +132,7 @@ function runIdOf(instanceId: string, title: string): string | undefined {
  * @returns Pattern with the run id as its first group.
  */
 function projectNamePattern(instanceId: string): RegExp {
-  return new RegExp(`^\\[e2e:${instanceId.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`)}\\] new-project (r[a-z]{15})$`, 'u');
+  return new RegExp(`^\\[e2e:${instanceId.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`)}\\] new-project (${RUN_ID_SOURCE})$`, 'u');
 }
 
 /**

@@ -17,7 +17,7 @@ function cleanupFailure(error: unknown): unknown {
 }
 
 /**
- * Stage 6: removes the test event when it is ours.
+ * Stage `cleanup`: removes the test event when it is ours.
  * @param timeoutMs Time limit of the stage.
  * @returns Stage spec.
  */
@@ -60,7 +60,7 @@ export function cleanupStage(timeoutMs: number): StageSpec<ScenarioContext> {
           throw refuse(first);
         }
 
-        // The event outran stage 4's deadline; leave a trace so the late arrival is visible in the result.
+        // The event outran the `event_visible` deadline; leave a trace so the late arrival is visible in the result.
         details.foundBySearch = true;
         details.originalEventId = target.originalEventId;
       } else {

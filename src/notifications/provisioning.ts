@@ -93,13 +93,13 @@ interface Outcome {
   difference?: string;
 }
 
-/** What was done about both rules. */
+/** What was done about the rules of all kinds. */
 interface Decided extends ProvisionResult {
   /** First field that made matching change. */
   difference?: string;
 }
 
-/** What was done about one of the two rules. */
+/** What was done about the rules of one kind. */
 interface Decision {
   /** Whether the rule was left, created or replaced. */
   action: ProvisionResult['action'];
@@ -177,7 +177,7 @@ function matchDifference(stored: NotificationRule, wanted: NotificationRuleInput
   return fieldsOf(stored, false).find(([, value], index) => JSON.stringify(value) !== JSON.stringify(right[index]?.[1]))?.[0];
 }
 
-/** The two rules the instance keeps. */
+/** The rules for new events and for repeats; the Telegram rule is built apart. */
 export interface DesiredRules {
   /** Tells about new events on the webhook and loop channels. */
   newEvents: NotificationRuleInput;
@@ -207,7 +207,7 @@ export function desiredRule(deps: Pick<ProvisionerDeps, 'instanceId' | 'loop' | 
 }
 
 /**
- * Builds the two rules the instance should have.
+ * Builds the new-events and threshold rules the instance should have.
  * @param deps Project, instance, secret and loop switch.
  * @param address Public address of the receiver.
  * @returns The new-events rule and the threshold rule: two events of one group in an hour.
@@ -349,7 +349,7 @@ export function createProvisioner(deps: ProvisionerDeps): Provisioner {
 
   /**
    * Reads the rules of one kind, decides what to change and changes it.
-   * @param kind Which of the two rules is meant.
+   * @param kind Which of the three rules is meant.
    * @param wanted The rule the instance should have.
    * @param address Public address of the receiver.
    * @param signal Deadline of the caller.

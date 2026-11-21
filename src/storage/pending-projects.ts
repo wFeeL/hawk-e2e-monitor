@@ -1,7 +1,6 @@
 import type { History } from './history.js';
+import { RUN_ID_PATTERN } from '../scenarios/shared/plan.js';
 import { NEW_PROJECT_PENDING_KEY } from './keys.js';
-
-const RUN_ID_PATTERN = /^[a-z]{16}$/u;
 
 /** A run that asked Hawk for a project and has not learned its id. */
 export interface PendingProject {
