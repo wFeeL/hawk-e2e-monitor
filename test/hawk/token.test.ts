@@ -53,10 +53,18 @@ describe('integration token', () => {
     expect(collectorEndpoints(token, 'https://host.test/prefix/')).toEqual({
       postUrl: 'https://host.test/prefix/',
       healthUrl: 'https://host.test/prefix/health',
-      wsUrl: 'wss://host.test/ws',
+      wsUrl: 'wss://host.test/prefix/ws',
       releaseUrl: 'https://host.test/prefix/release',
       envelopeUrl: 'https://host.test/prefix/api/0/envelope/',
     });
+  });
+
+  it('collectorEndpoints keeps the path prefix in the websocket address', () => {
+    const token = { integrationId: 'abc',
+      secret: 's' };
+
+    expect(collectorEndpoints(token, 'https://h.example/collector').wsUrl).toBe('wss://h.example/collector/ws');
+    expect(collectorEndpoints(token, 'http://h:3000').wsUrl).toBe('ws://h:3000/ws');
   });
 
   it('collectorEndpoints keeps the path prefix for the release and envelope addresses, with or without a closing slash', () => {

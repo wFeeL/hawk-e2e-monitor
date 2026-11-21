@@ -167,9 +167,9 @@ export function describeError(errorClass: ErrorClass, facts: MessageFacts): stri
     case 'accept_uncertain':
       return join(`${where} did not confirm the event`, [': ', what], ['; the run keeps looking for it', '']);
     case 'api_unavailable':
-      return join(`API ${facts.url ?? 'endpoint'} did not respond`, [': ', what], [', ', waited]);
+      return join(`API ${facts.url ?? 'endpoint'} did not respond`, [': ', what], [', ', waited], ['; ', facts.detail === what ? undefined : facts.detail]);
     case 'api_unexpected_response':
-      return join(`Hawk API${facts.url === undefined ? '' : ` at ${facts.url}`} gave a non-GraphQL answer`, [': ', what], ['; check HAWK_API_URL', '']);
+      return join(`Hawk API${facts.url === undefined ? '' : ` at ${facts.url}`} gave a non-GraphQL answer`, [': ', what], [' (', ifSet(facts.detail, text => `${text})`)], ['; check HAWK_API_URL', '']);
     case 'api_query_rejected':
       return withDetail('Monitor query was rejected by the API schema; did the API version change?', facts.detail);
     case 'api_auth_failed':
@@ -261,7 +261,8 @@ export function describeError(errorClass: ErrorClass, facts: MessageFacts): stri
     case 'telegram_bot_unavailable':
       return facts.status === HTTP_NOT_FOUND
         ? withDetail('The @codex_bot notify URL is unknown to the bot; check TELEGRAM_NOTIFY_URL', facts.detail)
-        : join('The @codex_bot notify service did not take the probe message', [': ', what], [' for ', facts.url], ['; ', facts.detail]);
+        : join('The @codex_bot notify service did not take the probe message', [': ', what], [' for ', facts.url], ['; ', facts.detail],
+            ['; if the bot shares a group with another bot, turn on Bot-to-Bot communication in BotFather', '']);
     case 'telegram_not_delivered':
       return withDetail('Hawk formed the notification but it did not reach Telegram', facts.detail);
     case 'alert_rejected':

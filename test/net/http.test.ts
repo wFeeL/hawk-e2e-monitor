@@ -9,6 +9,7 @@ import { createSelfSignedCert } from '../support/tls.js';
 import { reservedPort } from '../support/ports.js';
 import { systemClock } from '../../src/time/clock.js';
 import { CheckError } from '../../src/errors/taxonomy.js';
+import { classifyNetworkError } from '../../src/net/classify.js';
 import { NetworkError, httpRequest, networkFailureToCheckError, requestWithRetry } from '../../src/net/http.js';
 import type { HttpRequest } from '../../src/net/http.js';
 
@@ -103,7 +104,8 @@ describe('httpRequest', () => {
 
     expect(await httpRequest(get(url), 'api')).toEqual({ status: 200,
       contentType: 'text/json; charset=utf8',
-      text: '{"ok":true}' });
+      text: '{"ok":true}',
+      truncated: false });
   });
 
   it('reads at most maxBytes of the body, across chunks', async () => {
@@ -119,6 +121,16 @@ describe('httpRequest', () => {
     expect(response.text).toHaveLength(150);
     expect(response.text.startsWith('a'.repeat(100))).toBe(true);
     expect(response.text.endsWith('b'.repeat(50))).toBe(true);
+    expect(response.truncated).toBe(true);
+  });
+
+  it('does not call a body of exactly maxBytes truncated', async () => {
+    const { url } = await listen((_request, response) => {
+      response.end('a'.repeat(100));
+    });
+
+    expect(await httpRequest(get(url, { maxBytes: 100 }), 'api')).toMatchObject({ text: 'a'.repeat(100),
+      truncated: false });
   });
 
   it('returns the whole body when it is shorter than maxBytes, multi-byte text included', async () => {
@@ -179,6 +191,17 @@ describe('httpRequest', () => {
       beforeSend: true });
   });
 
+  it('a dns or tls failure of a target outside Hawk becomes a CheckError with the network culprit', () => {
+    const cause = Object.assign(new Error('x'), { code: 'ENOTFOUND' });
+    const failed = (target: 'notify' | 'collector'): NetworkError => new NetworkError(
+      classifyNetworkError(new TypeError('fetch failed', { cause }), target), { cause });
+
+    expect(networkFailureToCheckError(failed('notify'), { url: 'https://bot.example/' })).toMatchObject({ errorClass: 'dns_error',
+      culprit: 'network' });
+    expect(networkFailureToCheckError(failed('collector'), { url: 'https://c.example/' })).toMatchObject({ errorClass: 'dns_error',
+      culprit: 'hawk' });
+  });
+
   it('slow response is TIMEOUT after send', async () => {
     const { url } = await listen(() => undefined);
     const error = await failure(get(url, { timeoutMs: 100 }), 'api');
@@ -212,7 +235,8 @@ describe('httpRequest', () => {
 
     expect(await httpRequest(get(url), 'collector')).toEqual({ status: 302,
       contentType: '',
-      text: '' });
+      text: '',
+      truncated: false });
   });
 
   it('a connection reset after send keeps the undici code', async () => {

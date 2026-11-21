@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { ALL_OPERATIONS } from '../../../src/clients/operations.js';
 import { decodeIntegrationToken, tokenKey } from '../../../src/hawk/token.js';
 import { startFakeHawk } from './index.js';
 import type { FakeHawk } from './index.js';
@@ -99,7 +100,7 @@ async function gql(hawk: FakeHawk, operationName: string, variables: Record<stri
   const response = await fetch(hawk.api.url, { method: 'POST',
     headers: new Headers([['content-type', 'application/json'], ...accessToken === undefined ? [] : [['authorization', `Bearer ${accessToken}`] as [string, string]]]),
     body: JSON.stringify({ operationName,
-      query: 'ignored',
+      query: ALL_OPERATIONS.find(operation => operation.name === operationName)?.document ?? 'query Unknown { x }',
       variables }) });
 
   return await response.json() as Answer;

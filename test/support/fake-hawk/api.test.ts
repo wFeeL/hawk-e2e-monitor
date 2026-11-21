@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { startFakeApi } from './api.js';
 import type { FakeApi } from './api.js';
 import type { NotificationRule } from '../../../src/notifications/types.js';
+import { ALL_OPERATIONS } from '../../../src/clients/operations.js';
 import { fakeHawkEnv, startFakeHawk } from './index.js';
 import { createFakeRules } from './rules.js';
 import { createFakeStore } from './store.js';
@@ -177,6 +178,18 @@ async function start(): Promise<Harness> {
     store };
 }
 
+/** Answer of a `WorkspaceQuota` document that asks for few fields. */
+interface ProjectedQuota {
+  /** The `data` object. */
+  data: ProjectedQuotaData;
+}
+
+/** Data of a `WorkspaceQuota` document. */
+interface ProjectedQuotaData {
+  /** Workspaces with the asked fields only. */
+  workspaces: Record<string, unknown>[];
+}
+
 /**
  * Sends one GraphQL request.
  * @param api Target API.
@@ -197,7 +210,7 @@ async function gql(api: FakeApi, operationName: string | undefined, variables: R
   const response = await fetch(api.url, { method: 'POST',
     headers,
     body: JSON.stringify({ operationName,
-      query: 'ignored',
+      query: ALL_OPERATIONS.find(operation => operation.name === operationName)?.document ?? 'query Unknown { x }',
       variables }) });
   const text = await response.text();
   let body: Answer['body'] = {};
@@ -338,6 +351,19 @@ describe('fake api project operations', () => {
       projects: [{ id: PROJECT }] });
   });
 
+  it('answers only the fields the received document asks for', async () => {
+    const { api } = await start();
+    const { accessToken } = await login(api);
+    const response = await fetch(api.url, { method: 'POST',
+      headers: new Headers([['content-type', 'application/json'], ['authorization', `Bearer ${accessToken}`]]),
+      body: JSON.stringify({ operationName: 'WorkspaceQuota',
+        query: 'query WorkspaceQuota($projectId: ID!) { workspaces { id isBlocked } }',
+        variables: { projectId: PROJECT } }) });
+    const body = await response.json() as ProjectedQuota;
+
+    expect(Object.keys(body.data.workspaces[1] ?? {}).toSorted()).toEqual(['id', 'isBlocked']);
+  });
+
   it('WorkspaceQuota follows the workspace knob, including plan null', async () => {
     const { api } = await start();
     const { accessToken } = await login(api);
@@ -407,13 +433,14 @@ describe('fake api project operations', () => {
       search: 'rzzz' }, accessToken)).project.dailyEventsPortion.dailyEvents;
 
     expect(rows).toHaveLength(1);
-    expect(head(rows).event.payload).toEqual({ title: 'foreign rzzz',
+    expect(head(rows).event.payload).toMatchObject({ title: 'foreign rzzz',
       context: {} });
     expect(head(rows).event.totalCount).toBe(1);
     expect(store.all(PROJECT)).toEqual([]);
 
     const card = await gql(api, 'Event', { projectId: PROJECT,
-      eventId: head(rows).event.originalEventId }, accessToken);
+      eventId: head(rows).event.originalEventId,
+      originalEventId: head(rows).event.originalEventId }, accessToken);
 
     expect(dataOf(card).project.event).toBeNull();
   });
@@ -424,9 +451,11 @@ describe('fake api project operations', () => {
     const event = store.ingest(PROJECT, 'errors/javascript', { title: 't',
       context: { runId: 'x' } });
     const card = await gql(api, 'Event', { projectId: PROJECT,
-      eventId: event.id }, accessToken);
+      eventId: event.id,
+      originalEventId: event.id }, accessToken);
     const missing = await gql(api, 'Event', { projectId: PROJECT,
-      eventId: 'f'.repeat(24) }, accessToken);
+      eventId: 'f'.repeat(24),
+      originalEventId: 'f'.repeat(24) }, accessToken);
 
     expect(dataOf(card).project.event).toMatchObject({ id: event.id,
       originalEventId: event.id,
@@ -542,7 +571,8 @@ describe('fake api search pages', () => {
     const { project } = dataOf(await gql(api, 'ProjectDailyEvents', { projectId: PROJECT,
       search: '[e2e:stamp]' }, accessToken));
     const card = dataOf(await gql(api, 'Event', { projectId: PROJECT,
-      eventId: stored.id }, accessToken));
+      eventId: stored.id,
+      originalEventId: stored.id }, accessToken));
 
     expect(head(project.dailyEventsPortion.dailyEvents).event).toMatchObject({ timestamp: 1_794_699_912 });
     expect(card.project.event).toMatchObject({ timestamp: 1_794_699_912 });

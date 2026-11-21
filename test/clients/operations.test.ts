@@ -310,6 +310,69 @@ describe('graphql transport', () => {
       expect(seen).toBe(3);
     });
 
+    /**
+     * Sends one request of an operation to the bare server.
+     * @param operation Operation to send.
+     * @returns The error it throws.
+     */
+    async function failureOn(operation: GraphqlOperation): Promise<unknown> {
+      const { port } = server.address() as AddressInfo;
+
+      return failureOf(transportFor(`http://127.0.0.1:${String(port)}/graphql`).request(operation, { projectId: hawk.projectId,
+        email: 'a',
+        password: 'b' }, 'x', signal));
+    }
+
+    it('403 with HTML on an operation after login is api_unavailable naming the status, not retried', async () => {
+      reply = (response) => {
+        response.statusCode = 403;
+        response.setHeader('content-type', 'text/html');
+        response.end('<html>Forbidden</html>');
+      };
+
+      const error = checkError(await failureOn(PROJECT_TOKEN), 'api_unavailable');
+
+      expect(error.facts).toMatchObject({ status: 403,
+        detail: 'HTTP 403' });
+      expect(error.culprit).toBe('hawk');
+      expect(seen).toBe(1);
+    });
+
+    it('403 with HTML on Login is api_auth_failed', async () => {
+      reply = (response) => {
+        response.statusCode = 403;
+        response.setHeader('content-type', 'text/html');
+        response.end('<html>Forbidden</html>');
+      };
+
+      expect(checkError(await failureOn(LOGIN), 'api_auth_failed').facts.detail).toBe('HTTP 403');
+    });
+
+    it('429 with a JSON body that is not GraphQL is api_unavailable saying rate limited', async () => {
+      reply = (response) => {
+        response.statusCode = 429;
+        response.setHeader('content-type', 'application/json');
+        response.end('{"error":"slow down"}');
+      };
+
+      const error = checkError(await failureOn(PROJECT_TOKEN), 'api_unavailable');
+
+      expect(error.facts.detail).toBe('rate limited (429)');
+      expect(error.message).toContain('rate limited (429)');
+    });
+
+    it('an answer over the limit is api_unexpected_response saying so', async () => {
+      reply = (response) => {
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end('x'.repeat(5 * 1024 * 1024));
+      };
+
+      const error = checkError(await failureOn(PROJECT_TOKEN), 'api_unexpected_response');
+
+      expect(error.facts.detail).toBe('response larger than 4194304 bytes');
+    });
+
     it('503 with HTML stays api_unavailable and is retried', async () => {
       reply = (response) => {
         response.statusCode = 503;
@@ -337,12 +400,39 @@ describe('graphql transport', () => {
     expect(error.facts.projectId).toBe('c'.repeat(24));
   });
 
-  it('GRAPHQL_VALIDATION_FAILED and BAD_USER_INPUT are api_query_rejected', async () => {
-    for (const code of ['GRAPHQL_VALIDATION_FAILED', 'BAD_USER_INPUT']) {
-      hawk.api.knobs.errors = injected('Login', code, 'bad');
-      checkError(await failureOf(transportFor().request(LOGIN, { email: 'a',
-        password: 'b' }, undefined, signal)), 'api_query_rejected');
-    }
+  it('GRAPHQL_VALIDATION_FAILED is api_query_rejected for the monitor to fix', async () => {
+    hawk.api.knobs.errors = injected('Login', 'GRAPHQL_VALIDATION_FAILED', 'bad');
+
+    const error = checkError(await failureOf(transportFor().request(LOGIN, { email: 'a',
+      password: 'b' }, undefined, signal)), 'api_query_rejected');
+
+    expect(error.culprit).toBe('monitor');
+    expect(error.facts.code).toBe('GRAPHQL_VALIDATION_FAILED');
+    expect(error.message).toContain('did the API version change?');
+  });
+
+  it('BAD_USER_INPUT keeps api_query_rejected but blames Hawk and shows the server message', async () => {
+    const token = await login(transportFor());
+
+    hawk.api.knobs.errors = injected('ProjectToken', 'BAD_USER_INPUT', 'There is no project with provided ID');
+
+    const error = checkError(await failureOf(transportFor().request(PROJECT_TOKEN, { projectId: hawk.projectId }, token, signal)), 'api_query_rejected');
+
+    expect(error.culprit).toBe('hawk');
+    expect(error.facts).toMatchObject({ code: 'BAD_USER_INPUT',
+      detail: 'There is no project with provided ID' });
+    expect(error.message).toBe('There is no project with provided ID');
+  });
+
+  it('a long BAD_USER_INPUT message is cut to 200 characters', async () => {
+    const token = await login(transportFor());
+
+    hawk.api.knobs.errors = injected('ProjectToken', 'BAD_USER_INPUT', 'x'.repeat(500));
+
+    const error = checkError(await failureOf(transportFor().request(PROJECT_TOKEN, { projectId: hawk.projectId }, token, signal)), 'api_query_rejected');
+
+    expect(error.message).toBe('x'.repeat(200));
+    expect(error.facts.detail).toBe('x'.repeat(200));
   });
 
   it('INTERNAL_SERVER_ERROR is api_error on an operation of the monitor', async () => {

@@ -33,7 +33,6 @@ describe('classifyNetworkError', () => {
     'SELF_SIGNED_CERT_IN_CHAIN',
     'ERR_TLS_CERT_ALTNAME_INVALID',
     'ERR_TLS_HANDSHAKE_TIMEOUT',
-    'ERR_SSL_WRONG_VERSION_NUMBER',
     'ERR_SSL_SSLV3_ALERT_HANDSHAKE_FAILURE',
     'ERR_SSL_TLSV1_ALERT_PROTOCOL_VERSION',
     'ERR_SSL_TLSV1_UNRECOGNIZED_NAME',
@@ -48,6 +47,7 @@ describe('classifyNetworkError', () => {
   });
 
   it.each([
+    'ERR_SSL_WRONG_VERSION_NUMBER',
     'ERR_SSL_DECRYPTION_FAILED_OR_BAD_RECORD_MAC',
     'ERR_SSL_SSLV3_ALERT_BAD_RECORD_MAC',
     'ERR_SSL_UNEXPECTED_EOF_WHILE_READING',
@@ -125,6 +125,20 @@ describe('classifyNetworkError for the Telegram API', () => {
     expect(classifyNetworkError(fetchFailed('ECONNREFUSED'), 'telegram'))
       .toEqual({ errorClass: 'telegram_api_unavailable',
         code: 'ECONNREFUSED',
-        beforeSend: true });
+        beforeSend: true,
+        culprit: 'network' });
+  });
+});
+
+describe('who is to blame for a dns or tls failure', () => {
+  it.each(['heartbeat', 'notify', 'telegram'] as const)('a failure of %s is the network\'s, not Hawk\'s', (target) => {
+    expect(classifyNetworkError(fetchFailed('ENOTFOUND'), target)).toMatchObject({ errorClass: 'dns_error',
+      culprit: 'network' });
+    expect(classifyNetworkError(fetchFailed('CERT_HAS_EXPIRED'), target)).toMatchObject({ errorClass: 'tls_error',
+      culprit: 'network' });
+  });
+
+  it.each(['api', 'collector', 'garage'] as const)('a failure of %s leaves the culprit of the class', (target) => {
+    expect(classifyNetworkError(fetchFailed('ENOTFOUND'), target)).not.toHaveProperty('culprit');
   });
 });

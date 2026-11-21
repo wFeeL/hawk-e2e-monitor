@@ -74,7 +74,7 @@ export function tokenKey(token: IntegrationToken): string {
 export function collectorEndpoints(token: IntegrationToken, collectorUrl: string | undefined): CollectorEndpoints {
   const raw = collectorUrl ?? `https://${token.integrationId}.k1.hawk.so/`;
   const base = new URL(raw.endsWith('/') ? raw : `${raw}/`);
-  const ws = new URL('/ws', base.origin);
+  const ws = new URL('ws', base);
 
   ws.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
 

@@ -80,3 +80,39 @@ describe('redact', () => {
     expect(stripTokenSecret('Bad: thing')).toBe('Bad: thing');
   });
 });
+
+describe('redaction of encoded forms and nested errors', () => {
+  const secret = 'pa ss"w/ord9';
+
+  it('masks the URL-encoded and the JSON-escaped form of a secret', () => {
+    const redact = createRedactor([secret]);
+
+    expect(redact(`a ${encodeURIComponent(secret)} b`)).toBe('a *** b');
+    expect(redact(`{"v":${JSON.stringify(secret)}}`)).toBe('{"v":"***"}');
+    expect(redact(`plain ${secret}`)).toBe('plain ***');
+  });
+
+  it('a mutable redactor masks the encoded forms of a secret it learned later', () => {
+    const { redact, add } = createMutableRedactor([]);
+
+    add(secret);
+    expect(redact(encodeURIComponent(secret))).toBe('***');
+  });
+
+  it('redactDeep turns an Error inside an array into a plain object with masked fields', () => {
+    const redact = createRedactor([secret]);
+    const error = new Error(`failed for ${secret}`);
+    const [result] = redactDeep([error], redact);
+
+    expect(result).toEqual({ name: 'Error',
+      message: 'failed for ***',
+      stack: expect.not.stringContaining('ord9') as unknown });
+    expect(JSON.stringify(result)).not.toContain('ord9');
+  });
+
+  it('redactDeep masks object keys', () => {
+    const redact = createRedactor([secret]);
+
+    expect(redactDeep(Object.fromEntries([[`key ${secret}`, 1]]), redact)).toEqual(Object.fromEntries([['key ***', 1]]));
+  });
+});

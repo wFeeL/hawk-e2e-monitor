@@ -121,13 +121,34 @@ describe('hawk api session', () => {
     expect((await checkErrorOf(apiFor().ensureSession(signal))).errorClass).toBe('api_auth_failed');
   });
 
-  it('login argument validation is api_auth_failed', async () => {
+  it('UNAUTHENTICATED on login is api_auth_failed', async () => {
+    hawk.api.knobs.errors = injected('Login', 'UNAUTHENTICATED', 'Wrong email or password');
+
+    expect((await checkErrorOf(apiFor().ensureSession(signal))).errorClass).toBe('api_auth_failed');
+  });
+
+  it('login argument validation is api_auth_failed and says the format was rejected', async () => {
     hawk.api.knobs.errors = injected('Login', 'BAD_USER_INPUT', 'Wrong email format');
 
     const error = await checkErrorOf(apiFor().ensureSession(signal));
 
     expect(error.errorClass).toBe('api_auth_failed');
     expect(error.facts.detail).toBe('Wrong email format');
+    expect(error.message).toBe('Hawk rejected the format of HAWK_EMAIL or HAWK_PASSWORD: Wrong email format');
+  });
+
+  it('a renamed login mutation (HTTP 400) is not turned into an auth failure', async () => {
+    hawk.api.knobs.errors = Object.fromEntries([['Login', { code: 'GRAPHQL_VALIDATION_FAILED',
+      message: 'Cannot query field "login" on type "Mutation".',
+      status: 400 }]]);
+
+    expect((await checkErrorOf(apiFor().ensureSession(signal))).errorClass).toBe('api_query_rejected');
+  });
+
+  it('a release that Hawk reports as not found stays "not saved yet"', async () => {
+    hawk.api.knobs.errors = injected('ReleaseDetails', 'BAD_USER_INPUT', 'Release "x" not found for project (id: p)');
+
+    expect(await apiFor().releaseDetails(hawk.projectId, 'x', signal)).toBeNull();
   });
 
   it('unavailable API during login keeps its class', async () => {

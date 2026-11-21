@@ -9,11 +9,15 @@ import { HttpStatus } from '../net/http-status.js';
 export const ACCESS_EXPIRED = 'ACCESS_TOKEN_EXPIRED_ERROR';
 /** Hawk code for a missing or invalid login. */
 export const UNAUTHENTICATED = 'UNAUTHENTICATED';
+/** Hawk code for an argument that failed its own validation or names something that does not exist. */
+export const BAD_USER_INPUT = 'BAD_USER_INPUT';
 /** Largest API answer the client reads (4 MiB); the rest of a longer body is dropped. */
 export const MAX_API_BODY_BYTES = 4_194_304;
 
 const AUTH_CODES = new Set([UNAUTHENTICATED, ACCESS_EXPIRED, 'SSO_REQUIRED']);
-const REJECTED_CODES = new Set(['GRAPHQL_VALIDATION_FAILED', 'BAD_USER_INPUT']);
+const LOGIN_OPERATION = 'Login';
+const DOMAIN_MESSAGE_LENGTH = 200;
+const REJECTED_CODES = new Set(['GRAPHQL_VALIDATION_FAILED', BAD_USER_INPUT]);
 
 /** One GraphQL document with its name. */
 export interface GraphqlOperation {
@@ -113,6 +117,38 @@ function parseObject(text: string): GraphqlBody | undefined {
 }
 
 /**
+ * Builds the error of a refused query.
+ * `BAD_USER_INPUT` is a domain answer of Hawk, such as an unknown project, so it blames Hawk and shows the server's text; the other codes mean the monitor's query is wrong.
+ * @param url API address.
+ * @param status HTTP status.
+ * @param code GraphQL code of the first error, empty when there is none.
+ * @param message Message of the first error, empty when there is none.
+ * @returns `api_query_rejected` error carrying the code.
+ */
+function queryRejected(url: string, status: number, code: string, message: string): CheckError {
+  const facts = { url,
+    status,
+    ...code === '' ? {} : { code },
+    detail: message === '' ? undefined : message.slice(0, DOMAIN_MESSAGE_LENGTH) };
+
+  if (code === BAD_USER_INPUT && message !== '') {
+    return new CheckError('api_query_rejected', facts, { culprit: 'hawk',
+      message: message.slice(0, DOMAIN_MESSAGE_LENGTH) });
+  }
+
+  return new CheckError('api_query_rejected', facts, code === BAD_USER_INPUT ? { culprit: 'hawk' } : {});
+}
+
+/**
+ * Tells a GraphQL answer from the page of a proxy that happens to be JSON.
+ * @param body Parsed body, if it was an object.
+ * @returns True when the body has `data` or `errors`.
+ */
+function isGraphqlAnswer(body: GraphqlBody | undefined): boolean {
+  return body !== undefined && ('data' in body || 'errors' in body);
+}
+
+/**
  * Tells a passing fault from a final answer: a 5xx, or a 408 or 429 that is not a GraphQL answer.
  * A proxy or a rate limiter sends those as plain pages, and a repeat may succeed.
  * @param status HTTP status.
@@ -185,9 +221,26 @@ export function createGraphqlTransport(options: GraphqlTransportOptions): Graphq
       const waitedMs = Math.round(clock.monotonicMs() - startedAt);
       const body = parseObject(response.text);
 
-      if (isTransient(response.status, response.text)) {
+      if (response.truncated) {
+        throw new CheckError('api_unexpected_response', { url,
+          status: response.status,
+          detail: `response larger than ${String(MAX_API_BODY_BYTES)} bytes` });
+      }
+
+      const rateLimited = response.status === HttpStatus.tooManyRequests;
+
+      if (isTransient(response.status, response.text) || (rateLimited && !isGraphqlAnswer(body))) {
         throw new CheckError('api_unavailable', { url,
           status: response.status,
+          ...rateLimited ? { detail: 'rate limited (429)' } : {},
+          waitedMs });
+      }
+
+      // A proxy or a firewall answers 401 or 403 with its own page; Hawk itself reports auth problems inside GraphQL answers.
+      if (!isGraphqlAnswer(body) && (response.status === HttpStatus.unauthorized || response.status === HttpStatus.forbidden)) {
+        throw new CheckError(operation.name === LOGIN_OPERATION ? 'api_auth_failed' : 'api_unavailable', { url,
+          status: response.status,
+          detail: `HTTP ${String(response.status)}`,
           waitedMs });
       }
 
@@ -203,9 +256,7 @@ export function createGraphqlTransport(options: GraphqlTransportOptions): Graphq
 
       // Apollo answers a document that fails validation with HTTP 400 and `errors[]`; for Garage documents the list says what is wrong.
       if (response.status === HttpStatus.badRequest && !(operation.garage === true && first)) {
-        throw new CheckError('api_query_rejected', { url,
-          status: response.status,
-          detail: message || undefined });
+        throw queryRejected(url, response.status, code, message);
       }
 
       if (first) {
@@ -228,7 +279,11 @@ export function createGraphqlTransport(options: GraphqlTransportOptions): Graphq
             detail: message });
         }
 
-        throw new CheckError(REJECTED_CODES.has(code) ? 'api_query_rejected' : 'api_error', { url,
+        if (REJECTED_CODES.has(code)) {
+          throw queryRejected(url, response.status, code, message);
+        }
+
+        throw new CheckError('api_error', { url,
           status: response.status,
           detail: message });
       }
