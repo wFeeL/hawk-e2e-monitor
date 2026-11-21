@@ -101,8 +101,10 @@ describe('a healthy run', () => {
     const result = await run({ env: { HTTP_TIMEOUT_MS: '300',
       COLLECTOR_ACCEPT_TIMEOUT_MS: '2000' } });
 
+    expect(result.status).toBe('ok');
     expect(stageOf(result, 'release_uploaded').status).toBe('uncertain');
     expect(stageOf(result, 'release_saved').status).toBe('ok');
+    expect(result.warnings.join('\n')).toContain('did not confirm the release');
   });
 });
 

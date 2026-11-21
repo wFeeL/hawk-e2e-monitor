@@ -104,6 +104,14 @@ describe('outcomeOf', () => {
       degraded: ['accept_uncertain'] });
   });
 
+  it('an unconfirmed release upload of an ok run is accept_uncertain', () => {
+    const result = runResultFixture({ stages: [stageFixture('release_uploaded', 'uncertain', 10, { details: { degraded: ['accept_uncertain'] } }),
+      stageFixture('release_saved')] });
+
+    expect(outcomeOf(result, CONTEXT)).toMatchObject({ status: 'ok',
+      degraded: ['accept_uncertain'] });
+  });
+
   it('accept_uncertain: the collector did not confirm the repeated event', () => {
     const result = runResultFixture({ stages: [stageFixture('collector_accept'),
       stageFixture('event_repeated', 'ok', 10, { details: { repeatUncertain: true } })] });
