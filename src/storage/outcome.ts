@@ -6,7 +6,7 @@ import type { ErrorClass, MessageFacts } from '../errors/taxonomy.js';
 import { scenarioSettings } from '../config/scenario.js';
 import { CHECK_NOTIFICATION, ENDPOINTS_PROBE, EVENT_SCENARIOS, SEND_AND_RECEIVE_EVENT, TELEGRAM_DELIVERY } from '../scenarios/names.js';
 import type { RunStart } from './types.js';
-import type { RunOutcome, RunRow } from './types.js';
+import type { RunOutcome, RunRow, RunWithResult } from './types.js';
 import { MS_PER_DAY } from '../time/units.js';
 
 const DAYS_PER_PERIOD = 30;
@@ -128,9 +128,9 @@ export function abortedOutcome(errorClass: ErrorClass, facts: MessageFacts, at: 
  * Builds the row a run would have in the history, for a write that failed.
  * @param start What was recorded when the run started.
  * @param outcome How it ended.
- * @returns Row with `id` 0.
+ * @returns Row with `id` 0, carrying the result as `history.get` would, so a reader of the row keeps the warnings.
  */
-export function rowOf(start: RunStart, outcome: RunOutcome): RunRow {
+export function rowOf(start: RunStart, outcome: RunOutcome): RunWithResult {
   const { result } = outcome;
 
   return { id: 0,
@@ -145,6 +145,7 @@ export function rowOf(start: RunStart, outcome: RunOutcome): RunRow {
     ...outcome.message === undefined ? {} : { message: outcome.message },
     ...outcome.skipReason === undefined ? {} : { skipReason: outcome.skipReason },
     degraded: outcome.degraded,
+    ...result === undefined ? {} : { result },
     stages: (result?.stages ?? []).map(stage => ({ name: stage.name,
       status: stage.status,
       durationMs: stage.durationMs,

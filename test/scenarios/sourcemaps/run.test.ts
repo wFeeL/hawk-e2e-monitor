@@ -103,6 +103,7 @@ describe('a healthy run', () => {
 
     expect(result.status).toBe('ok');
     expect(stageOf(result, 'release_uploaded').status).toBe('uncertain');
+    expect(stageOf(result, 'release_uploaded').details?.degraded).toEqual(['accept_uncertain']);
     expect(stageOf(result, 'release_saved').status).toBe('ok');
     expect(result.warnings.join('\n')).toContain('did not confirm the release');
   });

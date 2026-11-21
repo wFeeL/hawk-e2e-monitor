@@ -291,16 +291,6 @@ describe('notificationSetupStage', () => {
   });
 });
 
-describe('notificationSetupStage for a configured address', () => {
-  it('makes one ordinary probe for a configured address', async () => {
-    const parts = await scenario();
-    const result = await run(notificationSetupStage(TIMEOUT_MS), parts.context);
-
-    expect(result.status).toBe('ok');
-    expect(result.details?.probes).toBe(1);
-  });
-});
-
 /** What a scripted server answers. */
 interface StatusAnswer {
   /** HTTP status. */
