@@ -28,13 +28,26 @@ const STOP_SIGNALS = ['SIGTERM', 'SIGINT'] as const;
 async function serve(config: Config, env: ParsedEnv): Promise<number> {
   const logger = createLogger({ level: config.logLevel });
 
+  let app: ServeHandle | undefined;
+
+  // A lease left behind would make the restarted process wait for it to expire.
+  const freeLease = (): void => {
+    try {
+      app?.releaseLease();
+    } catch {
+      // The process is ending anyway.
+    }
+  };
+
   process.on('unhandledRejection', (reason: unknown) => {
     logger.error('unhandled rejection', { error: reason });
+    freeLease();
     // eslint-disable-next-line n/no-process-exit -- a fatal error ends the process and the container restarts it
     process.exit(1);
   });
   process.on('uncaughtException', (error: Error) => {
     logger.error('uncaught exception', { error });
+    freeLease();
     // eslint-disable-next-line n/no-process-exit -- a fatal error ends the process and the container restarts it
     process.exit(1);
   });
@@ -54,7 +67,6 @@ async function serve(config: Config, env: ParsedEnv): Promise<number> {
     logger.warn('ALERT_NOTIFY_URL is not set: alerts are written to the log and not delivered');
   }
 
-  let app: ServeHandle | undefined;
   const starting = new AbortController();
   let stopRequested = false;
   let pendingSignal = '';

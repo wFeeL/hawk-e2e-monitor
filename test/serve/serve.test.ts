@@ -1063,6 +1063,44 @@ describe('serve: start and stop', () => {
     expect(inspect(harness, history => history.getKv(LEASE_KEY))).toBeUndefined();
   });
 
+  it('frees the lease before the process exits after three hung runs, so the next serve starts at once', async () => {
+    const harness = await launch({ intervalMs: 100,
+      watchdogGraceMs: 50,
+      timeouts: { run: 100,
+        cleanup: 50 },
+      identity: { hostname: 'box-a',
+        pid: 1 },
+      // The runner never ends and ignores its signal, as one stuck in a call would.
+      runners: { [SEND]: async () => new Promise<RunResult>(() => undefined) } });
+    const leaseAtExit: Array<string | undefined> = [];
+
+    harness.exit.mockImplementation(() => {
+      leaseAtExit.push(inspect(harness, history => history.getKv(LEASE_KEY)));
+    });
+
+    await vi.waitFor(() => {
+      expect(harness.exit).toHaveBeenCalledWith(1);
+    }, WAIT);
+    expect(leaseAtExit[0]).toBeUndefined();
+
+    const second = await startServe({ config: harness.config,
+      logger: memoryLogger(),
+      identity: { hostname: 'box-b',
+        pid: 2 } });
+
+    await second.stop();
+  });
+
+  it('frees the lease on request of the process and ignores a repeated request', async () => {
+    const harness = await launch({ identity: { hostname: 'box-a',
+      pid: 1 } });
+
+    expect(inspect(harness, history => history.getKv(LEASE_KEY))).toContain('"pid":1');
+    harness.handle.releaseLease();
+    harness.handle.releaseLease();
+    expect(inspect(harness, history => history.getKv(LEASE_KEY))).toBeUndefined();
+  });
+
   it('waits one renewal period for a lease of the same host and process id, then takes it over when it did not move', async () => {
     const waits: number[] = [];
     const harness = await launch({ identity: { hostname: 'box-a',
