@@ -135,7 +135,10 @@ function failedRow(clock: FakeClock, overrides: Partial<RunRow> = {}): RunRow {
 function okRow(clock: FakeClock): RunRow {
   return failedRow(clock, { status: 'ok',
     runId: 'rbbbbbbbbbbbbbbbb',
-    sequence: 2 });
+    sequence: 3,
+    stages: [{ name: 'event_visible',
+      status: 'ok',
+      durationMs: 1 }] });
 }
 
 /**
@@ -191,6 +194,7 @@ describe('alerter: threshold per scenario', () => {
     const { alerter, clock, bot } = await setup({ probeThreshold: 3 });
     const probe = (status: RunRow['status'], sequence: number): RunRow => failedRow(clock, { scenario: 'endpoints-probe',
       status,
+      failedStage: 'garage_availability',
       sequence,
       runId: `r${String.fromCodePoint(96 + sequence).repeat(16)}` });
 

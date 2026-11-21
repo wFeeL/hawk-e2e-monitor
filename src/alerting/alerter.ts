@@ -9,7 +9,7 @@ import type { AlertStateRow } from '../storage/types.js';
 import type { RunRow } from '../storage/types.js';
 import type { Clock } from '../time/clock.js';
 import { sendNotify } from './notify.js';
-import { decideAlert } from './state.js';
+import { decideAlert, plannedTransport } from './state.js';
 import type { AlertKind } from './state.js';
 import { alertText, plainAlertText, storageFailingText } from './text.js';
 import type { AlertTextInput } from './text.js';
@@ -301,7 +301,9 @@ export function createAlerter(deps: AlerterDeps): Alerter {
         }
       }
 
-      const decision = decideAlert(previous, row, { alertAfterFailures: scenarioSettings(config, row.scenario).alertAfterFailures }, now);
+      const decision = decideAlert(previous, row, { alertAfterFailures: scenarioSettings(config, row.scenario).alertAfterFailures,
+        repeatsOn: config.repeatEveryNRuns > 0,
+        transportMode: config.transportMode }, now, { transport: result?.transport ?? plannedTransport(row.scenario, row.sequence, config.transportMode) });
       const { kind } = decision;
 
       // A state derived without the stored one would hide the real episode from every later run, so it is not kept.

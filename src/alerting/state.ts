@@ -1,7 +1,23 @@
-import type { AlertStateRow } from '../storage/types.js';
+import type { Transport } from '../clients/collector.js';
+import type { TransportMode } from '../config/schema.js';
+import type { DegradedCode, StageName } from '../engine/result.js';
+import { ENDPOINTS_PROBE, NEW_PROJECT, SENTRY_ENVELOPE, SOURCEMAPS } from '../scenarios/names.js';
+import type { ScenarioName } from '../scenarios/names.js';
+import { chooseTransport } from '../scenarios/shared/plan.js';
 import { isMonitorAbort } from '../storage/outcome.js';
-import type { DegradedCode } from '../engine/result.js';
-import type { RunRow } from '../storage/types.js';
+import type { AlertStateRow, OpenPair, RunRow } from '../storage/types.js';
+
+/** Stages whose outcome depends on the transport of the run: the event takes a different path in the collector. */
+export const VARIANT_STAGES: readonly StageName[] = ['collector_accept', 'event_visible', 'event_repeated', 'threshold_formed'];
+
+/** Stages that only a run with a repeat executes. */
+export const REPEAT_STAGES: readonly StageName[] = ['event_repeated', 'threshold_formed'];
+
+/** Scenarios that send their event over HTTP whatever the configuration says. */
+export const FORCED_HTTP: readonly ScenarioName[] = [SOURCEMAPS, SENTRY_ENVELOPE, NEW_PROJECT];
+
+/** A transport, or `*` for a failure that does not depend on one. */
+export type PairTransport = Transport | '*';
 
 /** What a transition tells the operator. */
 export type AlertKind = 'degraded' | 'failed' | 'recovered' | 'recovered_degraded' | 'still_failing';
@@ -10,6 +26,16 @@ export type AlertKind = 'degraded' | 'failed' | 'recovered' | 'recovered_degrade
 export interface AlertSettings {
   /** Failed runs in a row that raise the alert. */
   alertAfterFailures: number;
+  /** True while runs repeat the event, which is when a repeat stage can run. */
+  repeatsOn: boolean;
+  /** Transport mode of the configuration. */
+  transportMode: TransportMode;
+}
+
+/** What the decision needs to know about the run besides its row. */
+export interface RunInfo {
+  /** Transport of the run; `*` for a scenario that sends no event. */
+  transport: PairTransport;
 }
 
 /** The new state and the message it calls for. */
@@ -18,6 +44,88 @@ export interface AlertDecision {
   state: AlertStateRow;
   /** Message to send; absent when nothing changed for the operator. */
   kind?: AlertKind;
+}
+
+/**
+ * Finds the transport a run of a scenario uses when its result is not known.
+ * @param scenario Scenario of the run.
+ * @param sequence Run number.
+ * @param mode Transport mode of the configuration.
+ * @returns HTTP for a forced scenario, the alternation otherwise, `*` for the probe.
+ */
+export function plannedTransport(scenario: ScenarioName, sequence: number, mode: TransportMode): PairTransport {
+  if (scenario === ENDPOINTS_PROBE) {
+    return '*';
+  }
+
+  return FORCED_HTTP.includes(scenario) ? 'http' : chooseTransport(sequence, mode);
+}
+
+/**
+ * Lists the transports the configuration makes a scenario use.
+ * @param scenario Scenario whose runs are listed.
+ * @param mode Transport mode of the configuration.
+ * @returns `*` for the probe, HTTP for a forced scenario, both or the fixed one otherwise.
+ */
+export function producedTransports(scenario: ScenarioName, mode: TransportMode): readonly PairTransport[] {
+  if (scenario === ENDPOINTS_PROBE) {
+    return ['*'];
+  }
+
+  if (FORCED_HTTP.includes(scenario)) {
+    return ['http'];
+  }
+
+  return mode === 'alternate' ? ['http', 'ws'] : [mode];
+}
+
+/**
+ * Names the failure of a run as the pair that a later run has to cover.
+ * @param row Failed run.
+ * @param transport Transport of the run.
+ * @returns `<stage>@<transport>`; the transport is kept for a stageless failure and a variant stage, `*` otherwise.
+ */
+export function pairOf(row: RunRow, transport: PairTransport): string {
+  const stage = row.failedStage ?? 'run';
+
+  return `${stage}@${stage === 'run' || VARIANT_STAGES.includes(stage) ? transport : '*'}`;
+}
+
+/**
+ * Tells whether a finished run covers a failure that is still open.
+ * A failed run covers only what it passed; success also covers what it skipped by design.
+ * @param pair Open pair, `<stage>@<transport>`.
+ * @param row Finished run.
+ * @param transport Transport of the run.
+ * @param settings Configuration the decision runs under.
+ * @returns True when the failure is no longer there.
+ */
+export function covers(pair: string, row: RunRow, transport: PairTransport, settings: AlertSettings): boolean {
+  const split = pair.lastIndexOf('@');
+  const stage = pair.slice(0, split);
+  const pairTransport = pair.slice(split + 1);
+  const success = row.status === 'ok';
+
+  if (success && pairTransport !== '*' && !(producedTransports(row.scenario, settings.transportMode) as readonly string[]).includes(pairTransport)) {
+    return true;
+  }
+
+  if (stage === 'run') {
+    return success && pairTransport === transport;
+  }
+
+  const result = row.stages.find(item => item.name === stage)?.status;
+  const variant = VARIANT_STAGES.includes(stage as StageName);
+
+  if (result === 'ok') {
+    return !variant || pairTransport === transport;
+  }
+
+  if (!success || (result !== undefined && result !== 'skipped')) {
+    return false;
+  }
+
+  return REPEAT_STAGES.includes(stage as StageName) ? !settings.repeatsOn : !variant;
 }
 
 /**
@@ -41,15 +149,37 @@ function sameCodes(left: readonly DegradedCode[], right: readonly DegradedCode[]
 }
 
 /**
+ * Adds a failure to the open pairs.
+ * @param open Pairs still open.
+ * @param pair Pair of the new failure.
+ * @returns The list with the pair added or its count raised.
+ */
+function withPair(open: readonly OpenPair[], pair: string): OpenPair[] {
+  if (!open.some(item => item.pair === pair)) {
+    return [...open, { pair,
+      count: 1 }];
+  }
+
+  return open.map(item => item.pair === pair
+    ? { ...item,
+        count: item.count + 1 }
+    : item);
+}
+
+/**
  * Decides the alert state after a failed run.
- * @param previous State before the run.
+ * @param previous State before the run, with the pairs the run covered already taken out.
  * @param row Failed run.
  * @param threshold Failed runs in a row that raise the alert.
  * @param now Current time, ISO.
+ * @param pair Pair the failed run adds, `<stage>@<transport>`.
  * @returns New state and message kind.
  */
-function afterFailure(previous: AlertStateRow, row: RunRow, threshold: number, now: string): AlertDecision {
+function afterFailure(previous: AlertStateRow, row: RunRow, threshold: number, now: string, pair: string): AlertDecision {
   const streak = previous.failureStreak + 1;
+  const open = withPair(previous.open, pair);
+  const count = open.find(item => item.pair === pair)?.count ?? 1;
+  const streakStartedAt = (previous.open.length > 0 ? previous.streakStartedAt : undefined) ?? row.startedAt;
   const last = { ...row.errorClass === undefined ? {} : { lastClass: row.errorClass },
     ...row.failedStage === undefined ? {} : { lastStage: row.failedStage },
     lastRunId: row.runId };
@@ -62,13 +192,17 @@ function afterFailure(previous: AlertStateRow, row: RunRow, threshold: number, n
       ...last,
       failureStreak: streak,
       episodeFailures: previous.episodeFailures + 1,
+      open,
+      streakStartedAt,
       updatedAt: now },
     ...changed ? { kind: 'still_failing' } : {} };
   }
 
-  if (streak < threshold) {
+  if (streak < threshold && count < threshold) {
     return { state: { ...previous,
       failureStreak: streak,
+      open,
+      streakStartedAt,
       updatedAt: now } };
   }
 
@@ -77,10 +211,11 @@ function afterFailure(previous: AlertStateRow, row: RunRow, threshold: number, n
     failureStreak: streak,
     ...last,
     episodeStartedAt: row.startedAt,
-    episodeFailures: streak,
+    episodeFailures: open.reduce((total, item) => total + item.count, 0),
     degraded: [],
-    open: [],
+    open,
     announced: true,
+    streakStartedAt,
     reported: [],
     updatedAt: now },
   kind: 'failed' };
@@ -88,13 +223,21 @@ function afterFailure(previous: AlertStateRow, row: RunRow, threshold: number, n
 
 /**
  * Decides the alert state after an `ok` run.
- * @param previous State before the run.
+ * @param previous State before the run, with the pairs the run covered already taken out.
  * @param row Run that ended `ok`.
  * @param now Current time, ISO.
  * @returns New state and message kind.
  */
 function afterSuccess(previous: AlertStateRow, row: RunRow, now: string): AlertDecision {
   const degraded = row.degraded.length > 0;
+  const stillOpen = previous.open.length > 0;
+
+  if (previous.state === 'failing' && stillOpen) {
+    return { state: { ...previous,
+      failureStreak: 0,
+      updatedAt: now } };
+  }
+
   // The episode stays on the state only for the message of the recovery.
   const episode = previous.state === 'failing'
     ? { ...previous.episodeStartedAt === undefined ? {} : { episodeStartedAt: previous.episodeStartedAt },
@@ -108,8 +251,9 @@ function afterSuccess(previous: AlertStateRow, row: RunRow, now: string): AlertD
     ...previous.lastRunId === undefined ? {} : { lastRunId: previous.lastRunId },
     ...episode,
     degraded: row.degraded,
-    open: [],
+    open: previous.state === 'failing' ? [] : previous.open,
     announced: true,
+    ...previous.state !== 'failing' && stillOpen && previous.streakStartedAt !== undefined ? { streakStartedAt: previous.streakStartedAt } : {},
     reported: [],
     updatedAt: now });
 
@@ -140,13 +284,15 @@ function afterSuccess(previous: AlertStateRow, row: RunRow, now: string): AlertD
 
 /**
  * Applies a finished run to the alert state of its scenario.
+ * The run first takes out the failures it covers, a failed run included, then a failed run adds its own.
  * @param previous State before the run, absent for a scenario never seen.
  * @param row Finished run, not `running`.
- * @param settings Failed runs in a row that raise the alert.
+ * @param settings Threshold, repeats and transport mode.
  * @param now Current time, ISO.
+ * @param run Transport of the run.
  * @returns New state and the message to send, if any.
  */
-export function decideAlert(previous: AlertStateRow | undefined, row: RunRow, settings: AlertSettings, now: string): AlertDecision {
+export function decideAlert(previous: AlertStateRow | undefined, row: RunRow, settings: AlertSettings, now: string, run: RunInfo): AlertDecision {
   const before: AlertStateRow = previous ?? { scenario: row.scenario,
     state: 'ok',
     failureStreak: 0,
@@ -161,9 +307,13 @@ export function decideAlert(previous: AlertStateRow | undefined, row: RunRow, se
     return { state: before };
   }
 
+  const remaining = before.open.filter(item => !covers(item.pair, row, run.transport, settings));
+  const open = { ...before,
+    open: remaining };
+
   if (row.status === 'ok') {
-    return afterSuccess(before, row, now);
+    return afterSuccess(open, row, now);
   }
 
-  return afterFailure(before, row, settings.alertAfterFailures, now);
+  return afterFailure(open, row, settings.alertAfterFailures, now, pairOf(row, run.transport));
 }
