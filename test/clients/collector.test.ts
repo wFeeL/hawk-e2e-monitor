@@ -434,14 +434,14 @@ describe('health', () => {
     expect((await checkError(clientFor().health(signal))).errorClass).toBe('collector_dependency_error');
   });
 
-  it('JSON without flags is a dependency error', async () => {
+  it('a 5xx JSON without a flag is a gateway answer and ends unavailable', async () => {
     collector.knobs.health = { status: 500,
       text: '{}' };
 
     const error = await checkError(clientFor().health(signal));
 
-    expect(error.errorClass).toBe('collector_dependency_error');
-    expect(error.facts.detail).toBe('redis_status=missing, mongo_db_status=missing');
+    expect(error.errorClass).toBe('collector_unavailable');
+    expect(error.facts.status).toBe(500);
   });
 
   it('5xx without JSON is unavailable', async () => {
@@ -600,13 +600,13 @@ describe('uploadRelease', () => {
     expect(outcome.error.facts.detail).toBe('HTTP 404 Not found');
   });
 
-  it('stops reading an endless answer at the limit and calls it a refusal', async () => {
+  it('stops reading an endless answer at the limit and calls it an unexpected response', async () => {
     const endless = await startEndlessServer();
 
     try {
       const outcome = rejected(await clientFor(1000, endless.url).uploadRelease(VALID_TOKEN, 'rel-1', MAP_FILE, signal));
 
-      expect(outcome.error.errorClass).toBe('release_rejected');
+      expect(outcome.error.errorClass).toBe('collector_unexpected_response');
     } finally {
       await endless.close();
     }
@@ -724,13 +724,13 @@ describe('sendEnvelope', () => {
     expect(outcome.error.facts.detail).toBe('HTTP 404 Not found');
   });
 
-  it('stops reading an endless answer at the limit and calls it a refusal', async () => {
+  it('stops reading an endless answer at the limit and calls it an unexpected response', async () => {
     const endless = await startEndlessServer();
 
     try {
       const outcome = rejected(await clientFor(1000, endless.url).sendEnvelope(KEY, ENVELOPE, signal));
 
-      expect(outcome.error.errorClass).toBe('sentry_rejected');
+      expect(outcome.error.errorClass).toBe('collector_unexpected_response');
     } finally {
       await endless.close();
     }
@@ -749,5 +749,130 @@ describe('sendEnvelope', () => {
 
     expect(outcome.error.errorClass).toBe('collector_unavailable');
     expect(outcome.attempts).toBe(3);
+  });
+});
+
+/** A local server that answers every request with what the next entry says. */
+interface ScriptedServer {
+  /** Base URL with a closing slash. */
+  url: string;
+  /** Requests received. */
+  requests: () => number;
+  /** Stops the server. */
+  close: () => Promise<void>;
+}
+
+/**
+ * Starts a server whose answers come from a list; the last entry repeats.
+ * @param answers Status and body, one pair per request.
+ * @returns The running server.
+ */
+async function scriptedServer(answers: readonly (readonly [number, string])[]): Promise<ScriptedServer> {
+  let received = 0;
+  const server = createNetServer((request, response) => {
+    request.resume();
+
+    const [status, body] = answers[Math.min(received, answers.length - 1)] ?? [500, ''];
+
+    received += 1;
+    response.statusCode = status;
+    response.setHeader('content-type', 'application/json');
+    response.end(body);
+  });
+
+  await new Promise<void>((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
+
+  return { url: `http://127.0.0.1:${String((server.address() as AddressInfo).port)}/`,
+    requests: () => received,
+    async close() {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => {
+          resolve();
+        });
+      });
+    } };
+}
+
+describe('gateway answers and oversized bodies', () => {
+  const GATEWAY = '{"error":"bad gateway"}';
+  const HUGE = 'x'.repeat(5 * 1024 * 1024);
+
+  it('retries a 502 JSON of a proxy and succeeds when the collector is back', async () => {
+    const server = await scriptedServer([[502, GATEWAY], [502, GATEWAY], [200, '{"redis_status":true,"mongo_db_status":true}']]);
+
+    try {
+      await expect(clientFor(1000, server.url).health(signal)).resolves.toBeUndefined();
+      expect(server.requests()).toBe(3);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('an endless 502 JSON ends unavailable', async () => {
+    const server = await scriptedServer([[502, GATEWAY]]);
+
+    try {
+      const error = await checkError(clientFor(1000, server.url).health(signal));
+
+      expect(error.errorClass).toBe('collector_unavailable');
+      expect(error.facts.status).toBe(502);
+      expect(server.requests()).toBe(3);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('200 JSON without a health flag is an unexpected response', async () => {
+    const server = await scriptedServer([[200, '{"status":"ok"}']]);
+
+    try {
+      expect((await checkError(clientFor(1000, server.url).health(signal))).errorClass).toBe('collector_unexpected_response');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('a health body over the limit is reported as too large', async () => {
+    const server = await scriptedServer([[200, HUGE]]);
+
+    try {
+      const error = await checkError(clientFor(5000, server.url).health(signal));
+
+      expect(error.errorClass).toBe('collector_unexpected_response');
+      expect(error.facts.detail).toBe('response larger than 65536 bytes');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('a send, release and envelope answer over the limit is reported as too large', async () => {
+    const server = await scriptedServer([[200, HUGE]]);
+
+    try {
+      const client = clientFor(5000, server.url);
+      const outcomes = [
+        await client.send(message(), 'http', signal),
+        await client.uploadRelease(VALID_TOKEN, 'rel-1', MAP_FILE, signal),
+        await client.sendEnvelope('key', 'x', signal),
+      ];
+
+      for (const outcome of outcomes) {
+        const { error } = rejected(outcome);
+
+        expect(error.errorClass).toBe('collector_unexpected_response');
+        expect(error.facts.detail).toBe('response larger than 65536 bytes');
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('classifyCollectorReply names a truncated body', () => {
+    expect(classifyCollectorReply(200, OK_BODY.slice(0, 10), true)).toEqual({ kind: 'rejected',
+      errorClass: 'collector_unexpected_response',
+      message: 'response larger than 65536 bytes' });
   });
 });

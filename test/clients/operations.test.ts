@@ -310,6 +310,69 @@ describe('graphql transport', () => {
       expect(seen).toBe(3);
     });
 
+    /**
+     * Sends one request of an operation to the bare server.
+     * @param operation Operation to send.
+     * @returns The error it throws.
+     */
+    async function failureOn(operation: GraphqlOperation): Promise<unknown> {
+      const { port } = server.address() as AddressInfo;
+
+      return failureOf(transportFor(`http://127.0.0.1:${String(port)}/graphql`).request(operation, { projectId: hawk.projectId,
+        email: 'a',
+        password: 'b' }, 'x', signal));
+    }
+
+    it('403 with HTML on an operation after login is api_unavailable naming the status, not retried', async () => {
+      reply = (response) => {
+        response.statusCode = 403;
+        response.setHeader('content-type', 'text/html');
+        response.end('<html>Forbidden</html>');
+      };
+
+      const error = checkError(await failureOn(PROJECT_TOKEN), 'api_unavailable');
+
+      expect(error.facts).toMatchObject({ status: 403,
+        detail: 'HTTP 403' });
+      expect(error.culprit).toBe('hawk');
+      expect(seen).toBe(1);
+    });
+
+    it('403 with HTML on Login is api_auth_failed', async () => {
+      reply = (response) => {
+        response.statusCode = 403;
+        response.setHeader('content-type', 'text/html');
+        response.end('<html>Forbidden</html>');
+      };
+
+      expect(checkError(await failureOn(LOGIN), 'api_auth_failed').facts.detail).toBe('HTTP 403');
+    });
+
+    it('429 with a JSON body that is not GraphQL is api_unavailable saying rate limited', async () => {
+      reply = (response) => {
+        response.statusCode = 429;
+        response.setHeader('content-type', 'application/json');
+        response.end('{"error":"slow down"}');
+      };
+
+      const error = checkError(await failureOn(PROJECT_TOKEN), 'api_unavailable');
+
+      expect(error.facts.detail).toBe('rate limited (429)');
+      expect(error.message).toContain('rate limited (429)');
+    });
+
+    it('an answer over the limit is api_unexpected_response saying so', async () => {
+      reply = (response) => {
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end('x'.repeat(5 * 1024 * 1024));
+      };
+
+      const error = checkError(await failureOn(PROJECT_TOKEN), 'api_unexpected_response');
+
+      expect(error.facts.detail).toBe('response larger than 4194304 bytes');
+    });
+
     it('503 with HTML stays api_unavailable and is retried', async () => {
       reply = (response) => {
         response.statusCode = 503;

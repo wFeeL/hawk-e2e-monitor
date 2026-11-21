@@ -35,6 +35,8 @@ export interface HttpResponse {
   contentType: string;
   /** Body text; cut at `maxBytes` of the request when it had one. */
   text: string;
+  /** True when the body was longer than `maxBytes` and the rest was dropped. */
+  truncated: boolean;
 }
 
 /** Attempts, delays and rules for `requestWithRetry`. */
@@ -92,22 +94,33 @@ class HttpStatusError extends Error {
   }
 }
 
+/** The start of a body and whether more followed. */
+interface BodyStart {
+  /** The bytes read, decoded as UTF-8; a character cut at the end becomes a replacement character. */
+  text: string;
+  /** True when the body was longer than the limit. */
+  truncated: boolean;
+}
+
 /**
  * Reads the start of a body and cancels the rest.
  * @param response Answer whose body is read.
  * @param maxBytes Most bytes to read.
- * @returns The bytes read, decoded as UTF-8; a character cut at the end becomes a replacement character.
+ * @returns The start of the body and whether it was cut.
  */
-async function readStart(response: Response, maxBytes: number): Promise<string> {
+async function readStart(response: Response, maxBytes: number): Promise<BodyStart> {
   const reader = response.body?.getReader() as ReadableStreamDefaultReader<Uint8Array> | undefined;
   const chunks: Uint8Array[] = [];
   let total = 0;
 
+  let truncated = false;
+
   if (reader === undefined) {
-    return '';
+    return { text: '',
+      truncated };
   }
 
-  while (total < maxBytes) {
+  for (;;) {
     const { done, value } = await reader.read();
 
     if (done) {
@@ -116,12 +129,18 @@ async function readStart(response: Response, maxBytes: number): Promise<string> 
 
     chunks.push(value);
     total += value.byteLength;
+
+    if (total > maxBytes) {
+      truncated = true;
+      break;
+    }
   }
 
   await reader.cancel();
 
-  return Buffer.concat(chunks).subarray(0, maxBytes)
-    .toString('utf8');
+  return { text: Buffer.concat(chunks).subarray(0, maxBytes)
+    .toString('utf8'),
+  truncated };
 }
 
 /**
@@ -149,11 +168,15 @@ export async function httpRequest(request: HttpRequest, target: NetTarget): Prom
     }
 
     const response = await fetch(request.url, init);
-    const text = request.maxBytes === undefined ? await response.text() : await readStart(response, request.maxBytes);
+    const body = request.maxBytes === undefined
+      ? { text: await response.text(),
+          truncated: false }
+      : await readStart(response, request.maxBytes);
 
     return { status: response.status,
       contentType: response.headers.get('content-type') ?? '',
-      text };
+      text: body.text,
+      truncated: body.truncated };
   } catch (error) {
     // An abort reason may be any value, so an aborted signal always means a timeout.
     const failure: NetworkFailure = request.signal.aborted

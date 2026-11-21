@@ -17,6 +17,7 @@ const SNIPPET_LENGTH = 200;
 
 /** Largest collector answer the client reads (64 KiB); its answers are a few hundred bytes. */
 export const MAX_COLLECTOR_BODY_BYTES = 65_536;
+const TOO_LARGE_DETAIL = `response larger than ${String(MAX_COLLECTOR_BODY_BYTES)} bytes`;
 const PROBE_ID = '00000000-0000-4000-8000-000000000000';
 
 /** Ways an event can travel to the collector. */
@@ -196,6 +197,15 @@ function parseObject(text: string): ReplyBody | undefined {
 }
 
 /**
+ * Tells the health answer of the collector from the page of a proxy: the collector always sends its flags as booleans.
+ * @param json Parsed body, if it was an object.
+ * @returns True when at least one known flag is a boolean.
+ */
+function isHealthShape(json: ReplyBody | undefined): boolean {
+  return json !== undefined && (typeof json.redis_status === 'boolean' || typeof json.mongo_db_status === 'boolean');
+}
+
+/**
  * Turns a body into one short line: tags dropped, whitespace collapsed.
  * @param text Body text, possibly HTML with line breaks.
  * @returns At most `SNIPPET_LENGTH` characters on one line.
@@ -234,9 +244,16 @@ function isHandlerPanic(status: number, body: string): boolean {
  * Statuses 5xx are for the caller to judge.
  * @param status HTTP status, or the `code` of a WebSocket answer.
  * @param body Body text.
+ * @param truncated True when the body was longer than the read limit.
  * @returns Accepted, or the class and a message free of secrets.
  */
-export function classifyCollectorReply(status: number, body: string): ReplyVerdict {
+export function classifyCollectorReply(status: number, body: string, truncated = false): ReplyVerdict {
+  if (truncated) {
+    return { kind: 'rejected',
+      errorClass: 'collector_unexpected_response',
+      message: TOO_LARGE_DETAIL };
+  }
+
   const json = parseObject(body);
   const reject = (errorClass: ErrorClass, message: string): ReplyRejected => ({ kind: 'rejected',
     errorClass,
@@ -299,8 +316,9 @@ export function classifyCollectorReply(status: number, body: string): ReplyVerdi
  */
 function refusalOf(verdict: ReplyRejected, url: string, status: number, fallback: ErrorClass): CheckError {
   const keeps: readonly ErrorClass[] = ['auth_invalid_token', 'quota_exhausted', 'rate_limited', 'unknown_402', 'collector_dependency_error', 'ip_blacklisted'];
-  // A handler that panicked answers a plain 400, which says nothing about the release or the envelope.
-  const panic = verdict.errorClass === 'collector_unexpected_response' && verdict.message === COLLECTOR_PANIC_DETAIL;
+  // A handler that panicked answers a plain 400, and an oversized body is no answer either; neither says anything about the release or the envelope.
+  const panic = verdict.errorClass === 'collector_unexpected_response'
+    && (verdict.message === COLLECTOR_PANIC_DETAIL || verdict.message === TOO_LARGE_DETAIL);
 
   return new CheckError(panic || keeps.includes(verdict.errorClass) ? verdict.errorClass : fallback, { url,
     status,
@@ -393,7 +411,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
         signal }, 'collector', { attempts: maxAttempts,
         delaysMs,
         clock,
-        retryStatus: (status, text) => status >= HttpStatus.internalServerError && parseObject(text) === undefined,
+        retryStatus: (status, text) => status >= HttpStatus.internalServerError && !isHealthShape(parseObject(text)),
         retryNetwork: () => true });
     } catch (error) {
       if (error instanceof NetworkError) {
@@ -403,10 +421,16 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
       throw error;
     }
 
-    const { status, text } = result.response;
+    const { status, text, truncated } = result.response;
     const json = parseObject(text);
 
-    if (json && (status === HttpStatus.ok || status >= HttpStatus.internalServerError)) {
+    if (truncated && status < HttpStatus.internalServerError) {
+      throw new CheckError('collector_unexpected_response', { ...facts(),
+        status,
+        detail: TOO_LARGE_DETAIL });
+    }
+
+    if (json && isHealthShape(json) && (status === HttpStatus.ok || status >= HttpStatus.internalServerError)) {
       if (status === HttpStatus.ok && json.redis_status === true && json.mongo_db_status === true) {
         return;
       }
@@ -504,7 +528,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
         attempts };
     }
 
-    const verdict = classifyCollectorReply(response.status, response.text);
+    const verdict = classifyCollectorReply(response.status, response.text, response.truncated);
 
     return verdict.kind === 'accepted'
       ? { kind: 'accepted',
@@ -604,7 +628,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
         attempts };
     }
 
-    const verdict = classifyCollectorReply(response.status, response.text);
+    const verdict = classifyCollectorReply(response.status, response.text, response.truncated);
 
     if (verdict.kind === 'accepted') {
       return { kind: 'accepted',
@@ -664,7 +688,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
         attempts };
     }
 
-    const verdict = classifyCollectorReply(response.status, response.text);
+    const verdict = classifyCollectorReply(response.status, response.text, response.truncated);
 
     return verdict.kind === 'accepted'
       ? { kind: 'accepted',

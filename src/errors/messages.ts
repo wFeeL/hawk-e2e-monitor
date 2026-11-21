@@ -167,9 +167,9 @@ export function describeError(errorClass: ErrorClass, facts: MessageFacts): stri
     case 'accept_uncertain':
       return join(`${where} did not confirm the event`, [': ', what], ['; the run keeps looking for it', '']);
     case 'api_unavailable':
-      return join(`API ${facts.url ?? 'endpoint'} did not respond`, [': ', what], [', ', waited]);
+      return join(`API ${facts.url ?? 'endpoint'} did not respond`, [': ', what], [', ', waited], ['; ', facts.detail === what ? undefined : facts.detail]);
     case 'api_unexpected_response':
-      return join(`Hawk API${facts.url === undefined ? '' : ` at ${facts.url}`} gave a non-GraphQL answer`, [': ', what], ['; check HAWK_API_URL', '']);
+      return join(`Hawk API${facts.url === undefined ? '' : ` at ${facts.url}`} gave a non-GraphQL answer`, [': ', what], [' (', ifSet(facts.detail, text => `${text})`)], ['; check HAWK_API_URL', '']);
     case 'api_query_rejected':
       return withDetail('Monitor query was rejected by the API schema; did the API version change?', facts.detail);
     case 'api_auth_failed':

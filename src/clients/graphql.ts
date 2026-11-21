@@ -13,6 +13,7 @@ export const UNAUTHENTICATED = 'UNAUTHENTICATED';
 export const MAX_API_BODY_BYTES = 4_194_304;
 
 const AUTH_CODES = new Set([UNAUTHENTICATED, ACCESS_EXPIRED, 'SSO_REQUIRED']);
+const LOGIN_OPERATION = 'Login';
 const REJECTED_CODES = new Set(['GRAPHQL_VALIDATION_FAILED', 'BAD_USER_INPUT']);
 
 /** One GraphQL document with its name. */
@@ -113,6 +114,15 @@ function parseObject(text: string): GraphqlBody | undefined {
 }
 
 /**
+ * Tells a GraphQL answer from the page of a proxy that happens to be JSON.
+ * @param body Parsed body, if it was an object.
+ * @returns True when the body has `data` or `errors`.
+ */
+function isGraphqlAnswer(body: GraphqlBody | undefined): boolean {
+  return body !== undefined && ('data' in body || 'errors' in body);
+}
+
+/**
  * Tells a passing fault from a final answer: a 5xx, or a 408 or 429 that is not a GraphQL answer.
  * A proxy or a rate limiter sends those as plain pages, and a repeat may succeed.
  * @param status HTTP status.
@@ -185,9 +195,26 @@ export function createGraphqlTransport(options: GraphqlTransportOptions): Graphq
       const waitedMs = Math.round(clock.monotonicMs() - startedAt);
       const body = parseObject(response.text);
 
-      if (isTransient(response.status, response.text)) {
+      if (response.truncated) {
+        throw new CheckError('api_unexpected_response', { url,
+          status: response.status,
+          detail: `response larger than ${String(MAX_API_BODY_BYTES)} bytes` });
+      }
+
+      const rateLimited = response.status === HttpStatus.tooManyRequests;
+
+      if (isTransient(response.status, response.text) || (rateLimited && !isGraphqlAnswer(body))) {
         throw new CheckError('api_unavailable', { url,
           status: response.status,
+          ...rateLimited ? { detail: 'rate limited (429)' } : {},
+          waitedMs });
+      }
+
+      // A proxy or a firewall answers 401 or 403 with its own page; Hawk itself reports auth problems inside GraphQL answers.
+      if (!isGraphqlAnswer(body) && (response.status === HttpStatus.unauthorized || response.status === HttpStatus.forbidden)) {
+        throw new CheckError(operation.name === LOGIN_OPERATION ? 'api_auth_failed' : 'api_unavailable', { url,
+          status: response.status,
+          detail: `HTTP ${String(response.status)}`,
           waitedMs });
       }
 

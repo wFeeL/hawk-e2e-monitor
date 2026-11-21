@@ -103,7 +103,8 @@ describe('httpRequest', () => {
 
     expect(await httpRequest(get(url), 'api')).toEqual({ status: 200,
       contentType: 'text/json; charset=utf8',
-      text: '{"ok":true}' });
+      text: '{"ok":true}',
+      truncated: false });
   });
 
   it('reads at most maxBytes of the body, across chunks', async () => {
@@ -119,6 +120,16 @@ describe('httpRequest', () => {
     expect(response.text).toHaveLength(150);
     expect(response.text.startsWith('a'.repeat(100))).toBe(true);
     expect(response.text.endsWith('b'.repeat(50))).toBe(true);
+    expect(response.truncated).toBe(true);
+  });
+
+  it('does not call a body of exactly maxBytes truncated', async () => {
+    const { url } = await listen((_request, response) => {
+      response.end('a'.repeat(100));
+    });
+
+    expect(await httpRequest(get(url, { maxBytes: 100 }), 'api')).toMatchObject({ text: 'a'.repeat(100),
+      truncated: false });
   });
 
   it('returns the whole body when it is shorter than maxBytes, multi-byte text included', async () => {
@@ -212,7 +223,8 @@ describe('httpRequest', () => {
 
     expect(await httpRequest(get(url), 'collector')).toEqual({ status: 302,
       contentType: '',
-      text: '' });
+      text: '',
+      truncated: false });
   });
 
   it('a connection reset after send keeps the undici code', async () => {
