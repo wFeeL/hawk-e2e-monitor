@@ -7,7 +7,7 @@ import type { RunPlan } from '../shared/plan.js';
 import { checkEventFields, sendEventShape } from '../shared/event.js';
 import type { EventShape } from '../shared/event.js';
 import type { ScenarioContext } from '../shared/context.js';
-import { SOURCE_NAME, expectedSourceCode } from './map.js';
+import { SOURCE_NAME } from './map.js';
 import type { BuiltSourceMap } from './map.js';
 
 /** Frames of the event point here; the host does not exist, so the file is only a name for the map to match. */
@@ -39,7 +39,7 @@ function show(value: unknown): string {
  * @param release Release the event was sent with.
  * @param plan Plan of the run.
  * @param expectedCount How many times the event must have been counted.
- * @returns The first difference: the usual fields first, then the release, then the file and the lines of the first frame.
+ * @returns The first difference: the usual fields first, then the release, then the file, the line and the source text of the first frame.
  */
 export function checkSourcemapCard(card: EventCard, built: BuiltSourceMap, release: string, plan: RunPlan, expectedCount: number): CheckError | undefined {
   const basic = checkEventFields(card, plan, expectedCount);
@@ -62,11 +62,19 @@ export function checkSourcemapCard(card: EventCard, built: BuiltSourceMap, relea
       actual: show(frame?.file) });
   }
 
-  const expected = expectedSourceCode(built.sourceLines, MAPPED_LINE);
+  if (frame.line !== MAPPED_LINE) {
+    return new CheckError('sourcemap_not_applied', { field: 'backtrace[0].line',
+      expected: String(MAPPED_LINE),
+      actual: show(frame.line) });
+  }
 
-  if (JSON.stringify(frame.sourceCode) !== JSON.stringify(expected)) {
+  // The worker decides how many lines around the frame it adds, so only the mapped line itself is compared.
+  const expectedText = built.sourceLines[MAPPED_LINE - 1];
+  const lines = Array.isArray(frame.sourceCode) ? frame.sourceCode as Array<Record<string, unknown>> : [];
+
+  if (!lines.some(entry => entry.line === MAPPED_LINE && entry.content === expectedText)) {
     return new CheckError('sourcemap_not_applied', { field: 'backtrace[0].sourceCode',
-      expected: `lines 1-${String(expected.length)} of ${SOURCE_NAME}`,
+      expected: `line ${String(MAPPED_LINE)} of ${SOURCE_NAME}: ${show(expectedText)}`,
       actual: show(frame.sourceCode) });
   }
 
