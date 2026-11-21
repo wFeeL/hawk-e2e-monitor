@@ -15,6 +15,15 @@ tests:
           - exp_labels: { job: monitor, instance: "monitor:8090" }
             exp_annotations: { summary: The monitor does not answer on its metrics port. }
 
+  - interval: 1m
+    input_series:
+      - series: 'up{job="monitor", instance="monitor:8090"}'
+        values: "1x10"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MonitorDown
+        exp_alerts: []
+
   # No scrape of the monitor at all: the series is absent, not zero.
   - interval: 1m
     input_series:
