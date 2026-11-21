@@ -1,3 +1,4 @@
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Config } from '../../src/config/load.js';
 import type { RunResult } from '../../src/engine/result.js';
@@ -289,7 +290,6 @@ describe('alerter: delivery', () => {
     await alerter.flush(SIGNAL);
     await clock.advance(1000);
     expect(alerter.onRunFinished(okRow(clock), NO_RESULT)).toBe('recovered');
-    await alerter.flush(SIGNAL);
 
     // The bot is back, but RECOVERED must not overtake the FAILED that is still waiting for its retry time.
     bot.setAnswer({});
@@ -379,6 +379,28 @@ describe('alerter: delivery', () => {
     await clock.advance(600_000);
     await alerter.flush(SIGNAL);
     expect(alerter.health().rejectedInRow).toBe(0);
+  });
+
+  it('the error kept with a failed delivery is masked', async () => {
+    const secret = 'hunter2-password';
+    const database = await tempDatabase();
+
+    cleanups.push(async () => database.remove());
+
+    const { alerter, clock } = await setup({ database: database.path,
+      redact: createRedactor([secret]),
+      answer: { status: 404,
+        body: `no chat for ${secret}` } });
+
+    alerter.onRunFinished(failedRow(clock), NO_RESULT);
+    await alerter.flush(SIGNAL);
+
+    const raw = new DatabaseSync(database.path, { readOnly: true });
+    const stored = String(raw.prepare('SELECT last_error FROM alert_outbox').get()?.last_error);
+
+    raw.close();
+    expect(stored).toContain('no chat for ***');
+    expect(stored).not.toContain(secret);
   });
 
   it('reports the age of the oldest unsent message', async () => {

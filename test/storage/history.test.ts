@@ -384,7 +384,7 @@ describe('stats', () => {
       successRatio: 0.6,
       eventLatencyP50Ms: 2000,
       eventLatencyP95Ms: 3000,
-      stageAvgMs: { [STAGE]: 250 },
+      stageAvgMs: { [STAGE]: 200 },
       lateEvents: 0,
       lateNotifications: 0,
       lateDuplicateNotifications: 0,
@@ -401,6 +401,25 @@ describe('stats', () => {
     expect(stats?.lastRun).toEqual({ runId: 'raaaaaaaaaaaaaaaa',
       status: 'ok',
       startedAt: at(-HOUR_MS) });
+  });
+
+  it('averages the duration of a stage over the runs where it passed, not over a timeout', () => {
+    const history = memoryHistory();
+
+    for (const [index, runId] of ['raaaaaaaaaaaaaaaa', 'rbbbbbbbbbbbbbbbb', 'rcccccccccccccccc'].entries()) {
+      store(history, { runId,
+        startedAt: at(-(index + 1) * HOUR_MS),
+        result: runResultFixture({ stages: [stageFixture('event_visible', 'ok', 900)] }) });
+    }
+
+    store(history, { runId: 'rtimeouttimeoutt',
+      startedAt: at(-5 * HOUR_MS),
+      outcome: { status: 'failed',
+        errorClass: 'event_not_found' },
+      result: runResultFixture({ status: 'failed',
+        stages: [stageFixture('event_visible', 'failed', 60_000)] }) });
+
+    expect(history.stats(NOW, [SCENARIO])[0]?.last24h.stageAvgMs).toEqual({ ['event_visible']: 900 });
   });
 
   it('gives null ratios and percentiles on an empty window and keeps the scenario order', () => {

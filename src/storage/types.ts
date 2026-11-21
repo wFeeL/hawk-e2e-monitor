@@ -144,7 +144,7 @@ export interface StatsWindow {
   eventLatencyP50Ms: number | null;
   /** 95th percentile of the event latency of `ok` runs, nearest rank. */
   eventLatencyP95Ms: number | null;
-  /** Rounded mean duration per stage over stage rows that were not skipped, in finished runs. */
+  /** Rounded mean duration per stage over stage rows that ended `ok`, in finished runs. */
   stageAvgMs: Partial<Record<StageName, number>>;
   /** Failed runs whose event the sweep found later. */
   lateEvents: number;
