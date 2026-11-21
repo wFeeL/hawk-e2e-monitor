@@ -149,8 +149,8 @@ describe('probe configuration', () => {
     const summary = describeConfig(expectOk(loadConfig(validEnv({ GARAGE_URL: 'http://garage.example.test:8080' }))).env);
 
     expect(summary.values.GARAGE_URL).toBe('http://garage.example.test:8080');
-    expect(summary.values.PROBE_INTERVAL_MS).toBe('90000');
-    expect(summary.values.GARAGE_TIMEOUT_MS).toBe('15000');
+    expect(summary.values.PROBE_INTERVAL_MS).toBe(90_000);
+    expect(summary.values.GARAGE_TIMEOUT_MS).toBe(15_000);
   });
 
   describe('without the probe', () => {

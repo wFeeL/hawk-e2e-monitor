@@ -31,9 +31,27 @@ describe('describeConfig', () => {
     const { values } = summarize();
 
     expect(values.INSTANCE_ID).toBe('test');
-    expect(values.INTERNAL_PORT).toBe('8090');
+    expect(values.INTERNAL_PORT).toBe(8090);
     expect(values.TRANSPORT_MODE).toBe('alternate');
-    expect(values.RUN_TIMEOUT_MS).toBe('480000');
+    expect(values.RUN_TIMEOUT_MS).toBe(480_000);
+  });
+
+  it('prints native types: arrays, numbers, booleans', () => {
+    const { values } = summarize({ SCENARIOS: 'send-and-receive-event,sourcemaps',
+      NOTIFY_LOOP: 'true' });
+
+    expect(values.SCENARIOS).toEqual(['send-and-receive-event', 'sourcemaps']);
+    expect(typeof values.INTERNAL_PORT).toBe('number');
+    expect(typeof values.NOTIFY_LOOP).toBe('boolean');
+    expect(JSON.parse(JSON.stringify(values)) as unknown).toEqual(values);
+  });
+
+  it('shows the tunnel metrics address, which is no secret', () => {
+    expect(summarize({ TUNNEL_METRICS_URL: 'http://tunnel:2000/metrics' }).values.TUNNEL_METRICS_URL).toBe('http://tunnel:2000/metrics');
+  });
+
+  it('shows the account login', () => {
+    expect(summarize().values.HAWK_EMAIL).toBe('monitor@example.com');
   });
 
   it('marks unset values', () => {

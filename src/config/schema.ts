@@ -305,7 +305,7 @@ export const ENV_SHAPE = {
     .optional(),
   PUBLIC_BASE_URL: z.string().refine(isPublicBaseUrl, 'must be an https address without a path, on port 443')
     .optional(),
-  TUNNEL_METRICS_URL: httpUrl().optional(),
+  TUNNEL_METRICS_URL: pub(httpUrl().optional()),
   NOTIFY_LOOP: pub(z.enum(['true', 'false'], { message: 'must be true or false' })
     .transform(value => value === 'true')
     .default(true)),

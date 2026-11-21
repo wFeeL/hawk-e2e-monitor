@@ -208,6 +208,6 @@ describe('monitoring configuration', () => {
     expect(summary.values.ALERT_NOTIFY_URL).toBe('***');
     expect(JSON.stringify(summary)).not.toContain('secret-token');
     expect(summary.values.DATABASE_PATH).toBe('data/monitor.db');
-    expect(summary.values.CHECK_INTERVAL_MS).toBe('600000');
+    expect(summary.values.CHECK_INTERVAL_MS).toBe(600_000);
   });
 });

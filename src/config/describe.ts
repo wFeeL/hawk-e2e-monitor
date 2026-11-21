@@ -5,8 +5,8 @@ import type { ParsedEnv } from './schema.js';
 
 /** Configuration summary safe to write to logs. */
 export interface ConfigSummary {
-  /** Printable value of every variable: public values, `***` for secrets, `(unset)` for missing ones. */
-  values: Record<string, string>;
+  /** Value of every variable in its own type: public values as parsed, `***` for secrets, `(unset)` for missing ones. */
+  values: Record<string, unknown>;
   /** Human-readable notes about risky combinations. */
   warnings: string[];
 }
@@ -34,30 +34,13 @@ function stripUserinfo(text: string): string {
 }
 
 /**
- * Converts a parsed value to text; plain strings, numbers and booleans are the expected cases.
- * @param value Parsed variable value.
- * @returns Text form of the value.
- */
-function printable(value: unknown): string {
-  if (typeof value === 'string') {
-    return value;
-  }
-
-  if (typeof value === 'number' || typeof value === 'boolean') {
-    return String(value);
-  }
-
-  return JSON.stringify(value);
-}
-
-/**
  * Prints variables for logs. A variable is shown only if its schema is registered in `publicVars`.
  * @param shape Schemas by variable name, in output order.
  * @param env Parsed values by variable name.
- * @returns Printable value per variable.
+ * @returns Value per variable that is safe to log: native types for public ones.
  */
-export function describeEnv(shape: Readonly<Record<string, z.ZodType>>, env: Readonly<Record<string, unknown>>): Record<string, string> {
-  const values: Record<string, string> = {};
+export function describeEnv(shape: Readonly<Record<string, z.ZodType>>, env: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  const values: Record<string, unknown> = {};
 
   for (const [name, schema] of Object.entries(shape)) {
     const value = env[name];
@@ -65,7 +48,7 @@ export function describeEnv(shape: Readonly<Record<string, z.ZodType>>, env: Rea
     if (value === undefined) {
       values[name] = '(unset)';
     } else if (publicVars.has(schema)) {
-      values[name] = stripUserinfo(printable(value));
+      values[name] = typeof value === 'string' ? stripUserinfo(value) : value;
     } else {
       values[name] = '***';
     }
