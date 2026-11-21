@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RunCommand } from '../../src/cli.js';
 import type { CheckIo } from '../../src/commands/check.js';
 import { runRunCommand } from '../../src/commands/run.js';
@@ -11,6 +11,7 @@ import { startEndlessServer } from '../support/endless-server.js';
 import type { EndlessServer } from '../support/endless-server.js';
 import { validEnv } from '../support/env.js';
 import { reservedPort } from '../support/ports.js';
+import { createFakeClock } from '../support/fake-clock.js';
 import { expectOk } from '../support/result.js';
 
 const TOKEN = 'run-token-0123456789-0123456789-abcdef';
@@ -330,14 +331,54 @@ describe('runRunCommand', () => {
     expect(result.code).toBe(0);
   });
 
-  it('reports no answer: TIMEOUT when the server does not finish in time', async () => {
+  it('reports no answer: TIMEOUT when the clock passes the deadline', async () => {
     endless = await startEndlessServer();
 
+    const clock = createFakeClock();
     const port = Number(new URL(endless.url).port);
-    const result = await run(['sourcemaps'], configFor(port), { requestTimeoutMs: () => 200 });
+    const pending = run(['sourcemaps'], configFor(port), { requestTimeoutMs: () => 200,
+      clock });
+
+    await vi.waitFor(() => {
+      expect(clock.pending()).toBe(1);
+    });
+    await clock.advance(200);
+
+    const result = await pending;
 
     expect(result.out).toEqual(['sourcemaps  no answer: TIMEOUT']);
     expect(result.code).toBe(1);
+  });
+
+  it('leaves no timer after a full answer', async () => {
+    const { port } = await fake({ sourcemaps: { status: 200,
+      body: OK } });
+    const clock = createFakeClock();
+    const result = await run(['sourcemaps'], configFor(port), { clock });
+
+    expect(result.code).toBe(0);
+    expect(clock.pending()).toBe(0);
+  });
+
+  it('leaves no timer after an answer that breaks off', async () => {
+    server = createServer((req, res) => {
+      res.setHeader('content-type', 'application/json');
+      res.setHeader('content-length', '100');
+      res.statusCode = 200;
+      res.write('{"status":', () => {
+        req.socket.destroy();
+      });
+    });
+    await new Promise<void>((resolve) => {
+      server?.listen(0, '127.0.0.1', resolve);
+    });
+
+    const clock = createFakeClock();
+    const result = await run(['sourcemaps'], configFor((server.address() as AddressInfo).port), { clock });
+
+    expect(result.code).toBe(2);
+    expect(result.err[0]).toMatch(/^cannot reach serve on /u);
+    expect(clock.pending()).toBe(0);
   });
 
   it('waits for headers that come late, with no timeout of its own besides the request one', async () => {
