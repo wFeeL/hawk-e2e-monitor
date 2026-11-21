@@ -455,6 +455,14 @@ describe('serve: scheduled runs and the history routes', () => {
     expect(response.status).toBe(404);
   });
 
+  it('answers 404 without an error line for a run id that is not valid percent-encoding', async () => {
+    const harness = await launch();
+    const response = await get(harness, '/runs/%');
+
+    expect(response.status).toBe(404);
+    expect(harness.logger.lines.filter(line => line.level === 'error')).toEqual([]);
+  });
+
   it('writes no secret of the bot into the log', async () => {
     const hawk = await hawkFor();
 

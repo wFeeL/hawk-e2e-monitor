@@ -251,6 +251,14 @@ describe('decideNotificationVerdict', () => {
       expect(result.verdict.error?.message).toBe(`The ${channel} notification arrived 2 times`);
     });
 
+    it('counts the posts whose bodies the receiver did not keep', () => {
+      const twice = { ...arrivals([arrival('webhook', 1300), arrival('webhook', 1700)], [arrival('loop', 1500)]),
+        extra: { webhook: 18 } };
+      const result = decideNotificationVerdict(stages(), STATE, notification(BOTH, twice), PROJECT, true);
+
+      expect(result.verdict.error?.message).toBe('The webhook notification arrived 20 times');
+    });
+
     it('a mismatch wins over a repeat', () => {
       const both = arrivals([arrival('webhook', 1300, webhookBody({ id: 'other' })), arrival('webhook', 1700)], [arrival('loop', 1500)]);
       const result = decideNotificationVerdict(stages(), STATE, notification(both, both), PROJECT, true);

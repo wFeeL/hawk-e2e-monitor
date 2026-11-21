@@ -1,6 +1,7 @@
 import { formatDuration } from '../../time/format.js';
 import type { RunNotification, StageResult } from '../../engine/result.js';
 import { CheckError } from '../../errors/taxonomy.js';
+import { arrivalCount } from '../../receiver/server.js';
 import type { Arrivals } from '../../receiver/server.js';
 import type { NotificationChannel } from '../../notifications/types.js';
 import type { ScenarioState } from '../shared/context.js';
@@ -183,7 +184,7 @@ export function decideNotificationVerdict(stages: readonly StageResult[], state:
   }
 
   for (const channel of CHANNELS) {
-    const count = finalArrivals[channel].length;
+    const count = arrivalCount(finalArrivals, channel);
 
     if (count > 1) {
       return { verdict: { status: 'failed',
@@ -203,7 +204,7 @@ export function decideNotificationVerdict(stages: readonly StageResult[], state:
   }
 
   const thresholdStage = stages.find(stage => stage.name === 'threshold_formed');
-  const thresholdCount = finalArrivals.threshold.length;
+  const thresholdCount = arrivalCount(finalArrivals, 'threshold');
 
   if (thresholdStage?.status === 'ok' && thresholdCount > 1) {
     return { verdict: { status: 'failed',

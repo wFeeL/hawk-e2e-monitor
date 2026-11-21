@@ -72,6 +72,16 @@ describe('sharedReceiver', () => {
     expect(two.readiness?.[0]).toBe(one.readiness?.[0]);
   });
 
+  it('is ready only while the server listens, also when it was closed on its own', async () => {
+    const context = await contextFor();
+    const runtime = await sharedReceiver(context);
+    const [check] = runtime.readiness ?? [];
+
+    expect(await check?.run(new AbortController().signal)).toBe(true);
+    await runtime.receiver.close();
+    expect(await check?.run(new AbortController().signal)).toBe(false);
+  });
+
   it('lists the readiness check of the receiver once in the built runners', async () => {
     const context = await contextFor();
 

@@ -301,6 +301,13 @@ describe('decideTelegramVerdict', () => {
           message: expect.stringContaining('telegram') as string } });
     });
 
+    it('counts the webhooks whose bodies the receiver did not keep', () => {
+      const decided = decide(stages(), notification({ ...arrivals([webhook(), webhook()]),
+        extra: { telegram: 8 } }));
+
+      expect(decided.verdict.error?.message).toContain('10');
+    });
+
     it('a webhook that names another event is a mismatch', () => {
       const decided = decide(stages(), notification(arrivals([webhook('other-event')])));
 

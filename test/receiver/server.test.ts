@@ -179,6 +179,52 @@ describe('threshold kind', () => {
   });
 });
 
+describe('receiver limits', () => {
+  it('keeps the first two bodies per channel and counts the rest', async () => {
+    const { receiver } = await start();
+
+    receiver.expect('run-1');
+    for (let index = 0; index < 20; index += 1) {
+      expect((await post(receiver, 'webhook', `run-1 copy ${String(index)}`)).status).toBe(200);
+    }
+
+    await vi.waitFor(() => {
+      const arrivals = receiver.counts('run-1');
+
+      expect(arrivals.webhook.length + (arrivals.extra?.webhook ?? 0)).toBe(20);
+    });
+
+    const arrivals = receiver.counts('run-1');
+
+    expect(arrivals.webhook.map(arrival => arrival.rawBody)).toEqual(['run-1 copy 0', 'run-1 copy 1']);
+    expect(arrivals.extra).toEqual({ webhook: 18 });
+  });
+
+  it('answers 404 without an error line to a target that cannot be parsed', async () => {
+    const { receiver, logger } = await start();
+    const status = await new Promise<number>((resolve, reject) => {
+      request({ host: '127.0.0.1',
+        port: receiver.port,
+        path: '//[' }, (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      }).on('error', reject)
+        .end();
+    });
+
+    expect(status).toBe(404);
+    expect(logger.lines.filter(line => line.level === 'error')).toEqual([]);
+  });
+
+  it('tells whether the server is listening', async () => {
+    const { receiver } = await start();
+
+    expect(receiver.listening()).toBe(true);
+    await receiver.close();
+    expect(receiver.listening()).toBe(false);
+  });
+});
+
 describe('receiver telegram path', () => {
   it('binds a POST to /hooks/telegram to the run', async () => {
     const { receiver } = await start();

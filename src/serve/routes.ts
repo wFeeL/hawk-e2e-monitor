@@ -99,7 +99,14 @@ function listRuns(deps: RouteDeps): RouteHandler {
 function oneRun(deps: RouteDeps): RouteHandler {
   return (req, res) => {
     const pathname = new URL(req.url ?? '/', 'http://internal').pathname;
-    const runId = decodeURIComponent(pathname.slice(RUNS_PREFIX.length));
+    let runId: string;
+
+    try {
+      runId = decodeURIComponent(pathname.slice(RUNS_PREFIX.length));
+    } catch {
+      runId = '';
+    }
+
     const run = runId === '' ? undefined : deps.history.get(runId);
 
     if (run === undefined) {

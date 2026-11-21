@@ -13,7 +13,7 @@ import type { ScenarioContext } from '../shared/context.js';
 import { MS_PER_SECOND } from '../../time/units.js';
 
 const DEFAULT_ADDRESS_POLL_MS = 2000;
-const WEBHOOK_AGENT = 'Hawk-Webhook/1.0';
+const WEBHOOK_AGENT = 'Hawk-Webhook/';
 const WEBHOOK_KIND = 'event';
 
 /** What the notification stages learn on the way and hand to the verdict. */
@@ -227,8 +227,8 @@ function webhookEventId(rawBody: string): string | undefined {
 export function checkWebhook(arrival: Arrival, title: string, projectId: string): CheckError | undefined {
   const headers = new Map(Object.entries(arrival.headers).map(([name, value]) => [name.toLowerCase(), value]));
 
-  if (headers.get('user-agent') !== WEBHOOK_AGENT) {
-    return mismatch('webhook.user-agent', WEBHOOK_AGENT, headers.get('user-agent'));
+  if (!(headers.get('user-agent') ?? '').startsWith(WEBHOOK_AGENT)) {
+    return mismatch('webhook.user-agent', `${WEBHOOK_AGENT}*`, headers.get('user-agent'));
   }
 
   if (headers.get('x-hawk-notification') !== WEBHOOK_KIND) {

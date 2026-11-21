@@ -174,10 +174,8 @@ async function startRuntime(context: RunnerContext): Promise<ReceiverRuntime> {
   }
 
   const started = receiver;
-  let receiverClosed = false;
 
   context.closers.push(async () => {
-    receiverClosed = true;
     await started.close();
   });
 
@@ -220,7 +218,7 @@ async function startRuntime(context: RunnerContext): Promise<ReceiverRuntime> {
     },
     tunnelWaited: () => waited,
     readiness: [{ name: 'receiver',
-      run: async () => Promise.resolve(!receiverClosed) }],
+      run: async () => Promise.resolve(started.listening()) }],
   };
 }
 
