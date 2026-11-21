@@ -55,7 +55,11 @@ export function createSql(db: DatabaseSync): Sql {
 
       return value;
     } catch (error) {
-      db.exec('ROLLBACK');
+      // SQLite rolls back by itself on some errors, and a second rollback would replace the error.
+      if (db.isTransaction) {
+        db.exec('ROLLBACK');
+      }
+
       throw error;
     }
   };

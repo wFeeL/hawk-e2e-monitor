@@ -69,7 +69,11 @@ function migrate(db: DatabaseSync): void {
 
     db.exec('COMMIT');
   } catch (error) {
-    db.exec('ROLLBACK');
+    // SQLite rolls back by itself on some errors, and a second rollback would replace the error.
+    if (db.isTransaction) {
+      db.exec('ROLLBACK');
+    }
+
     throw error;
   }
 }
