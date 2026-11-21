@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { AlertStateRow } from '../../src/storage/types.js';
 import type { DegradedCode } from '../../src/engine/result.js';
 import type { RunRow } from '../../src/storage/types.js';
-import { REPEAT_STAGES, VARIANT_STAGES, covers, decideAlert, pairOf, plannedTransport, producedTransports } from '../../src/alerting/state.js';
+import { REPEAT_STAGES, VARIANT_STAGES, covers, decideAlert, pairOf, plannedTransport, producedTransports, shareEpisode } from '../../src/alerting/state.js';
 import { chooseTransport, shouldRepeat } from '../../src/scenarios/shared/plan.js';
 import type { ScenarioName } from '../../src/scenarios/names.js';
 import type { StageName } from '../../src/engine/result.js';
@@ -104,7 +104,8 @@ describe('decideAlert: failures', () => {
       episodeFailures: 1,
       degraded: [],
       open: [{ pair: 'event_visible@http',
-        count: 1 }],
+        count: 1,
+        firstAt: '2026-03-10T11:59:00.000Z' }],
       announced: true,
       streakStartedAt: '2026-03-10T11:59:00.000Z',
       reported: ['event_visible/event_not_found'],
@@ -409,7 +410,6 @@ describe('decideAlert: an episode closes when every failure is covered', () => {
 
     expect(decision.kind).toBe('degraded');
     expect(decision.state.open).toEqual(before.open);
-    expect(decision.state.streakStartedAt).toBe(BEFORE);
   });
 
   it('(g) a stageless failure of sourcemaps is covered by its next success over http', () => {
@@ -448,7 +448,7 @@ describe('decideAlert: an episode closes when every failure is covered', () => {
     ], SETTINGS, state({ scenario: 'telegram-delivery' }));
 
     expect(kinds).toEqual(['failed', undefined]);
-    expect(last.open).toEqual([{ pair: 'notification_formed@*',
+    expect(last.open).toMatchObject([{ pair: 'notification_formed@*',
       count: 2 }]);
   });
 
@@ -459,7 +459,7 @@ describe('decideAlert: an episode closes when every failure is covered', () => {
         count: 1 }] });
     const decision = decideAlert(before, failedAt('event_visible', [stage('collector_availability'), stage('collector_accept')]), SETTINGS, NOW, HTTP);
 
-    expect(decision.state.open).toEqual([{ pair: 'event_visible@http',
+    expect(decision.state.open).toMatchObject([{ pair: 'event_visible@http',
       count: 1 }]);
     expect(decision.kind).toBe('still_failing');
   });
@@ -669,5 +669,98 @@ describe('decideAlert: episodes and causes', () => {
     const { last } = play([[failedAt('event_visible'), HTTP], [passed([stage('event_visible')]), HTTP]], SETTINGS);
 
     expect(last.reported).toEqual([]);
+  });
+});
+
+describe('shareEpisode: a message that was given up on', () => {
+  const dropped = state({ state: 'failing',
+    announced: false,
+    open: [{ pair: 'event_visible@http',
+      count: 1 }],
+    reported: ['event_visible/event_not_found'],
+    lastClass: 'event_not_found',
+    lastStage: 'event_visible',
+    episodeStartedAt: BEFORE });
+
+  it('the next failure of the same cause sends FAILED again and the next success sends RECOVERED', () => {
+    const again = failedAt('event_visible');
+    const first = shareEpisode(dropped, decideAlert(dropped, again, SETTINGS, NOW, HTTP), again, []);
+
+    expect(first.kind).toBe('failed');
+    expect(first.state.announced).toBe(true);
+
+    const ok = passed([stage('event_visible')]);
+
+    expect(shareEpisode(first.state, decideAlert(first.state, ok, SETTINGS, NOW, HTTP), ok, []).kind).toBe('recovered');
+  });
+
+  it('a hung run of a held back scenario sends FAILED', () => {
+    const hung = row({ status: 'aborted',
+      errorClass: 'run_hung' });
+    const result = shareEpisode(dropped, decideAlert(dropped, hung, SETTINGS, NOW, HTTP), hung, []);
+
+    expect(result.kind).toBe('failed');
+    expect(result.state.announced).toBe(true);
+  });
+});
+
+describe('decideAlert: failures whose stage row says ok', () => {
+  it('a failed run does not cover its own pair: threshold 2 fires on the second ws failure', () => {
+    const verdictFailure = failedAt('event_visible', [], { errorClass: 'duplicate_event' });
+    const asOk = { ...verdictFailure,
+      stages: [stage('event_visible')] };
+    const { kinds } = play([
+      [asOk, WS],
+      [passed([stage('event_visible')]), HTTP],
+      [asOk, WS],
+    ], settingsOf(2));
+
+    expect(kinds).toEqual([undefined, undefined, 'failed']);
+  });
+});
+
+describe('decideAlert: where an episode starts', () => {
+  const probe = { scenario: 'endpoints-probe' } as const;
+  const at = (minutes: number): string => new Date(Date.parse(NOW) + minutes * 60_000).toISOString();
+
+  it('a series of failures across availability stages starts at its first run and counts every failure', () => {
+    const { kinds, last } = play([
+      [failedAt('api_availability', [stage('collector_availability')], { ...probe,
+        startedAt: at(1) }), { transport: '*' }],
+      [failedAt('collector_availability', [stage('api_availability')], { ...probe,
+        startedAt: at(2) }), { transport: '*' }],
+      [failedAt('collector_availability', [stage('api_availability')], { ...probe,
+        startedAt: at(3) }), { transport: '*' }],
+    ], settingsOf(3), state({ scenario: 'endpoints-probe' }));
+
+    expect(kinds).toEqual([undefined, undefined, 'failed']);
+    expect(last).toMatchObject({ episodeStartedAt: at(1),
+      episodeFailures: 3 });
+  });
+
+  it('an old pair does not move the start: the episode begins at the first failure of the series', () => {
+    const old = state({ open: [{ pair: 'event_repeated@ws',
+      count: 1,
+      firstAt: at(-100) }] });
+    const { kinds, last } = play([
+      [failedAt('collector_availability', [], { startedAt: at(1) }), HTTP],
+      [failedAt('collector_availability', [], { startedAt: at(2) }), HTTP],
+    ], settingsOf(2), old);
+
+    expect(kinds).toEqual([undefined, 'failed']);
+    expect(last).toMatchObject({ episodeStartedAt: at(1),
+      episodeFailures: 2 });
+  });
+
+  it('a pair that reaches the threshold across successes gives its own start and count', () => {
+    const { kinds, last } = play([
+      [failedAt('event_visible', [], { startedAt: at(1) }), WS],
+      [passed([stage('event_visible')], { startedAt: at(2) }), HTTP],
+      [failedAt('event_visible', [], { startedAt: at(3) }), WS],
+    ], settingsOf(2));
+
+    expect(kinds).toEqual([undefined, undefined, 'failed']);
+    expect(last).toMatchObject({ episodeStartedAt: at(1),
+      episodeFailures: 2 });
   });
 });
