@@ -4,6 +4,7 @@ import { parseCommand } from './cli.js';
 import { runCheckCommand } from './commands/check.js';
 import { runHistoryCommand } from './commands/history.js';
 import { runProvisionCommand } from './commands/provision.js';
+import { runRunCommand } from './commands/run.js';
 import type { Config } from './config/load.js';
 import { formatConfigErrors, loadConfig } from './config/load.js';
 import { describeConfig } from './config/describe.js';
@@ -158,6 +159,8 @@ async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<nu
       return runCheckCommand(command, result.config, io);
     case 'provision':
       return runProvisionCommand(command, result.config, io);
+    case 'run':
+      return runRunCommand(command, result.config, io);
     case 'history':
       return runHistoryCommand(command, result.config, io);
     default:

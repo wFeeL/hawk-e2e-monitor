@@ -164,3 +164,31 @@ describe('parseCommand', () => {
     expect(command.kind === 'usage' ? command.message : '').toContain(USAGE);
   });
 });
+
+describe('parseCommand run', () => {
+  it('run without names means all enabled scenarios', () => {
+    expect(parseCommand(['run'])).toEqual({ kind: 'run',
+      scenarios: [] });
+  });
+
+  it('run keeps the names in the given order', () => {
+    expect(parseCommand(['run', 'check-notification', 'sourcemaps'])).toEqual({ kind: 'run',
+      scenarios: ['check-notification', 'sourcemaps'] });
+  });
+
+  it.each([
+    [['run', 'bogus'], 'unknown scenario "bogus"'],
+    [['run', 'sourcemaps', 'sourcemaps'], 'sourcemaps given twice'],
+    [['run', '--flag'], 'unknown scenario "--flag"'],
+  ])('run %j is usage', (args, reason) => {
+    const command = parseCommand(args);
+
+    expect(command.kind).toBe('usage');
+    expect(command.kind === 'usage' ? command.message : '').toContain(reason);
+    expect(command.kind === 'usage' ? command.message : '').toContain(USAGE);
+  });
+
+  it('usage lists the run command', () => {
+    expect(USAGE).toContain('       hawk-e2e-monitor run [<scenario> ...]\n');
+  });
+});
