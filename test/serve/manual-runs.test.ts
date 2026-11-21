@@ -273,7 +273,18 @@ describe('POST /runs/<scenario>: accepted', () => {
     await vi.waitFor(() => {
       expect(scheduler.runNow).toHaveBeenCalled();
     });
+
+    let settled = false;
+
+    void pending.then(() => {
+      settled = true;
+    });
     await clock.advance(WATCHDOG_MS - 1);
+    // A real HTTP answer needs more than one macrotask, so wait a while before judging.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    expect(settled).toBe(false);
     await clock.advance(1);
 
     const response = await pending;
