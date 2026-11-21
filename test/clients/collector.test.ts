@@ -369,9 +369,15 @@ describe('send over WebSocket', () => {
     expect(error.message).toBe('Collector handler failed: HTTP 400 Bad request (plain text instead of JSON)');
   });
 
-  it('ws timeout before the socket opens names TIMEOUT and the wait', async () => {
-    const silent = createNetServer();
+  it('ws timeout before the socket opens names TIMEOUT and the wait when the health answers', async () => {
+    const silent = createNetServer((request, response) => {
+      request.resume();
+      response.setHeader('content-type', 'application/json');
+      response.end('{"redis_status":true,"mongo_db_status":true}');
+    });
 
+    // The upgrade is taken and never answered.
+    silent.on('upgrade', () => undefined);
     await new Promise<void>((resolve) => {
       silent.listen(0, '127.0.0.1', resolve);
     });
@@ -387,6 +393,51 @@ describe('send over WebSocket', () => {
       silent.closeAllConnections();
       silent.close();
     }
+  });
+
+  it('a websocket that does not open while the health is unreachable too is collector_unavailable', async () => {
+    const url = await missingCollectorUrl();
+    const { error } = rejected(await clientFor(1000, url).send(message(), 'ws', signal));
+
+    expect(error.errorClass).toBe('collector_unavailable');
+    expect(error.facts.code).toBe('ECONNREFUSED');
+  });
+
+  it('a websocket that does not open with a silent collector is collector_unavailable', async () => {
+    const silent = createNetServer();
+
+    await new Promise<void>((resolve) => {
+      silent.listen(0, '127.0.0.1', resolve);
+    });
+
+    try {
+      const { port } = silent.address() as AddressInfo;
+      const { error } = rejected(await clientFor(150, `http://127.0.0.1:${String(port)}`, { attempts: 1,
+        delaysMs: [] }).send(message(), 'ws', signal));
+
+      expect(error.errorClass).toBe('collector_unavailable');
+      expect(error.facts.code).toBe('TIMEOUT');
+    } finally {
+      silent.closeAllConnections();
+      silent.close();
+    }
+  });
+
+  it('a websocket the proxy refuses while the health is fine stays ws_handshake_failed', async () => {
+    collector.knobs.ws = 'reject_upgrade';
+
+    const { error } = rejected(await clientFor().send(message(), 'ws', signal));
+
+    expect(error.errorClass).toBe('ws_handshake_failed');
+  });
+
+  it('a websocket that does not open while the collector reports a broken dependency stays ws_handshake_failed', async () => {
+    collector.knobs.ws = 'reject_upgrade';
+    collector.knobs.health = { status: 500,
+      redis: false,
+      mongo: true };
+
+    expect(rejected(await clientFor().send(message(), 'ws', signal)).error.errorClass).toBe('ws_handshake_failed');
   });
 
   it('ws reject_upgrade is rejected after 3 handshakes', async () => {
@@ -517,6 +568,12 @@ describe('probeInvalidToken', () => {
       body: OK_BODY };
 
     expect((await checkError(clientFor().probeInvalidToken(signal))).errorClass).toBe('collector_unexpected_response');
+  });
+
+  it('a refused connection on both paths is collector_unavailable for the probe too', async () => {
+    const url = await missingCollectorUrl();
+
+    expect((await checkError(clientFor(1000, url).probeInvalidToken(signal))).errorClass).toBe('collector_unavailable');
   });
 
   it('handshake failure is ws_handshake_failed after 3 attempts', async () => {

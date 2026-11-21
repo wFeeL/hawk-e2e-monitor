@@ -9,6 +9,7 @@ import { createSelfSignedCert } from '../support/tls.js';
 import { reservedPort } from '../support/ports.js';
 import { systemClock } from '../../src/time/clock.js';
 import { CheckError } from '../../src/errors/taxonomy.js';
+import { classifyNetworkError } from '../../src/net/classify.js';
 import { NetworkError, httpRequest, networkFailureToCheckError, requestWithRetry } from '../../src/net/http.js';
 import type { HttpRequest } from '../../src/net/http.js';
 
@@ -188,6 +189,17 @@ describe('httpRequest', () => {
     expect(error.failure).toEqual({ errorClass: 'tls_error',
       code: 'DEPTH_ZERO_SELF_SIGNED_CERT',
       beforeSend: true });
+  });
+
+  it('a dns or tls failure of a target outside Hawk becomes a CheckError with the network culprit', () => {
+    const cause = Object.assign(new Error('x'), { code: 'ENOTFOUND' });
+    const failed = (target: 'notify' | 'collector'): NetworkError => new NetworkError(
+      classifyNetworkError(new TypeError('fetch failed', { cause }), target), { cause });
+
+    expect(networkFailureToCheckError(failed('notify'), { url: 'https://bot.example/' })).toMatchObject({ errorClass: 'dns_error',
+      culprit: 'network' });
+    expect(networkFailureToCheckError(failed('collector'), { url: 'https://c.example/' })).toMatchObject({ errorClass: 'dns_error',
+      culprit: 'hawk' });
   });
 
   it('slow response is TIMEOUT after send', async () => {

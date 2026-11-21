@@ -261,7 +261,8 @@ export function describeError(errorClass: ErrorClass, facts: MessageFacts): stri
     case 'telegram_bot_unavailable':
       return facts.status === HTTP_NOT_FOUND
         ? withDetail('The @codex_bot notify URL is unknown to the bot; check TELEGRAM_NOTIFY_URL', facts.detail)
-        : join('The @codex_bot notify service did not take the probe message', [': ', what], [' for ', facts.url], ['; ', facts.detail]);
+        : join('The @codex_bot notify service did not take the probe message', [': ', what], [' for ', facts.url], ['; ', facts.detail],
+            ['; if the bot shares a group with another bot, turn on Bot-to-Bot communication in BotFather', '']);
     case 'telegram_not_delivered':
       return withDetail('Hawk formed the notification but it did not reach Telegram', facts.detail);
     case 'alert_rejected':

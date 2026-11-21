@@ -36,6 +36,11 @@ describe('readable network, tls and token texts', () => {
       code: 'UND_ERR_SOCKET' })).toBe('Collector http://c/ did not respond: connection closed by the other side (UND_ERR_SOCKET)');
   });
 
+  it('telegram_bot_unavailable names Bot-to-Bot mode as a cause, except for an unknown URL', () => {
+    expect(describeError('telegram_bot_unavailable', { status: 500 })).toContain('if the bot shares a group with another bot, turn on Bot-to-Bot communication in BotFather');
+    expect(describeError('telegram_bot_unavailable', { status: 404 })).not.toContain('Bot-to-Bot');
+  });
+
   it('explains a known tls code and leaves an unknown one as it is', () => {
     expect(describeError('tls_error', { host: 'c.example',
       code: 'CERT_HAS_EXPIRED' })).toBe('TLS failure for c.example: the certificate has expired (CERT_HAS_EXPIRED)');

@@ -1,4 +1,4 @@
-import type { ErrorClass } from '../errors/taxonomy.js';
+import type { Culprit, ErrorClass } from '../errors/taxonomy.js';
 
 const MAX_CHAIN_DEPTH = 8;
 const TLS_CODE = /^(ERR_TLS_|ERR_SSL_|CERT_|UNABLE_TO_|DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN)/u;
@@ -7,11 +7,13 @@ const TLS_BEFORE_SEND = new RegExp([
   '^(CERT_|UNABLE_TO_|',
   'DEPTH_ZERO_SELF_SIGNED_CERT$|SELF_SIGNED_CERT_IN_CHAIN$|',
   'ERR_TLS_CERT_ALTNAME_INVALID$|ERR_TLS_HANDSHAKE_TIMEOUT$|',
-  'ERR_SSL_WRONG_VERSION_NUMBER$|ERR_SSL_SSLV3_ALERT_HANDSHAKE_FAILURE$|',
+  'ERR_SSL_SSLV3_ALERT_HANDSHAKE_FAILURE$|',
   'ERR_SSL_TLSV1_ALERT_PROTOCOL_VERSION$|ERR_SSL_TLSV1_UNRECOGNIZED_NAME$|',
   'ERR_SSL_UNSUPPORTED_PROTOCOL$|ERR_SSL_NO_PROTOCOLS_AVAILABLE$|',
   'ERR_SSL_TLSV1_ALERT_UNKNOWN_CA$)',
 ].join(''), 'u');
+// A bad DNS name or certificate of the alert bot, the heartbeat service or Telegram says nothing about Hawk.
+const OUTSIDE_HAWK: ReadonlySet<NetTarget> = new Set<NetTarget>(['heartbeat', 'notify', 'telegram']);
 const ABORT_NAMES = new Set(['AbortError', 'TimeoutError']);
 
 /** Which side a request goes to. */
@@ -46,6 +48,8 @@ export interface NetworkFailure {
   code: string;
   /** True when the request certainly did not reach the server. */
   beforeSend: boolean;
+  /** Blame that replaces the culprit of the class; set for targets outside Hawk. */
+  culprit?: Culprit;
 }
 
 /** The parts of an error the classifier reads. */
@@ -96,7 +100,7 @@ function firstCode(chain: readonly unknown[]): string | undefined {
  * @param target Which side was called.
  * @returns Class, code and whether the request was certainly not sent.
  */
-export function classifyNetworkError(error: unknown, target: NetTarget): NetworkFailure {
+function classifyByCode(error: unknown, target: NetTarget): NetworkFailure {
   const unavailable = unavailableClass(target);
   const chain = chainOf(error);
   const code = firstCode(chain);
@@ -147,4 +151,21 @@ export function classifyNetworkError(error: unknown, target: NetTarget): Network
   return { errorClass: unavailable,
     code: code ?? 'UNKNOWN',
     beforeSend: false };
+}
+
+/**
+ * Sorts a failed request into a taxonomy class and, for targets outside Hawk, names the network as the culprit.
+ * @param error Error thrown by `fetch` or its body read.
+ * @param target Which side was called.
+ * @returns Class, code, whether the request was certainly not sent and the culprit when it is not the class's own.
+ */
+export function classifyNetworkError(error: unknown, target: NetTarget): NetworkFailure {
+  const failure = classifyByCode(error, target);
+
+  if (!OUTSIDE_HAWK.has(target)) {
+    return failure;
+  }
+
+  return { ...failure,
+    culprit: 'network' };
 }

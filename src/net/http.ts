@@ -207,7 +207,8 @@ export function networkFailureToCheckError(error: NetworkError, facts: MessageFa
     }
   }
 
-  return new CheckError(error.failure.errorClass, merged, { cause: error });
+  return new CheckError(error.failure.errorClass, merged, { cause: error,
+    ...error.failure.culprit === undefined ? {} : { culprit: error.failure.culprit } });
 }
 
 /**

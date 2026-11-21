@@ -17,6 +17,8 @@ const SNIPPET_LENGTH = 200;
 
 /** Largest collector answer the client reads (64 KiB); its answers are a few hundred bytes. */
 export const MAX_COLLECTOR_BODY_BYTES = 65_536;
+/** Classes of a health failure that explain a socket that did not open better than the handshake error does. */
+const HEALTH_CLASSES_REPLACING_HANDSHAKE: readonly ErrorClass[] = ['collector_unavailable', 'dns_error', 'tls_error', 'network_error'];
 const TOO_LARGE_DETAIL = `response larger than ${String(MAX_COLLECTOR_BODY_BYTES)} bytes`;
 const PROBE_ID = '00000000-0000-4000-8000-000000000000';
 
@@ -374,19 +376,6 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
   };
 
   /**
-   * Builds the error of a WebSocket that never opened or never started.
-   * @param outcome Outcome with its detail.
-   * @param startedMs Start of the exchange on the monotonic clock.
-   * @returns `ws_handshake_failed` error.
-   */
-  const handshakeError = (outcome: WsOutcome, startedMs: number): CheckError => new CheckError('ws_handshake_failed', { url: endpoints.wsUrl,
-    ...outcome.kind === 'handshake_failed' ? { detail: outcome.detail } : {},
-    ...outcome.kind === 'timeout'
-      ? { code: 'TIMEOUT',
-          waitedMs: Math.round(clock.monotonicMs() - startedMs) }
-      : {} });
-
-  /**
    * Builds the error for a WebSocket that closed or timed out.
    * @param outcome Closed or timed-out outcome.
    * @param startedMs Start of the exchange on the monotonic clock.
@@ -461,6 +450,33 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
       detail: isHandlerPanic(status, text) ? COLLECTOR_PANIC_DETAIL : flatSnippet(text) });
   };
 
+  /**
+   * Builds the error of a WebSocket that never opened or never started.
+   * The browser API hides why the socket failed, so one health request tells a collector that is down or unreachable from a proxy that refuses only the upgrade.
+   * @param outcome Outcome with its detail.
+   * @param startedMs Start of the exchange on the monotonic clock.
+   * @param signal Aborts the health request.
+   * @returns The network class of the health request when it failed that way, `ws_handshake_failed` otherwise.
+   */
+  const handshakeError = async (outcome: WsOutcome, startedMs: number, signal: AbortSignal): Promise<CheckError> => {
+    const own = new CheckError('ws_handshake_failed', { url: endpoints.wsUrl,
+      ...outcome.kind === 'handshake_failed' ? { detail: outcome.detail } : {},
+      ...outcome.kind === 'timeout'
+        ? { code: 'TIMEOUT',
+            waitedMs: Math.round(clock.monotonicMs() - startedMs) }
+        : {} });
+
+    try {
+      await health(signal);
+    } catch (error) {
+      if (error instanceof CheckError && HEALTH_CLASSES_REPLACING_HANDSHAKE.includes(error.errorClass)) {
+        return error;
+      }
+    }
+
+    return own;
+  };
+
   const probeInvalidToken = async (signal: AbortSignal): Promise<void> => {
     const startedMs = clock.monotonicMs();
     const { outcome } = await exchange(JSON.stringify({ token: PROBE_TOKEN,
@@ -479,7 +495,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
     }
 
     if (outcome.kind === 'handshake_failed') {
-      throw handshakeError(outcome, startedMs);
+      throw await handshakeError(outcome, startedMs, signal);
     }
 
     throw wsUnavailable(outcome, startedMs);
@@ -546,7 +562,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
 
     if (outcome.kind === 'handshake_failed') {
       return { kind: 'rejected',
-        error: handshakeError(outcome, startedMs),
+        error: await handshakeError(outcome, startedMs, signal),
         attempts };
     }
 
@@ -556,7 +572,7 @@ export function createCollectorClient(options: CollectorClientOptions): Collecto
             cause: wsUnavailable(outcome, startedMs),
             attempts }
         : { kind: 'rejected',
-            error: handshakeError(outcome, startedMs),
+            error: await handshakeError(outcome, startedMs, signal),
             attempts };
     }
 
